@@ -1,0 +1,1 @@
+SELECT * FROM scraped_articles WHERE nid = '6014866';

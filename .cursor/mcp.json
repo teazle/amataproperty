@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "supabase-propertydemo": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--project-ref",
+        "pfdsmpfgwbbeijdzevpu"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "sbp_73904a875bbc63a37cc1ee6b00c085e026717932"
+      }
+    },
+    "aws-ccapi-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "awslabs.ccapi-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "new-profile",
+        "AWS_REGION": "ap-southeast-1",
+        "DEFAULT_TAGS": "enabled",
+        "SECURITY_SCANNING": "enabled",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      },
+      "disabled": false,
+      "autoApprove": []
+    },
+    "aws-api-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-api-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "new-profile",
+        "AWS_REGION": "ap-southeast-1",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+
+

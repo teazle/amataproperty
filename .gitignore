@@ -1,0 +1,10 @@
+node_modules/
+bun.lockb
+*.log
+.DS_Store
+.env
+.env.local
+
+# Article scraper outputs
+article-scraper/edgeprop-articles.json
+article-scraper/scrape-progress.json

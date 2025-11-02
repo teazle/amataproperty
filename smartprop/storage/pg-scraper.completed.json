@@ -1,0 +1,21 @@
+{
+  "startedAt": "2025-10-28T16:33:55.513Z",
+  "districts": "09",
+  "pid": 40497,
+  "status": "completed",
+  "statusMessage": "Scraping District 09 - Page 2/2",
+  "progress": {
+    "currentDistrict": "09",
+    "currentPage": 2,
+    "totalPages": 2,
+    "listingsProcessed": 40
+  },
+  "completedAt": "2025-10-28T16:41:13.201Z",
+  "stats": {
+    "totalDistricts": 1,
+    "totalListings": 40,
+    "totalSuccess": 40,
+    "totalErrors": 0,
+    "totalSkippedNoPhone": 0
+  }
+}

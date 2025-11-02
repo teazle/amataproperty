@@ -1,0 +1,1 @@
+SELECT * FROM articles WHERE nid = '6014866';

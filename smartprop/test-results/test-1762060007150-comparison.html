@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Scraper Comparison - test-1762060007150</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .header {
+            background: #2563eb;
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .header .meta {
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+        
+        .comparison-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            padding: 1rem;
+            min-height: calc(100vh - 120px);
+        }
+        
+        .panel {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .panel-header {
+            padding: 1rem;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 600;
+        }
+        
+        .original-header {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        
+        .scraped-header {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .panel-content {
+            height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+        
+        .iframe-container {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        .scraped-content {
+            padding: 1.5rem;
+            line-height: 1.6;
+        }
+        
+        .scraped-content h1 {
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            color: #1f2937;
+        }
+        
+        .metadata {
+            background: #f9fafb;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border-radius: 6px;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .metadata-item {
+            margin-bottom: 0.5rem;
+        }
+        
+        .metadata-label {
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .metadata-value {
+            color: #6b7280;
+        }
+        
+        .content-section {
+            margin-bottom: 2rem;
+        }
+        
+        .content-section h3 {
+            color: #1f2937;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        .paragraph {
+            margin-bottom: 1rem;
+            text-align: justify;
+        }
+        
+        .images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .image-item {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .image-item img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+        }
+        
+        .image-caption {
+            padding: 0.5rem;
+            font-size: 0.8rem;
+            color: #6b7280;
+            background: #f9fafb;
+        }
+        
+        .links-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .link-item {
+            padding: 0.5rem;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 0.9rem;
+        }
+        
+        .link-item a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        
+        .link-item a:hover {
+            text-decoration: underline;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .stat-card {
+            background: #f8fafc;
+            padding: 1rem;
+            border-radius: 6px;
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1e40af;
+        }
+        
+        .stat-label {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-top: 0.25rem;
+        }
+        
+        .controls {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn:hover {
+            opacity: 0.9;
+        }
+        
+        @media (max-width: 768px) {
+            .comparison-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .header {
+                padding: 1rem;
+            }
+            
+            .header h1 {
+                font-size: 1.2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 MCP Scraper Comparison Tool</h1>
+        <div class="meta">
+            Test ID: test-1762060007150 | 
+            Generated: 11/2/2025, 1:07:00 PM
+        </div>
+    </div>
+    
+    <div class="comparison-container">
+        <!-- Original Article Panel -->
+        <div class="panel">
+            <div class="panel-header original-header">
+                📄 Original Article (Live Source)
+            </div>
+            <div class="panel-content">
+                <iframe 
+                    src="https://www.edgeprop.sg/property-news/asia-pacific-data-centre-association-pushes-stronger-sustainability-frameworks" 
+                    class="iframe-container"
+                    title="Original Article">
+                </iframe>
+            </div>
+        </div>
+        
+        <!-- Scraped Article Panel -->
+        <div class="panel">
+            <div class="panel-header scraped-header">
+                🤖 Scraped Article (MCP Result)
+            </div>
+            <div class="panel-content">
+                <div class="scraped-content">
+                    <h1>Asia-Pacific Data Centre Association pushes for stronger sustainability frameworks</h1>
+                    
+                    <div class="metadata">
+                        <div class="metadata-item">
+                            <span class="metadata-label">Author:</span>
+                            <span class="metadata-value">Kalynskye Adrian</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="metadata-label">Date:</span>
+                            <span class="metadata-value">01 Jan 1970</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="metadata-label">Source URL:</span>
+                            <span class="metadata-value">N/A</span>
+                        </div>
+                    </div>
+                    
+                    
+                    <div class="content-section">
+                        <h3>🖼️ Main Image</h3>
+                        <img src="https://sg.tepcdn.com/public/usr/8xh20v/3a3e7d-send-otp.png" 
+                             alt="Main article image" 
+                             style="max-width: 100%; height: auto; border-radius: 6px;">
+                    </div>
+                    
+                    
+                    <div class="content-section">
+                        <h3>📊 Content Statistics</h3>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-number">307</div>
+                                <div class="stat-label">Words</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">9</div>
+                                <div class="stat-label">Paragraphs</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">30</div>
+                                <div class="stat-label">Images</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">164</div>
+                                <div class="stat-label">Links</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">2</div>
+                                <div class="stat-label">Min Read</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="content-section">
+                        <h3>📝 Article Content</h3>
+                        <div class="paragraph">The Asia-Pacific Data Centre Association (APDCA) has launched a new white paper calling for stronger policy and industry collaboration to enhance energy sustainability across data centres in the region.</div><div class="paragraph">Titled Data Centres and Energy Sustainability: A Regional Perspective on Best Practices and Policy Frameworks, the paper was released on Oct 27 and outlines strategies to reduce the environmental impact of data centres while meeting the surging demand for digital infrastructure in Asia-Pacific (APAC).</div><div class="paragraph">“Balancing energy sustainability with the rising demand for digital infrastructure is one of APAC’s defining challenges,” says Jeremy Deutsch, chair of APDCA. “With the right policy frameworks, Asia-Pacific governments can ensure that digital transformation advances hand in hand with net-zero ambitions.”</div><div class="paragraph">Driven by cloud adoption, digital services and artificial intelligence (AI), regional demand for data centres is projected to grow nearly 20% annually through 2028. The International Energy Agency (IEA) forecasts that Southeast Asia’s data centre electricity use will almost double by 2030 compared to 2024 — a trend mirrored across the wider APAC region.</div><div class="paragraph">The white paper highlights best practices to improve energy performance across the data centre lifecycle — from site selection, design and construction to operations and monitoring. It also recommends policy measures to accelerate access to clean and renewable energy through stronger grid infrastructure and Power Purchase Agreements (PPAs).</div><div class="paragraph">Developers are encouraged to collaborate closely with regulators and industry partners to establish consistent energy efficiency standards across the APAC markets.</div><div class="paragraph">Among the examples cited is Singapore’s BCA-IMDA Green Mark for Data Centres (GMDC) — a certification scheme jointly developed by the Infocomm Media Development Authority (IMDA) and the Building and Construction Authority (BCA) to recognise data centres with strong sustainability performance and energy-efficient practices.</div><div class="paragraph">The APDCA members include leading global operators, such as AirTrunk, Equinix, Digital Realty, ST Telemedia Global Data Centres, and Princeton Digital Group.</div><div class="paragraph">There are no listings</div>
+                    </div>
+                    
+                    
+                    <div class="content-section">
+                        <h3>🖼️ Extracted Images (30)</h3>
+                        <div class="images-grid">
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                                <div class="image-item">
+                                    <img src="undefined" alt="Image" onerror="this.style.display='none'">
+                                    <div class="image-caption">No caption</div>
+                                </div>
+                            
+                        </div>
+                    </div>
+                    
+                    
+                    
+                    <div class="content-section">
+                        <h3>🔗 Extracted Links (164)</h3>
+                        <div class="links-list">
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Skip to main content</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">News</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Subscription Packages</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">OCBC Affordability Calculator</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Is it a Good Deal?</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Affordability Calculator</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Property Calculators</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">En Bloc Calculator</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">MY HDB Lease</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Research</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Edge Fair Value</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Heatmap</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Market Trend</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Watchlist</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Amenities Check</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Market Watch</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">LandLens</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Inspector</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Tower View</a>
+                                </div>
+                            
+                                <div class="link-item">
+                                    <a href="undefined" target="_blank">Street View</a>
+                                </div>
+                            
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <a href="https://www.edgeprop.sg/property-news/asia-pacific-data-centre-association-pushes-stronger-sustainability-frameworks" target="_blank" class="btn btn-primary">
+            🔗 Open Original
+        </a>
+        <button onclick="window.print()" class="btn btn-secondary">
+            🖨️ Print Report
+        </button>
+    </div>
+    
+    <script>
+        // Add some interactive features
+        document.addEventListener('DOMContentLoaded', function() {
+            // Sync scroll between panels (optional)
+            const panels = document.querySelectorAll('.panel-content');
+            let isScrolling = false;
+            
+            // Add click-to-highlight for comparison
+            document.querySelectorAll('.paragraph').forEach(p => {
+                p.addEventListener('click', function() {
+                    document.querySelectorAll('.paragraph').forEach(el => el.style.background = '');
+                    this.style.background = '#fef3c7';
+                });
+            });
+            
+            // Add keyboard shortcuts
+            document.addEventListener('keydown', function(e) {
+                if (e.ctrlKey || e.metaKey) {
+                    switch(e.key) {
+                        case 'p':
+                            e.preventDefault();
+                            window.print();
+                            break;
+                        case 'o':
+                            e.preventDefault();
+                            window.open('https://www.edgeprop.sg/property-news/asia-pacific-data-centre-association-pushes-stronger-sustainability-frameworks', '_blank');
+                            break;
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Bun configuration for the entire workspace
+# This ensures consistent bun usage across all projects
+
+[install]
+# Use bun's lockfile
+lockfile = true
+
+# Respect package.json engines
+exact = false
+
+# Auto-install peer dependencies
+peer = true
+
+[run]
+# Prefer bun for all scripts
+bun = true
+

@@ -187,6 +187,7 @@ export async function scrapeEdgePropCombined(
                 text_content: '', // Will be populated during content scraping
                 paragraphs: [], // Will be populated during content scraping
                 links: [], // Will be populated during content scraping
+                images: [], // Will be populated during content scraping
                 word_count: 0, // Will be calculated during content scraping
                 reading_time_minutes: 0, // Will be calculated during content scraping
                 scraped_at: new Date()

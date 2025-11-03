@@ -25,7 +25,7 @@ export interface MCPArticle {
   text_content: string;
   paragraphs: string[];
   links: Array<{text: string; url: string; type: 'internal' | 'external'}>;
-  images: Array<{url: string; alt?: string; caption?: string}>;
+  images: Array<{url: string; alt?: string; caption?: string; paragraph_index?: number}>;
   main_image_url?: string;
   main_image_caption?: string;
   tags?: string[];
@@ -842,27 +842,6 @@ export async function scrapeEdgePropMCP(
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
-            // Set up automatic Cloudflare challenge handler using addLocatorHandler
-            // This will automatically click the checkbox when it appears
-            try {
-              await page.addLocatorHandler(
-                page.locator('text=/Just a moment|Verifying you are human|Checking your browser|Enable JavaScript and cookies/i'),
-                async () => {
-                  console.log(`   🔍 Cloudflare challenge detected, attempting auto-bypass...`);
-                  // Try to find and click the checkbox
-                  const checkbox = await page.locator('input[type="checkbox"]').first();
-                  if (await checkbox.isVisible({ timeout: 2000 }).catch(() => false)) {
-                    await checkbox.click({ timeout: 3000 });
-                    console.log(`   ✅ Auto-clicked Cloudflare checkbox`);
-                    await page.waitForTimeout(5000);
-                  }
-                }
-              );
-            } catch (e: unknown) {
-              // Handler setup failed, continue with manual handling
-              console.log(`   ⚠️ Could not set up auto-handler: ${e}`);
-            }
-            
             try {
               await page.goto(articleUrl, { 
                 waitUntil: 'domcontentloaded', // Use domcontentloaded instead of networkidle for faster navigation
@@ -917,12 +896,13 @@ export async function scrapeEdgePropMCP(
                 
                 if (hasArticle) {
                   cloudflareResolved = true;
-                  console.log(`✅ Cloudflare resolved, content loaded (attempt ${cfAttempt + 1})`);
+                  console.log(`✅ Content loaded successfully (attempt ${cfAttempt + 1})`);
                   break;
                 }
               }
               
-              if (cfAttempt < 7) {
+              // Only try to click Cloudflare if we actually detected it
+              if (isCloudflare && cfAttempt < 7) {
                 console.log(`⚠️ Cloudflare detected (attempt ${cfAttempt + 1}/8), trying to click verify button...`);
                 
                 // Wait longer for Cloudflare challenge iframe to load (they load dynamically)
@@ -1143,8 +1123,9 @@ export async function scrapeEdgePropMCP(
                   console.log(`   ⚠️ Error clicking Cloudflare element: ${clickError}`);
                   await page.waitForTimeout(5000 + (cfAttempt * 2000));
                 }
-              } else {
-                console.log(`❌ Cloudflare challenge persists after ${cfAttempt + 1} attempts, skipping article`);
+              } else if (cfAttempt >= 7) {
+                // Max attempts reached - give up
+                console.log(`❌ Max Cloudflare attempts reached, skipping article`);
                 articlesFailed++;
                 onProgress({
                   currentPage: pageNum,
@@ -1154,7 +1135,7 @@ export async function scrapeEdgePropMCP(
                   articlesScraped: allArticles.length,
                   articlesFailed: articlesFailed,
                   status: 'running',
-                  message: `Cloudflare challenge: ${article.title}`
+                  message: `Max Cloudflare attempts: ${article.title}`
                 });
                 continue; // Skip this article - exit the try block
               }
@@ -1162,7 +1143,7 @@ export async function scrapeEdgePropMCP(
             
             if (!cloudflareResolved) {
               // This shouldn't happen due to continue above, but just in case
-              console.log(`⚠️ Could not resolve Cloudflare, skipping article`);
+              console.log(`⚠️ Could not resolve content loading, skipping article`);
               articlesFailed++;
               onProgress({
                 currentPage: pageNum,
@@ -1172,7 +1153,7 @@ export async function scrapeEdgePropMCP(
                 articlesScraped: allArticles.length,
                 articlesFailed: articlesFailed,
                 status: 'running',
-                message: `Cloudflare unresolved: ${article.title}`
+                message: `Content unresolved: ${article.title}`
               });
               continue;
             }
@@ -1686,8 +1667,16 @@ export async function scrapeEdgePropMCP(
               // First try semantic tags from main content area
               let paragraphElements = Array.from(mainContentArea.querySelectorAll('p'));
               
-              // If not enough, also try divs that are likely content paragraphs
-              if (paragraphElements.length < 5) {
+              // Check if we have enough substantial paragraphs
+              const substantialParagraphs = paragraphElements.filter(p => {
+                const text = p.textContent?.trim() || '';
+                return text.length > 100 && text.split(/\s+/).length > 10;
+              });
+              
+              console.log(`Found ${paragraphElements.length} total <p> tags, ${substantialParagraphs.length} are substantial`);
+              
+              // If not enough substantial paragraphs, also try divs that are likely content paragraphs
+              if (paragraphElements.length < 5 || substantialParagraphs.length < 3) {
                 const articleDivs = Array.from(mainContentArea.querySelectorAll('div')).filter(el => {
                 const text = el.textContent || '';
                   // More strict: must be substantial content, not navigation/ads
@@ -1703,6 +1692,7 @@ export async function scrapeEdgePropMCP(
                          el.children.length <= 8; // Can have some inline children
                 });
               paragraphElements = paragraphElements.concat(articleDivs as any);
+              console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
               }
               
               console.log(`Found ${paragraphElements.length} paragraph elements from main content area`);
@@ -2079,8 +2069,10 @@ export async function scrapeEdgePropMCP(
                       lowerUrl.includes('spinner') ||
                       lowerUrl.includes('loading') ||
                       lowerUrl.includes('placeholder') ||
+                      lowerUrl.includes('newsletter') ||
+                      lowerUrl.includes('img-speaker') ||
                       imageUrl.includes('data:image')) {
-                    console.log(`   ⏭️  Skipping image ${idx + 1}: ${imageUrl.substring(0, 80)}... (logo/icon/avatar)`);
+                    console.log(`   ⏭️  Skipping image ${idx + 1}: ${imageUrl.substring(0, 80)}... (logo/icon/avatar/newsletter/speaker)`);
                     return;
                   }
                   
@@ -2301,7 +2293,7 @@ export async function scrapeEdgePropMCP(
                       html_content: fullArticle.html_content || '',
                       text_content: fullArticle.text_content,
                       paragraphs: fullArticle.paragraphs,
-                      images: (fullArticle.images || []).map(img => typeof img === 'string' ? img : img.url),
+                      images: fullArticle.images || [],
                       links: fullArticle.links || [],
                       main_image_url: fullArticle.main_image_url || '',
                       main_image_caption: fullArticle.main_image_caption || '',
@@ -2310,7 +2302,7 @@ export async function scrapeEdgePropMCP(
                       reading_time_minutes: fullArticle.reading_time_minutes,
                       published_date: new Date().toISOString()
                     };
-                    await upsertArticleContent({ ...fullArticle, ...contentData });
+                    await upsertArticleContent({ ...fullArticle, ...contentData } as any);
                     console.log(`✅ Saved full content with ${fullArticle.images?.length || 0} images for: ${article.title}`);
                   }
                   
@@ -2364,6 +2356,984 @@ export async function scrapeEdgePropMCP(
     
     return allArticles;
     
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Scrape a single EdgeProp article by URL using MCP approach
+ */
+export async function scrapeSingleArticleMCP(
+  url: string,
+  onProgress?: MCPProgressCallback,
+  sessionId?: string,
+  saveImmediately: boolean = false
+): Promise<MCPArticle | null> {
+  console.log('Starting single article scrape for:', url);
+  
+  // Try to use playwright-ghost for better Cloudflare bypass
+  let chromium: any;
+  let useGhost = false;
+  try {
+    const playwrightGhost = await import('playwright-ghost');
+    chromium = playwrightGhost.chromium;
+    useGhost = true;
+    console.log('✅ Using playwright-ghost for enhanced Cloudflare bypass');
+  } catch (e: unknown) {
+    const playwright = await import('playwright');
+    chromium = playwright.chromium;
+    console.log('⚠️ playwright-ghost not available, using regular playwright');
+  }
+  
+  const launchOptions = { 
+    headless: false,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--exclude-switches=enable-automation',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-extensions',
+      '--disable-plugins',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--disable-translate',
+      '--disable-component-update',
+      '--disable-domain-reliability',
+      '--disable-features=TranslateUI',
+      '--disable-ipc-flooding-protection',
+      '--disable-notifications',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-hang-monitor',
+      '--disable-client-side-phishing-detection',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--autoplay-policy=user-gesture-required',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-component-extensions-with-background-pages',
+      '--disable-extensions',
+      '--disable-features=TranslateUI',
+      '--disable-ipc-flooding-protection',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-default-browser-check',
+      '--enable-automation',
+      '--password-store=basic',
+      '--use-mock-keychain'
+    ]
+  };
+  
+  const browser = await chromium.launch(launchOptions);
+  const page = await browser.newPage();
+  
+  try {
+    onProgress?.({
+      currentPage: 1,
+      totalPages: 1,
+      currentArticle: 1,
+      articlesDiscovered: 1,
+      articlesScraped: 0,
+      articlesFailed: 0,
+      status: 'running',
+      message: 'Starting single article scrape...'
+    });
+    
+    // Navigate to the article URL
+    console.log(`🌐 Navigating to: ${url}`);
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 60000
+    });
+    
+    // Enhanced Cloudflare detection and wait
+    let cloudflareResolved = false;
+    for (let cfAttempt = 0; cfAttempt < 8 && !cloudflareResolved; cfAttempt++) {
+      await page.waitForTimeout(2000);
+      
+      const pageContent = await page.content().catch(() => '');
+      const pageTitle = await page.title().catch(() => '');
+      const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('cloudflare')) || 
+                          (pageContent.includes('checking-your-browser') && pageContent.includes('cloudflare')) ||
+                          (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
+                          pageContent.includes('cf-challenge-running') ||
+                          page.url().includes('challenge-platform.cloudflare.com');
+      
+      if (!isCloudflare) {
+        const hasArticle = await page.evaluate(() => {
+          const selectors = [
+            'article .content',
+            '.article-content', 
+            '.post-content',
+            '.entry-content',
+            'article',
+            'main',
+            '.content-body',
+            '.article-body'
+          ];
+          
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el && (el.textContent?.length || 0) > 500) {
+              return true;
+            }
+          }
+          
+          const bodyText = document.body?.textContent || '';
+          return bodyText.length > 2000;
+        }).catch(() => false);
+        
+        if (hasArticle) {
+          cloudflareResolved = true;
+          console.log(`✅ Content loaded successfully (attempt ${cfAttempt + 1})`);
+          break;
+        }
+      }
+      
+      // Only try to click Cloudflare if we actually detected it
+      if (isCloudflare && cfAttempt < 7) {
+        console.log(`⚠️ Cloudflare detected (attempt ${cfAttempt + 1}/8), trying to click verify button...`);
+        await page.waitForTimeout(5000);
+        
+        // Try to find and click the Cloudflare checkbox
+        try {
+          const iframes = await page.$$('iframe');
+          for (const iframe of iframes) {
+            try {
+              const src = await iframe.getAttribute('src').catch(() => '');
+              const isCloudflareIframe = src && (src.includes('challenges.cloudflare.com'));
+              
+              if (isCloudflareIframe) {
+                const frame = await iframe.contentFrame();
+                if (frame) {
+                  await frame.waitForTimeout(5000); // Reduced from 5000 to 5000 (kept same)
+                  const checkbox = await frame.$('input[type="checkbox"]');
+                  if (checkbox) {
+                    await checkbox.click({ timeout: 5000 });
+                    await page.waitForTimeout(5000); // Reduced from 10000 to 5000
+                    break;
+                  }
+                }
+              }
+            } catch (e: any) {
+              // Continue to next iframe
+            }
+          }
+        } catch (clickError: any) {
+          console.log(`⚠️ Error clicking Cloudflare element: ${clickError}`);
+        }
+      }
+    }
+    
+    // Wait for content to stabilize
+    await page.waitForTimeout(3000);
+    
+    // Extract the article
+    onProgress?.({
+      currentPage: 1,
+      totalPages: 1,
+      currentArticle: 1,
+      articlesDiscovered: 1,
+      articlesScraped: 0,
+      articlesFailed: 0,
+      status: 'running',
+      message: 'Extracting article content...'
+    });
+    
+    try {
+      await page.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
+      console.log(`✅ Content container found`);
+      
+      await page.waitForTimeout(2000);
+      
+      await page.evaluate(() => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      await page.waitForTimeout(1000);
+      await page.evaluate(() => {
+        window.scrollTo({ top: 500, behavior: 'smooth' });
+      });
+      await page.waitForTimeout(1000);
+    } catch (e: unknown) {
+      console.log(`⚠️ Content container not found, proceeding anyway...`);
+    }
+    
+    // Extract article data using the same logic as scrapeEdgePropMCP
+    const articleData = await page.evaluate(() => {
+      try {
+        if (typeof (window as any).__name === 'undefined') {
+          (window as any).__name = function() { return ''; };
+        }
+      } catch (e: any) {}
+      
+      return (function() {
+        const cleanParagraphs = (rawParagraphs: string[]): string[] => {
+          return rawParagraphs
+            .map(p => p.trim())
+            .filter(text => {
+              if (!text || typeof text !== 'string') return false;
+              if (text.length < 15) return false;
+              
+              const wordCount = text.split(/\s+/).length;
+              if (wordCount < 3) return false;
+              
+              const lower = text.toLowerCase();
+              
+              const skipPatterns = [
+                /^(subscribe|login|register|sign up|sign in)$/i,
+                /^(home|news|property|search)$/i,
+                /^(follow us|contact us|about us)$/i,
+                /^(privacy policy|terms of service|cookie policy)$/i,
+                /^(advertisement|sponsored|promoted)$/i,
+                /^(read more|view more|see more|load more)$/i,
+                /^(share|like|comment|tweet)$/i,
+                /^(next|previous|back|continue)$/i,
+                /^(menu|navigation|sidebar|footer)$/i,
+                /^(copyright|all rights reserved)$/i,
+                /^(loading|please wait)$/i,
+                /^(error|not found|404)$/i,
+                /^(javascript|enable javascript)$/i,
+                /^(cookies|accept cookies)$/i,
+                /^(newsletter|subscribe to)$/i,
+                /^(related articles|you may also like)$/i,
+                /^(tags?:|categories?:|filed under)$/i,
+                /^(posted by|written by|author:)$/i,
+                /^(published on|updated on|last modified)$/i,
+                /^(share this|print this|email this)$/i,
+                /^(comments?|leave a comment|add comment)$/i,
+                /^(social media|follow|connect)$/i,
+                /^(download|pdf|print version)$/i,
+                /^(mobile app|get the app)$/i,
+                /^(weather|traffic|stock)$/i,
+                /^(trending|popular|most read)$/i,
+                /^(advertisement|ad|sponsored content)$/i
+              ];
+              
+              for (const pattern of skipPatterns) {
+                if (pattern.test(text)) return false;
+              }
+              
+              const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
+              if (alphaCount < text.length * 0.5) return false;
+              
+              if (text.includes('function(') || text.includes('var ') || text.includes('const ') || 
+                  text.includes('let ') || text.includes('return ') || text.includes('console.')) {
+                return false;
+              }
+              
+              if (lower.includes('edgeprop') && (lower.includes('subscribe') || lower.includes('follow') || lower.includes('newsletter'))) {
+                return false;
+              }
+              
+              if (lower.includes('edgeprop singapore') || 
+                  lower.includes('edgeprop.sg') ||
+                  lower.includes('contact agents') ||
+                  lower.includes('clear all')) {
+                return false;
+              }
+              
+              return true;
+            });
+        };
+        
+        let extractionSuccess = false;
+        let paragraphs: string[] = [];
+        let textContent = '';
+        let contentContainer: Element | null = null;
+        let usedSelector = '';
+        let title = '';
+        let author = 'EdgeProp Staff';
+        let publishedDate = '';
+        let categories: string[] = [];
+        let links: Array<{text: string; url: string; type: 'internal' | 'external'}> = [];
+        const images: Array<{url: string; alt?: string; caption?: string; paragraph_index?: number}> = [];
+        let mainImageUrl = '';
+        let mainImageCaption = '';
+        let tags: string[] = [];
+        let htmlContent = '';
+        let wordCount = 0;
+        let readingTime = 0;
+        let description = '';
+        
+        try {
+          console.log('🔍 Starting article data extraction...');
+          
+          const checkSuccess = () => {
+            if (paragraphs.length > 0 && textContent.length > 100) {
+              extractionSuccess = true;
+            }
+          };
+
+          // Find the main article content area - use EdgeProp specific selectors
+          const articleSelectors = [
+            '.jsx-4217446631.article-detail.left-section', // Main article container
+            '.jsx-2128998887.detail-content', // Article content area
+            '.jsx-4217446631', // Article container
+            '.jsx-2128998887', // Content wrapper
+            'main article', // Semantic article in main
+            'article', // Fallback article tag
+            'main > div > div:first-child', // Fallback structure
+            'main', // Main content
+            '[class*="article-content"]',
+            '[class*="post-content"]',
+            '[class*="content"]'
+          ];
+          for (const selector of articleSelectors) {
+            try {
+              const element = document.querySelector(selector);
+              if (element) {
+                contentContainer = element;
+                usedSelector = selector;
+                console.log(`✅ Using selector: ${selector}`);
+                console.log(`   Element has ${element.textContent?.length || 0} characters`);
+                break;
+              }
+            } catch (e: any) {
+              console.log(`❌ Selector failed: ${selector}`);
+            }
+          }
+          
+          // Fallback to body but be more selective
+          if (!contentContainer) {
+            contentContainer = document.body;
+            usedSelector = 'document.body';
+            console.log(`⚠️ Using document.body as fallback content container`);
+            console.log(`   Body has ${document.body.textContent?.length || 0} characters`);
+          } else {
+            console.log(`✅ Using targeted content container: ${contentContainer.tagName} (${usedSelector})`);
+          }
+          
+          // Extract title
+          title = document.querySelector('h1')?.textContent?.trim() || '';
+          console.log(`Title extracted: ${title}`);
+          
+          // Extract metadata from article page
+          // Try to find author using multiple approaches
+          // First: Check if we're on a Cloudflare protection page
+          const isCloudflareProtection = document.body.textContent?.includes('Verify you are human') ||
+                                       document.body.textContent?.includes('Cloudflare') ||
+                                       document.querySelector('[data-cf-beacon]') ||
+                                       document.querySelector('.cf-browser-verification') ||
+                                       document.title?.toLowerCase().includes('cloudflare') ||
+                                       document.body.textContent?.includes('Just a moment');
+          
+          if (isCloudflareProtection) {
+            console.log('⚠️ Detected Cloudflare protection page - skipping author extraction');
+            author = 'EdgeProp Staff';
+          } else {
+            // Method 1: Look for meta tag
+            const metaAuthor = document.querySelector('meta[name="author"]');
+            if (metaAuthor) {
+              const metaValue = metaAuthor.getAttribute('content');
+              if (metaValue && metaValue.trim() && !metaValue.toLowerCase().includes('edgeprop')) {
+                author = metaValue.trim();
+                console.log(`Found author from meta tag: ${author}`);
+              }
+            }
+            
+            // Method 1.5: Try additional meta tags
+            if (author === 'EdgeProp Staff') {
+              const additionalMetaTags = document.querySelectorAll('meta[property="author"], meta[name="article:author"], meta[property="article:author"]');
+              for (const metaTag of additionalMetaTags) {
+                const metaValue = metaTag.getAttribute('content');
+                if (metaValue && metaValue.trim() && !metaValue.toLowerCase().includes('edgeprop')) {
+                  author = metaValue.trim();
+                  console.log(`Found author from additional meta tag: ${author}`);
+                  break;
+                }
+              }
+            }
+            
+            // Method 1.6: Look for JSON-LD structured data
+            if (author === 'EdgeProp Staff') {
+              const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+              for (const script of jsonLdScripts) {
+                try {
+                  const data = JSON.parse(script.textContent || '');
+                  if (data.author) {
+                    const authorName = typeof data.author === 'string' ? data.author : 
+                                     data.author.name || data.author['@name'] || '';
+                    if (authorName && authorName.trim() && !authorName.toLowerCase().includes('edgeprop')) {
+                      author = authorName.trim();
+                      console.log(`Found author from JSON-LD: ${author}`);
+                      break;
+                    }
+                  }
+                } catch (e: any) {
+                  // Ignore JSON parsing errors
+                }
+              }
+            }
+          }
+          
+          // Method 2: Look for specific EdgeProp author patterns in different sections
+          if (author === 'EdgeProp Staff') {
+            const pageText = document.body.textContent || '';
+            
+            const patterns = [
+              /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:and|&)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)?)\s*\/\s*EdgeProp Singapore/i,
+              /By\s+EdgeProp Singapore\s*\/\s*EdgeProp Singapore/i,
+              /(?<![\w\s])([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*\/\s*EdgeProp Singapore/i,
+              /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)(?:\s|$)/i
+            ];
+            
+            const searchSections = [
+              pageText.substring(0, 5000),
+              pageText.substring(5000, 10000),
+              pageText.substring(10000, 20000),
+              pageText
+            ];
+            
+            for (const pattern of patterns) {
+              for (const section of searchSections) {
+                const match = section.match(pattern);
+                if (match) {
+                  if (pattern === patterns[1]) {
+                    author = 'EdgeProp Singapore';
+                    console.log(`Found EdgeProp staff writer: ${author}`);
+                    break;
+                  }
+                  
+                  if (match[1]) {
+                    const candidateAuthor = match[1].trim();
+                    
+                    if (candidateAuthor &&
+                        candidateAuthor.length > 3 &&
+                        candidateAuthor.length < 50 &&
+                        /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$/.test(candidateAuthor) &&
+                        !candidateAuthor.toLowerCase().includes('edgeprop') &&
+                        !candidateAuthor.toLowerCase().includes('staff') &&
+                        !candidateAuthor.toLowerCase().includes('news') &&
+                        !candidateAuthor.toLowerCase().includes('amenities') &&
+                        !candidateAuthor.toLowerCase().includes('market') &&
+                        !candidateAuthor.toLowerCase().includes('watch') &&
+                        !candidateAuthor.toLowerCase().includes('psf') &&
+                        !candidateAuthor.toLowerCase().includes('singapore') &&
+                        !candidateAuthor.toLowerCase().includes('worldwide') &&
+                        !candidateAuthor.toLowerCase().includes('hotels') &&
+                        !candidateAuthor.toLowerCase().includes('wyndham') &&
+                        !candidateAuthor.toLowerCase().includes('novena') &&
+                        !candidateAuthor.toLowerCase().includes('cloudflare') &&
+                        !candidateAuthor.toLowerCase().includes('verify') &&
+                        !candidateAuthor.toLowerCase().includes('human') &&
+                        !candidateAuthor.toLowerCase().includes('moment') &&
+                        !candidateAuthor.toLowerCase().includes('protection') &&
+                        !candidateAuthor.toLowerCase().includes('security') &&
+                        !candidateAuthor.toLowerCase().includes('browser') &&
+                        !candidateAuthor.toLowerCase().includes('javascript') &&
+                        !/^(the|and|or|but|for|with|from|about|into|through|during|before|after|above|below|up|down|out|off|over|under|again|further|then|once)$/i.test(candidateAuthor)) {
+                      author = candidateAuthor;
+                      console.log(`Found author from pattern: ${author}`);
+                      break;
+                    }
+                  }
+                }
+              }
+              if (author !== 'EdgeProp Staff') break;
+            }
+          }
+          
+          console.log(`Final author determined: ${author}`);
+          
+          // Try to find published date
+          const dateElement = document.querySelector('time, [class*="date"], [class*="published"], meta[property="article:published_time"]');
+          if (dateElement) {
+            publishedDate = dateElement.getAttribute('datetime') || 
+                            dateElement.getAttribute('content') || 
+                            dateElement.textContent?.trim() || '';
+          }
+          
+          // Try to find categories/tags - improved extraction
+          const categoryElements = document.querySelectorAll('[class*="category"], [class*="tag"], meta[property="article:section"], a[href*="field_tags_tid"]');
+          const rawCategories = Array.from(categoryElements).map(el => 
+            el.getAttribute('content') || el.textContent?.trim()
+          ).filter(Boolean);
+          
+          categories = [...new Set(rawCategories)]
+            .filter(cat => cat && cat.length > 0 && cat.length < 100)
+            .map(cat => cat.trim())
+            .filter(cat => !cat.toLowerCase().includes('tags:') && 
+                           !cat.toLowerCase().includes('property news') ||
+                           cat.toLowerCase() === 'property news');
+          
+          if (categories.length === 0) {
+            categories = ['Property News'];
+          }
+          
+          // Extract text content and paragraphs
+          let mainContentArea = contentContainer;
+          
+          const contentAreaSelectors = [
+            '.jsx-2128998887.detail-content',
+            '.jsx-4217446631.article-detail',
+            '[class*="detail-content"]',
+            '[class*="article-content"]',
+            'article > div',
+            'main > article > div'
+          ];
+          
+          for (const selector of contentAreaSelectors) {
+            const area = contentContainer.querySelector(selector);
+            if (area && area.textContent && area.textContent.length > 500) {
+              mainContentArea = area;
+              console.log(`✅ Using content area: ${selector}`);
+              break;
+            }
+          }
+          
+          let paragraphElements = Array.from(mainContentArea.querySelectorAll('p'));
+          
+          // Check if we have enough substantial paragraphs
+          const substantialParagraphs = paragraphElements.filter(p => {
+            const text = p.textContent?.trim() || '';
+            return text.length > 100 && text.split(/\s+/).length > 10;
+          });
+          
+          console.log(`Found ${paragraphElements.length} total <p> tags, ${substantialParagraphs.length} are substantial`);
+          
+          // If not enough substantial paragraphs, also try divs that are likely content paragraphs
+          if (paragraphElements.length < 5 || substantialParagraphs.length < 3) {
+            const articleDivs = Array.from(mainContentArea.querySelectorAll('div')).filter(el => {
+              const text = el.textContent || '';
+              return text.length > 100 && 
+                     text.split(/\s+/).length > 10 &&
+                     !el.querySelector('div div div') &&
+                     !el.querySelector('button, input, script, style, iframe') &&
+                     !text.toLowerCase().includes('subscribe') &&
+                     !text.toLowerCase().includes('follow us') &&
+                     !text.toLowerCase().includes('www.edgeprop') &&
+                     !text.toLowerCase().includes('cookie') &&
+                     !text.toLowerCase().includes('read also') &&
+                     el.children.length <= 8;
+            });
+            paragraphElements = paragraphElements.concat(articleDivs as any);
+            console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
+          }
+          
+          console.log(`Found ${paragraphElements.length} paragraph elements from main content area`);
+          
+          if (paragraphElements.length > 0) {
+            const rawParagraphs = paragraphElements
+              .map(el => el.textContent?.trim())
+              .filter(text => {
+                if (!text || text.length < 20) return false;
+                const lower = text.toLowerCase();
+                return !lower.includes('www.edgeprop') &&
+                       !lower.includes('subscribe') &&
+                       !lower.includes('cookie') &&
+                       !lower.startsWith('http');
+              });
+            
+            console.log(`Raw paragraphs after filtering non-content: ${rawParagraphs.length}`);
+            
+            if (rawParagraphs.length > 0) {
+              console.log(`First raw paragraph: "${rawParagraphs[0]?.substring(0, 150)}..."`);
+            }
+            
+            paragraphs = cleanParagraphs(rawParagraphs);
+            console.log(`🔍 After cleanParagraphs: ${paragraphs.length} paragraphs from ${rawParagraphs.length} raw`);
+            
+            if (paragraphs.length === 0 && rawParagraphs.length > 0) {
+              console.log(`⚠️ All paragraphs filtered by cleanParagraphs, using raw with minimal filter`);
+              paragraphs = rawParagraphs.filter(p => {
+                if (!p || p.length < 20) return false;
+                const lower = p.toLowerCase();
+                return !lower.includes('subscribe') && 
+                       !lower.includes('follow us') && 
+                       !lower.includes('cookie policy') &&
+                       !lower.includes('read also:') &&
+                       !lower.startsWith('http') &&
+                       !lower.startsWith('www.');
+              });
+              console.log(`Minimal filter result: ${paragraphs.length} paragraphs`);
+              if (paragraphs.length > 0) {
+                console.log(`First minimal filtered paragraph: "${paragraphs[0].substring(0, 150)}..."`);
+              }
+            }
+            
+            if (paragraphs.length === 0 && rawParagraphs.length > 0) {
+              console.log(`⚠️ Even minimal filter removed everything, accepting all raw paragraphs`);
+              paragraphs = rawParagraphs.filter(p => p && p.length >= 20);
+              console.log(`Last resort: ${paragraphs.length} paragraphs`);
+            }
+            
+            if (paragraphs.length > 0) {
+              textContent = paragraphs.join('\n\n');
+              extractionSuccess = true;
+              console.log(`✅ Generated textContent: ${textContent.length} chars from ${paragraphs.length} paragraphs`);
+            }
+          }
+          
+          // Extract links
+          links = Array.from(contentContainer.querySelectorAll('a'))
+            .map(link => {
+              const href = link.getAttribute('href') || '';
+              return {
+                text: link.textContent?.trim() || '',
+                url: href,
+                type: (href.includes('edgeprop.sg') ? 'internal' : 'external') as 'internal' | 'external'
+              };
+            })
+            .filter(link => link.url);
+          
+          // Extract images from article content
+          console.log(`🔍 Looking for images in contentContainer...`);
+          const imageElements = Array.from(contentContainer.querySelectorAll('img'));
+          console.log(`📷 Found ${imageElements.length} total img elements`);
+          
+          const allParagraphElements: Element[] = [];
+          const semanticParas = Array.from(contentContainer.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li'));
+          const imageParagraphDivs = Array.from(contentContainer.querySelectorAll('div')).filter(el => {
+            const text = el.textContent || '';
+            return text.length > 50 && 
+                   text.split(/\s+/).length > 8 &&
+                   !el.querySelector('div div div') &&
+                   !el.querySelector('button, input, script, style, iframe') &&
+                   !text.toLowerCase().includes('subscribe') &&
+                   !text.toLowerCase().includes('follow us') &&
+                   !text.toLowerCase().includes('related articles') &&
+                   !text.toLowerCase().includes('related news') &&
+                   !text.toLowerCase().includes('tags:') &&
+                   el.children.length <= 5;
+          });
+          
+          allParagraphElements.push(...semanticParas, ...imageParagraphDivs);
+          
+          // Helper function to find which paragraph an image comes after
+          const findParagraphIndex = (imgElement: Element): number => {
+            if (!contentContainer) return -1;
+            // Get all child nodes of contentContainer in order
+            const walker = document.createTreeWalker(
+              contentContainer as Node,
+              NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+              null
+            );
+            
+            const nodes: Node[] = [];
+            let node: Node | null;
+            while (node = walker.nextNode()) {
+              nodes.push(node);
+            }
+            
+            const imgNode = imgElement;
+            const imgPosition = nodes.indexOf(imgNode);
+            
+            if (imgPosition === -1) return -1;
+            
+            // Find the last paragraph element that appears before this image
+            let lastParaIndex = -1;
+            for (let i = 0; i < imgPosition; i++) {
+              const node = nodes[i];
+              if (node.nodeType === Node.ELEMENT_NODE) {
+                const el = node as Element;
+                if (allParagraphElements.includes(el)) {
+                  const paraText = el.textContent?.trim() || '';
+                  // Only count paragraphs with substantial content (>50 chars)
+                  if (paraText.length > 50) {
+                    lastParaIndex = allParagraphElements.indexOf(el);
+                  }
+                }
+              }
+            }
+            
+            // Now map to our extracted paragraphs array index
+            // We need to match the paragraph text to find its index in the paragraphs array
+            if (lastParaIndex >= 0 && lastParaIndex < allParagraphElements.length) {
+              const paraElement = allParagraphElements[lastParaIndex];
+              const paraText = paraElement.textContent?.trim() || '';
+              
+              // Find matching paragraph in our extracted paragraphs array
+              const matchingParaIdx = paragraphs.findIndex(p => {
+                // Check if this paragraph text matches or is contained in the extracted paragraph
+                return p.includes(paraText.substring(0, 50)) || paraText.includes(p.substring(0, 50));
+              });
+              
+              return matchingParaIdx >= 0 ? matchingParaIdx : lastParaIndex;
+            }
+            
+            return lastParaIndex;
+          };
+          
+          imageElements.forEach((img, idx) => {
+            const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
+            
+            if (src) {
+              const lowerUrl = src.toLowerCase();
+              if (lowerUrl.includes('logo') || 
+                  lowerUrl.includes('icon') || 
+                  lowerUrl.includes('avatar') ||
+                  lowerUrl.includes('button') ||
+                  lowerUrl.includes('badge') ||
+                  lowerUrl.includes('spinner') ||
+                  lowerUrl.includes('loading') ||
+                  lowerUrl.includes('placeholder') ||
+                  lowerUrl.includes('newsletter') ||
+                  lowerUrl.includes('img-speaker') ||
+                  src.includes('data:image')) {
+                return;
+              }
+              
+              const fullUrl = src.startsWith('http') ? src : `https://www.edgeprop.sg${src.startsWith('/') ? '' : '/'}${src}`;
+              const alt = img.getAttribute('alt') || '';
+              let caption = '';
+              
+              if (img.closest('figure')) {
+                const figCaption = img.closest('figure')?.querySelector('figcaption');
+                if (figCaption) {
+                  caption = figCaption.textContent?.trim() || '';
+                }
+              }
+              
+              if (!caption && img.nextElementSibling) {
+                const nextSibling = img.nextElementSibling;
+                if (nextSibling.tagName === 'FIGCAPTION' || 
+                    nextSibling.classList.toString().includes('caption') ||
+                    nextSibling.tagName === 'P') {
+                  caption = nextSibling.textContent?.trim() || '';
+                }
+              }
+              
+              // Find which paragraph this image comes after
+              const paragraphIndex = findParagraphIndex(img);
+              
+              images.push({
+                url: fullUrl,
+                alt: alt,
+                caption: caption,
+                paragraph_index: paragraphIndex >= 0 ? paragraphIndex : undefined
+              });
+              console.log(`   ✅ Added image ${idx + 1}: ${fullUrl.substring(0, 80)}... (after paragraph ${paragraphIndex >= 0 ? paragraphIndex : 'unknown'})`);
+            }
+          });
+          
+          console.log(`📊 Extracted ${images.length} valid images from ${imageElements.length} total img elements`);
+          
+          // Get main image (thumbnail)
+          let mainImage = contentContainer.querySelector('img[class*="featured"], img[class*="main"], img[class*="hero"]') ||
+                          contentContainer.querySelector('img[class*="cover"]') ||
+                          null;
+          
+          if (!mainImage && images.length > 0) {
+            const firstValidImage = imageElements.find(img => {
+              const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+              return src && 
+                     !src.toLowerCase().includes('logo') && 
+                     !src.toLowerCase().includes('icon') &&
+                     !src.toLowerCase().includes('avatar');
+            });
+            mainImage = firstValidImage || imageElements[0];
+          }
+          
+          if (mainImage && images.length > 0) {
+            const mainSrc = mainImage.getAttribute('src') || mainImage.getAttribute('data-src') || mainImage.getAttribute('data-lazy-src') || '';
+            if (mainSrc) {
+              mainImageUrl = mainSrc.startsWith('http') ? mainSrc : `https://www.edgeprop.sg${mainSrc.startsWith('/') ? '' : '/'}${mainSrc}`;
+              console.log(`✅ Found main image: ${mainImageUrl.substring(0, 80)}...`);
+            }
+          }
+          
+          htmlContent = contentContainer.innerHTML || '';
+          
+          // Extract tags
+          const tagElements = document.querySelectorAll('[class*="tag"], a[href*="field_tags_tid"]');
+          tags = Array.from(tagElements)
+            .map(el => el.textContent?.trim())
+            .filter(tag => tag && tag.length > 0 && !tag.includes('Tags:'))
+            .slice(0, 10);
+          
+          description = paragraphs.length > 0 ? 
+            paragraphs.find(p => p.length > 50)?.substring(0, 200) || 
+            paragraphs[0].substring(0, 200) : '';
+          
+          wordCount = textContent.split(/\s+/).length;
+          readingTime = Math.ceil(wordCount / 200);
+          
+          return {
+            extractionSuccess,
+            usedSelector,
+            title,
+            author,
+            created: publishedDate,
+            category: categories,
+            description,
+            html_content: htmlContent,
+            text_content: textContent,
+            paragraphs,
+            links,
+            images,
+            main_image_url: mainImageUrl,
+            main_image_caption: mainImageCaption,
+            tags,
+            word_count: wordCount,
+            reading_time_minutes: readingTime
+          };
+        } catch (error: any) {
+          console.log('Error in extraction:', error);
+          return {
+            extractionSuccess: false,
+            usedSelector: '',
+            title: '',
+            author: 'EdgeProp Staff',
+            created: '',
+            category: [],
+            description: '',
+            html_content: '',
+            text_content: '',
+            paragraphs: [],
+            links: [],
+            images: [],
+            main_image_url: '',
+            main_image_caption: '',
+            tags: [],
+            word_count: 0,
+            reading_time_minutes: 0
+          };
+        }
+      })();
+    }).catch((error: any) => {
+      console.log('Error in page.evaluate:', error);
+      return { 
+        extractionSuccess: false,
+        usedSelector: '',
+        title: '',
+        author: '',
+        created: '',
+        category: [],
+        description: '',
+        html_content: '',
+        text_content: '',
+        paragraphs: [],
+        links: [],
+        images: [],
+        main_image_url: '',
+        main_image_caption: '',
+        tags: [],
+        word_count: 0,
+        reading_time_minutes: 0
+      };
+    });
+    
+    if (!articleData.extractionSuccess || !articleData.paragraphs || articleData.paragraphs.length === 0) {
+      console.log('❌ Failed to extract article content');
+      onProgress?.({
+        currentPage: 1,
+        totalPages: 1,
+        currentArticle: 1,
+        articlesDiscovered: 1,
+        articlesScraped: 0,
+        articlesFailed: 1,
+        status: 'error',
+        message: 'Failed to extract article content'
+      });
+      return null;
+    }
+    
+    // Extract path from URL
+    const urlObj = new URL(url);
+    const path = urlObj.pathname;
+    
+    // Create article object using the extracted data
+    const article: MCPArticle = {
+      nid: `single-${Date.now()}`,
+      title: articleData.title || 'Untitled',
+      path: path,
+      thumbnail: articleData.main_image_url || '',
+      author: articleData.author || 'Unknown',
+      created: articleData.created || new Date().toISOString(),
+      category: articleData.category || ['Property News'],
+      description: articleData.description || articleData.text_content?.substring(0, 200),
+      created_on: new Date().toISOString(),
+      keywords: articleData.tags || [],
+      text_content: articleData.text_content,
+      paragraphs: articleData.paragraphs,
+      links: articleData.links || [],
+      images: articleData.images || [],
+      main_image_url: articleData.main_image_url,
+      main_image_caption: articleData.main_image_caption,
+      tags: articleData.tags || [],
+      word_count: articleData.word_count || 0,
+      reading_time_minutes: articleData.reading_time_minutes || 0,
+      html_content: articleData.html_content,
+      scraped_at: new Date()
+    };
+    
+    console.log(`✅ Successfully scraped article: ${article.title}`);
+    
+    // Save immediately if requested
+    if (saveImmediately && sessionId) {
+      try {
+        console.log(`💾 Saving article immediately: ${article.title}`);
+        
+        // Save basic article metadata
+        const savedArticles = await db.upsertArticles([article], sessionId);
+        console.log(`✅ Saved metadata: ${savedArticles.newArticles} new, ${savedArticles.duplicates} duplicates`);
+        
+        // Save full content
+        if (article.text_content) {
+          const contentData = {
+            article_id: '', // Will be set by upsertArticleContent
+            html_content: article.html_content || '',
+            text_content: article.text_content,
+            paragraphs: article.paragraphs,
+            images: article.images || [],
+            links: article.links || [],
+            main_image_url: article.main_image_url || '',
+            main_image_caption: article.main_image_caption || '',
+            tags: article.tags || [],
+            word_count: article.word_count,
+            reading_time_minutes: article.reading_time_minutes,
+            published_date: new Date().toISOString()
+          };
+          await upsertArticleContent({ ...article, ...contentData } as any);
+          console.log(`✅ Saved full content for: ${article.title}`);
+        }
+      } catch (saveError: any) {
+        console.error(`❌ Failed to save article: ${saveError}`);
+      }
+    }
+    
+    onProgress?.({
+      currentPage: 1,
+      totalPages: 1,
+      currentArticle: 1,
+      articlesDiscovered: 1,
+      articlesScraped: 1,
+      articlesFailed: 0,
+      status: 'completed',
+      message: `Successfully scraped: ${article.title}`
+    });
+    
+    return article;
+    
+  } catch (error: any) {
+    console.error('❌ Single article scrape failed:', error);
+    onProgress?.({
+      currentPage: 1,
+      totalPages: 1,
+      currentArticle: 1,
+      articlesDiscovered: 1,
+      articlesScraped: 0,
+      articlesFailed: 1,
+      status: 'error',
+      message: `Failed to scrape article: ${error.message}`
+    });
+    return null;
   } finally {
     await browser.close();
   }

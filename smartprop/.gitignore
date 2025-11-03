@@ -39,3 +39,41 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# temporary and debug files
+temp-*
+debug-*
+test-*
+check-*
+analyze-*
+investigate-*
+reproduce-*
+find-*
+select-*
+comprehensive-*
+final-*
+fixed-*
+validate-*
+direct-*
+worker.ts
+
+# screenshots and images (except in public/)
+*.png
+*.jpg
+*.jpeg
+*.gif
+!public/**/*.png
+!public/**/*.jpg
+!public/**/*.jpeg
+!public/**/*.gif
+
+# temporary SQL files
+*.sql
+!migrations/*.sql
+
+# test results and artifacts
+test-results/
+archive/
+
+# QR codes and temporary assets
+qr.png

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, ExternalLink, Clock, FileText, GitCompare } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Clock, FileText } from 'lucide-react';
 import { cleanArticleParagraphs, containsHtmlLinks, extractCleanTextContent } from '@/lib/utils/content-parser';
 
 interface Article {
@@ -68,6 +68,14 @@ export default function ArticleDetailPage() {
   if (loading) return <div className="p-8">Loading...</div>;
   if (!article) return <div className="p-8">Article not found</div>;
 
+  // Check if thumbnail is same as first image to avoid duplication
+  const images = Array.isArray(fullContent?.images) ? fullContent.images : [];
+  const firstImages = images.filter((img: any) => img.paragraph_index === 0);
+  const thumbnailIsFirstImage = article.thumbnail && firstImages.some((img: any) => {
+    const imgUrl = typeof img === 'string' ? img : img.url || img.src;
+    return imgUrl === article.thumbnail;
+  });
+
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-4xl mx-auto">
@@ -78,14 +86,6 @@ export default function ArticleDetailPage() {
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Articles
-          </Button>
-          
-          <Button 
-            variant="outline"
-            onClick={() => router.push(`/admin/articles/${params.id}/compare`)}
-          >
-            <GitCompare className="w-4 h-4 mr-2" />
-            Compare with Original
           </Button>
         </div>
 
@@ -132,7 +132,7 @@ export default function ArticleDetailPage() {
             </a>
           </div>
 
-          {article.thumbnail && (
+          {article.thumbnail && !thumbnailIsFirstImage && (
             <img 
               src={article.thumbnail}
               alt={article.title}
@@ -193,7 +193,7 @@ export default function ArticleDetailPage() {
                               <img 
                                 src={imgUrl}
                                 alt={imgAlt || `Image ${imgIdx + 1}`}
-                                className="w-full h-auto rounded-lg border"
+                                className="max-w-full h-auto rounded-lg border mx-auto"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = 'none';
                                 }}

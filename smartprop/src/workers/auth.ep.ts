@@ -1,9 +1,25 @@
-import { chromium } from 'playwright';
+import { config } from 'dotenv';
 import path from 'path';
+
+// Load environment variables - try .env first, then .env.local
+config({ path: path.resolve(process.cwd(), '.env') });
+config({ path: path.resolve(process.cwd(), '.env.local') });
+
+import { chromium } from 'playwright';
 import fs from 'fs';
+import { CHROME_UA, humanPause } from './stealth';
 
 async function authenticateEdgeProp() {
-  console.log('🚀 Launching Chromium browser for manual login...');
+  // Get credentials from environment variables
+  const email = process.env.EP_EMAIL;
+  const password = process.env.EP_PASSWORD;
+  
+  if (!email || !password) {
+    throw new Error('EP_EMAIL and EP_PASSWORD must be set in .env.local');
+  }
+  
+  console.log('🚀 Launching Chromium browser for automated login...');
+  console.log(`📧 Logging in as: ${email}`);
   
   const browser = await chromium.launch({
     headless: false,
@@ -15,7 +31,7 @@ async function authenticateEdgeProp() {
   });
 
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    userAgent: CHROME_UA,
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -50,29 +66,95 @@ async function authenticateEdgeProp() {
 
   const page = await context.newPage();
 
-  // Navigate to EdgeProp login page
-  await page.goto('https://www.edgeprop.sg/user/login');
-  console.log('📄 Navigated to EdgeProp login page');
-  console.log('⏳ Please complete the login manually...');
-
-  // Wait for either 2 minutes or until user avatar/My Account is visible
-  const timeout = 2 * 60 * 1000; // 2 minutes
-  
   try {
-    // Wait for potential selectors that indicate successful login
-    // Common selectors for user account/avatar - adjust if needed
-    await Promise.race([
-      page.waitForSelector('[data-testid="user-menu"]', { timeout }),
-      page.waitForSelector('.user-avatar', { timeout }),
-      page.waitForSelector('text=My Account', { timeout }),
-      page.waitForSelector('[aria-label*="account" i]', { timeout }),
-      page.waitForSelector('.logged-in', { timeout }),
-      new Promise((resolve) => setTimeout(resolve, timeout))
-    ]);
+    // Navigate to EdgeProp homepage
+    console.log('📄 Navigating to EdgeProp homepage...');
+    await page.goto('https://www.edgeprop.sg/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await humanPause(3000, 5000);
 
-    console.log('✅ Login detected (or timeout reached)');
-  } catch (_error) {
-    console.log('⏱️ Timeout reached - proceeding to save state...');
+    // Check if already logged in
+    const bookmarksLink = page.locator('[href="/bookmarks"]');
+    const alreadyLoggedIn = await bookmarksLink.isVisible({ timeout: 3000 }).catch(() => false);
+    
+    if (alreadyLoggedIn) {
+      console.log('✅ Already logged in! Saving existing auth state...');
+    } else {
+      // Click on Login button in header
+      console.log('🔍 Clicking Login button...');
+      await page.locator('div').filter({ hasText: /^Login$/ }).nth(1).click();
+      await humanPause(1500, 2000);
+
+      // Click on "User" option
+      console.log('👤 Selecting User login...');
+      await page.getByText('User').first().click();
+      await humanPause(1500, 2000);
+
+      // Fill in email and password
+      console.log('📝 Filling in credentials...');
+      await page.evaluate(({ email, pwd }: { email: string; pwd: string }) => {
+        const emailInput = document.getElementById('username') as HTMLInputElement;
+        const passwordInput = document.getElementById('password') as HTMLInputElement;
+        
+        if (emailInput) {
+          emailInput.value = email;
+          emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        
+        if (passwordInput) {
+          passwordInput.value = pwd;
+          passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }, { email, pwd: password });
+      
+      await humanPause(800, 1200);
+
+      // Click the Login button
+      console.log('🔑 Submitting login form...');
+      await page.getByText('Login').nth(2).click();
+      
+      // Wait for login to complete - check for bookmark link which appears when logged in
+      console.log('⏳ Waiting for login to complete...');
+      await humanPause(2000, 3000);
+      
+      // Check for any popup/dialog about logging out from other device
+      try {
+        const logoutDialog = page.locator('text=/signed out elsewhere|simultaneous sessions/i');
+        const dialogVisible = await logoutDialog.isVisible({ timeout: 3000 }).catch(() => false);
+        
+        if (dialogVisible) {
+          console.log('⚠️  Detected multi-session warning dialog, clicking LOGIN...');
+          
+          // Try to find and click the LOGIN button (uppercase)
+          const confirmButton = page.locator('text=LOGIN').first();
+          const buttonVisible = await confirmButton.isVisible({ timeout: 2000 }).catch(() => false);
+          
+          if (buttonVisible) {
+            await confirmButton.click();
+            await humanPause(2000, 3000);
+          } else {
+            console.log('⚠️  Could not find LOGIN button, trying to press Enter...');
+            await page.keyboard.press('Enter');
+            await humanPause(1500, 2000);
+          }
+        }
+      } catch (e) {
+        // No dialog, continue
+      }
+      
+      // Final check for successful login
+      try {
+        await page.locator('[href="/bookmarks"]').waitFor({ state: 'visible', timeout: 10000 });
+        console.log('✅ Login successful!');
+      } catch (e) {
+        console.log('⚠️  Login check timed out, proceeding anyway...');
+      }
+      
+      await humanPause(1000, 1500);
+    }
+
+  } catch (error) {
+    console.error('❌ Error during login:', error);
+    throw error;
   }
 
   // Ensure storage directory exists

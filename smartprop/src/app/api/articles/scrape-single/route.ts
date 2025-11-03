@@ -3,7 +3,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { scrapeEdgePropMCP } from '@/lib/scraper/edgeprop-mcp-scraper';
+import { scrapeEdgePropMCP, scrapeSingleArticleMCP } from '@/lib/scraper/edgeprop-mcp-scraper';
 import { scrapeEdgeProp } from '@/lib/scraper/edgeprop-scraper';
 import * as db from '@/lib/db/articles';
 
@@ -36,18 +36,20 @@ export async function POST(request: NextRequest) {
     let articles: any[] = [];
     
     if (scraperType === 'mcp') {
-      // Use MCP scraper with maxArticles=1 to scrape just one article
-      // We'll scrape 1 page but limit to 1 article
-      articles = await scrapeEdgePropMCP(
-        1, // maxPages: 1
+      // Use the dedicated single article scraper
+      const article = await scrapeSingleArticleMCP(
+        url,
         (progressUpdate) => {
           progress = progressUpdate;
           console.log('Progress:', progressUpdate.message);
         },
         sessionId,
-        true, // saveImmediately
-        1 // maxArticles: 1
+        true // saveImmediately
       );
+      
+      if (article) {
+        articles = [article];
+      }
     } else if (scraperType === 'api') {
       // Use API scraper to get metadata only
       articles = await scrapeEdgeProp(
@@ -96,7 +98,6 @@ export async function POST(request: NextRequest) {
     if (scraperType === 'mcp') {
       // MCP scraper provides full content
       responseData.article = {
-        id: article.id,
         nid: article.nid,
         title: article.title,
         author: article.author,

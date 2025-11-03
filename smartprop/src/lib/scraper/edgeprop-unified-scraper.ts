@@ -40,6 +40,17 @@ export interface UnifiedArticle {
   scraped_at: Date;
 }
 
+export interface CapturedApiData {
+  total?: number;
+  results?: any[];
+  response?: any[] | { results?: any[] };
+  data?: any[];
+  articles?: any[];
+  url?: string;
+  timestamp?: number;
+  discovery_method?: 'api' | 'dom' | 'unknown';
+}
+
 export interface UnifiedProgress {
   currentPage: number;
   totalPages: number;
@@ -67,7 +78,7 @@ export async function scrapeEdgePropUnified(
   shouldStop = false;
   const allArticles: UnifiedArticle[] = [];
   const seenIds = new Set<string>();
-  let capturedData: unknown = null;
+  let capturedData: CapturedApiData | any[] | null = null;
   let currentPage: Page | null = null;
   let articlesFailed = 0;
   
@@ -298,7 +309,9 @@ export async function scrapeEdgePropUnified(
       // Session already created by caller
     }
     
-    const _apiMaxPages = capturedData?.total ? Math.ceil(capturedData.total / 20) : maxPages;
+    const _apiMaxPages = (capturedData && typeof capturedData === 'object' && !Array.isArray(capturedData) && 'total' in capturedData && typeof (capturedData as CapturedApiData).total === 'number') 
+      ? Math.ceil((capturedData as CapturedApiData).total! / 20) 
+      : maxPages;
     
     // Iterate through pages
     for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
@@ -336,10 +349,7 @@ export async function scrapeEdgePropUnified(
         
         // Check if we have valid captured data
         if (capturedData && (
-          capturedData.results || 
-          capturedData.response || 
-          capturedData.data || 
-          capturedData.articles || 
+          (typeof capturedData === 'object' && !Array.isArray(capturedData) && ('results' in capturedData || 'response' in capturedData || 'data' in capturedData || 'articles' in capturedData)) || 
           Array.isArray(capturedData)
         )) {
           apiDataReceived = true;
@@ -380,17 +390,19 @@ export async function scrapeEdgePropUnified(
       
       // Handle the actual EdgeProp API structure
       let pageArticles = null;
-      if (capturedData?.response && Array.isArray(capturedData.response)) {
-        pageArticles = capturedData.response;
+      const capturedDataObj = capturedData && !Array.isArray(capturedData) ? capturedData as CapturedApiData : null;
+      
+      if (capturedDataObj?.response && Array.isArray(capturedDataObj.response)) {
+        pageArticles = capturedDataObj.response;
         console.log(`Found ${pageArticles.length} articles on page ${pageNum} (response array)`);
-      } else if (capturedData?.response?.results) {
-        pageArticles = capturedData.response.results;
+      } else if (capturedDataObj?.response && typeof capturedDataObj.response === 'object' && 'results' in capturedDataObj.response && Array.isArray(capturedDataObj.response.results)) {
+        pageArticles = capturedDataObj.response.results;
         console.log(`Found ${pageArticles.length} articles on page ${pageNum} (response.results)`);
-      } else if (capturedData?.results) {
-        pageArticles = capturedData.results;
+      } else if (capturedDataObj?.results) {
+        pageArticles = capturedDataObj.results;
         console.log(`Found ${pageArticles.length} articles on page ${pageNum} (results)`);
-      } else if (capturedData?.data) {
-        pageArticles = capturedData.data;
+      } else if (capturedDataObj?.data) {
+        pageArticles = capturedDataObj.data;
         console.log(`Found ${pageArticles.length} articles on page ${pageNum} (data)`);
       } else if (capturedData?.articles) {
         pageArticles = capturedData.articles;
@@ -1299,15 +1311,9 @@ export async function scrapeEdgePropUnified(
                 const path = href.replace('https://www.edgeprop.sg/', '');
                 
                 extracted.push({
-                  nid: `dom-${index}-${Date.now()}`,
                   title: title,
-                  path: path,
-                  thumbnail: imgSrc,
-                  author: 'Unknown',
-                  created: new Date().toISOString(),
-                  category: ['Property News'],
-                  description: title.substring(0, 200), // Use title as description for now
-                  discovery_method: 'dom' // Mark as DOM discovery
+                  href: href,
+                  imgSrc: imgSrc
                 });
                 
                 console.log(`Extracted article: ${title}`);

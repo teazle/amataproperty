@@ -21,6 +21,7 @@ interface UpdateListingRequest {
   tenure?: string;
   
   // Agent details
+  agent_id?: string;
   agent_name?: string;
   agent_phone?: string;
   agent_email?: string;
@@ -61,6 +62,7 @@ export async function PUT(
       price_psf: number;
       year_built: number;
       tenure: string;
+      agent_id: string;
     }> = {};
     const agentUpdates: Partial<{
       name: string;

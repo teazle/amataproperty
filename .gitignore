@@ -8,3 +8,30 @@ bun.lockb
 # Article scraper outputs
 article-scraper/edgeprop-articles.json
 article-scraper/scrape-progress.json
+
+# Test files and temporary scripts
+test-*.js
+test-*.ts
+*-test.js
+*-test.ts
+verify-*.js
+verify-*.ts
+aws-mcp-*.js
+
+# Screenshots and debug images
+*.png
+*.jpg
+*.jpeg
+*.gif
+test-screenshot-*
+!landing/**/*.png
+!landing/**/*.jpg
+!smartprop/public/**/*.png
+!smartprop/public/**/*.jpg
+
+# Playwright and automation artifacts
+.playwright-mcp/
+playwright-screenshots/
+
+# Archive directory
+archive/

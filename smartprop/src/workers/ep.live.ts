@@ -1,11 +1,31 @@
 import { config } from 'dotenv';
-config(); // Load environment variables
+import path from 'path';
+
+// Load environment variables - try .env first, then .env.local
+config({ path: path.resolve(process.cwd(), '.env') });
+config({ path: path.resolve(process.cwd(), '.env.local') });
 
 import { chromium, type BrowserContextOptions } from 'playwright';
-import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
+
+// Helper function to re-authenticate if needed
+async function reAuthenticate() {
+  console.log('\n🔄 Re-authenticating to EdgeProp...');
+  try {
+    execSync('bun src/workers/auth.ep.ts', { 
+      cwd: process.cwd(),
+      stdio: 'inherit' 
+    });
+    console.log('✅ Re-authentication complete!\n');
+    return true;
+  } catch (_error) {
+    console.error('❌ Re-authentication failed:', _error);
+    return false;
+  }
+}
 
 /**
  * Clean property title by removing portal suffixes and extra text
@@ -79,6 +99,17 @@ async function scrapeEdgePropFinal() {
   console.log(`📄 Max pages: ${maxPages}`);
   console.log(`📁 Storage state: ${hasStorageState ? 'Found' : 'Not found'}`);
   
+  // Simple approach: Re-authenticate before scraping to ensure fresh auth
+  console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
+  await reAuthenticate();
+  
+  // Verify auth state exists after re-auth
+  const updatedStateExists = fs.existsSync(stateFilePath);
+  if (!updatedStateExists) {
+    console.error('❌ Authentication state file not found after re-authentication!');
+    process.exit(1);
+  }
+  
   const browser = await chromium.launch({
     headless: true, // Run in headless mode for production
     args: [
@@ -93,14 +124,10 @@ async function scrapeEdgePropFinal() {
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
+    storageState: stateFilePath, // Always use the fresh auth state
   };
 
-  if (hasStorageState) {
-    contextOptions.storageState = stateFilePath;
-  }
-
   const context = await browser.newContext(contextOptions);
-  const page = await context.newPage();
   
   let totalProcessed = 0;
   let totalSuccess = 0;
@@ -108,6 +135,8 @@ async function scrapeEdgePropFinal() {
   let totalSkipped = 0; // Track duplicates/already processed
   const startTime = Date.now();
   let currentPage = 1;
+
+  const page = await context.newPage();
 
   try {
     // Base URL (page will be appended in the loop)
@@ -188,7 +217,23 @@ async function scrapeEdgePropFinal() {
           const popup = await popupPromise;
         
           console.log(`✅ Popup opened! (popup: ${Date.now() - stepStart}ms, total: ${Date.now() - propertyStartTime}ms)`);
-          await humanPause(800, 1200); // Further reduced for speed
+          await humanPause(2000, 3000);
+          
+          // Wait for popup to fully load
+          try {
+            await popup.waitForLoadState('domcontentloaded', { timeout: 10000 });
+          } catch (e) {
+            console.log('   ⚠️  Popup load state timeout, continuing anyway...');
+          }
+          await humanPause(1500, 2500);
+          
+          // Scroll down to find agent section with phone button
+          try {
+            await popup.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+            await humanPause(1000, 1500);
+          } catch (e) {
+            // Scroll failed, continue anyway
+          }
           
           // Click WhatsApp button then Phone Number link to reveal agent phone (with retry)
           stepStart = Date.now();
@@ -200,12 +245,57 @@ async function scrapeEdgePropFinal() {
           while (phoneAttempts < maxPhoneAttempts && !cleanPhone) {
             phoneAttempts++;
             try {
-              // Extract phone number
-              const phoneElement = await popup.locator('.jsx-3667944064.agent-contact-wrapper').first();
-              const phoneText = await phoneElement.textContent({ timeout: 2000 }).catch(() => '');
-              if (phoneText) {
-                cleanPhone = cleanPhoneNumber(phoneText);
+              // First, try to click the phone button to reveal the phone number
+              // Use multiple selectors in case the JSX hash changes
+              const phoneButtonSelectors = [
+                'button.jsx-3667944064.mobile-btn',
+                'button.mobile-btn',
+                '[class*="mobile-btn"]',
+                'button[class*="phone"]'
+              ];
+              
+              // Try to click phone button
+              let phoneButtonClicked = false;
+              for (const selector of phoneButtonSelectors) {
+                try {
+                  const phoneButton = popup.locator(selector).first();
+                  const phoneButtonVisible = await phoneButton.isVisible({ timeout: 3000 }).catch(() => false);
+                  if (phoneButtonVisible) {
+                    // Scroll button into view before clicking
+                    try {
+                      await phoneButton.scrollIntoViewIfNeeded();
+                      await humanPause(500, 800);
+                    } catch (e) {
+                      // Scroll failed, continue anyway
+                    }
+                    await phoneButton.click({ timeout: 3000 });
+                    await humanPause(1000, 1500);
+                    phoneButtonClicked = true;
+                    console.log(`   ✅ Clicked phone button with selector: ${selector}`);
+                    break;
+                  }
+                } catch (e) {
+                  // Try next selector
+                }
+              }
+              
+              if (!phoneButtonClicked) {
+                console.log(`   ⚠️  Could not find phone button to click`);
+              }
+              
+              // Extract phone number - try tel: link first, then fallback to old selector
+              const phoneLink = await popup.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
+              if (phoneLink) {
+                cleanPhone = cleanPhoneNumber(phoneLink);
                 console.log(`   📱 Phone: ${cleanPhone}`);
+              } else {
+                // Fallback to old selector
+                const phoneElement = await popup.locator('.jsx-3667944064.agent-contact-wrapper').first();
+                const phoneText = await phoneElement.textContent({ timeout: 3000 }).catch(() => '');
+                if (phoneText) {
+                  cleanPhone = cleanPhoneNumber(phoneText);
+                  console.log(`   📱 Phone: ${cleanPhone}`);
+                }
               }
             } catch (error: unknown) {
               console.log(`   ⚠️  Phone extraction attempt ${phoneAttempts}/${maxPhoneAttempts} failed: ${error}`);

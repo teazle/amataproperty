@@ -340,124 +340,17 @@ async function scrapePropertyGuruByDistrict() {
     console.log('💡 Run `bun run auth:pg` first to save login state\n');
   }
 
-  // Pre-flight authentication check
-  if (hasStorageState) {
-    console.log('🔍 Pre-flight check: Testing authentication state...');
-    try {
-      const testBrowser = await chromium.launch({
-        headless: true,
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--disable-dev-shm-usage',
-          '--no-sandbox',
-        ]
-      });
-
-      const testContext = await testBrowser.newContext({
-        userAgent: CHROME_UA,
-        storageState: stateFilePath,
-      });
-
-      const testPage = await testContext.newPage();
-      
-      // Navigate to a test listing to check if we can see phone numbers
-      await testPage.goto('https://www.propertyguru.com.sg/property-for-sale?listingType=sale&page=1&districtCode=D09', { 
-        waitUntil: 'domcontentloaded', 
-        timeout: 30000 
-      });
-      
-      await testPage.waitForTimeout(2000);
-      
-      // Try to get a listing URL to test
-      const firstListingUrl = await testPage.locator('div.hui-card.primary.flat.listing-card-v2 a[href*="/listing/"]').first().getAttribute('href');
-      
-      if (firstListingUrl) {
-        const listingPage = await testContext.newPage();
-        await listingPage.goto(firstListingUrl.startsWith('http') ? firstListingUrl : `https://www.propertyguru.com.sg${firstListingUrl}`, {
-          waitUntil: 'domcontentloaded',
-          timeout: 30000
-        });
-        await listingPage.waitForTimeout(2000);
-        
-        // Scroll down to ensure agent section loads
-        await listingPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await listingPage.waitForTimeout(500);
-        
-        // Try to find phone number - use the same logic as the scraper
-        let phoneFound = false;
-        try {
-          await humanPause(1000, 1500);
-          
-          // First check if phone is already visible
-          const directPhoneLink = await listingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 2000 }).catch(() => null);
-          if (directPhoneLink) {
-            phoneFound = true;
-          } else {
-            // Try clicking "Other ways to enquire" and "View Phone Number" buttons
-            const otherWaysButtonSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-body > div > div.extended-view-root > div.actionable-link.contact-button-root.extend-view-trigger-point';
-            const otherWaysButton = listingPage.locator(otherWaysButtonSelector).first();
-            const otherWaysVisible = await otherWaysButton.isVisible({ timeout: 5000 }).catch(() => false);
-            
-            if (otherWaysVisible) {
-              await otherWaysButton.click();
-              await humanPause(1500, 2000);
-              
-              const viewPhoneButton = listingPage.locator('text=View Phone Number').first();
-              const viewPhoneVisible = await viewPhoneButton.isVisible({ timeout: 5000 }).catch(() => false);
-              
-              if (viewPhoneVisible) {
-                await viewPhoneButton.click();
-                await humanPause(1500, 2500);
-                const phoneText = await listingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
-                if (phoneText) {
-                  phoneFound = true;
-                }
-              }
-            }
-          }
-        } catch (_error) {
-          // Phone extraction failed
-        }
-        
-        await listingPage.close();
-        
-        if (phoneFound) {
-          console.log('✅ Authentication state is valid - phone numbers accessible');
-        } else {
-          console.log('⚠️  Authentication may be stale - cannot see phone numbers');
-          console.log('🔄 Triggering re-authentication before scraping...\n');
-          await testBrowser.close();
-          
-          // Re-authenticate
-          await reAuthenticate();
-          
-          // Restart the scraper with fresh auth by reimporting the function
-          console.log('✅ Re-authentication complete! Restarting scraper with fresh auth...');
-          
-          if (fs.existsSync(lockFile)) {
-            fs.unlinkSync(lockFile);
-          }
-          
-          // Use execSync to wait for the restart to complete
-          const cwd = process.cwd();
-          const districts = process.env.PG_DISTRICTS || 'ALL';
-          const maxPages = process.env.PG_MAX_PAGES || '3';
-          const jobId = process.env.PG_JOB_ID || '';
-          
-          const restartCmd = `cd ${cwd} && PG_DISTRICTS="${districts}" PG_MAX_PAGES=${maxPages} PG_JOB_ID="${jobId}" bun src/workers/pg.districts.ts`;
-          execSync(restartCmd, { stdio: 'inherit', cwd: process.cwd() });
-          
-          // If we get here, the restart completed, so exit this process
-          process.exit(0);
-        }
-      }
-      
-      await testBrowser.close();
-    } catch (error: unknown) {
-      console.log('⚠️  Pre-flight check failed, but continuing anyway...');
-    }
-    console.log('');
+  // Simple approach: Re-authenticate before scraping to ensure fresh auth
+  console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
+  await reAuthenticate();
+  
+  // Verify auth state exists after re-auth
+  const updatedStateExists = fs.existsSync(stateFilePath);
+  if (!updatedStateExists) {
+    console.error('❌ Authentication state file not found after re-authentication!');
+    process.exit(1);
   }
+  
 
   // Launch browser once for all districts
   const browser = await chromium.launch({
@@ -489,9 +382,8 @@ async function scrapePropertyGuruByDistrict() {
     }
   };
 
-  if (hasStorageState) {
-    contextOptions.storageState = stateFilePath;
-  }
+  // Always use the fresh auth state after re-auth
+  contextOptions.storageState = stateFilePath;
 
   const context = await browser.newContext(contextOptions);
 

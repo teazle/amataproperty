@@ -142,11 +142,27 @@ async function scrapeEdgePropFinal() {
   fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
   console.log('📝 Lock file created for progress tracking');
   
-  // Simple approach: Re-authenticate before scraping to ensure fresh auth
-  console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
-  const authSuccess = await reAuthenticate();
+  // Check if auth state file exists and is recent (less than 24 hours old)
+  const stateFileExists = fs.existsSync(stateFilePath);
+  let shouldReAuth = !stateFileExists;
   
-  if (!authSuccess) {
+  if (stateFileExists) {
+    const stats = fs.statSync(stateFilePath);
+    const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
+    if (ageInHours > 24) {
+      console.log(`⚠️  Auth state file is ${ageInHours.toFixed(1)} hours old, re-authenticating...`);
+      shouldReAuth = true;
+    } else {
+      console.log(`✅ Using existing auth state file (${ageInHours.toFixed(1)} hours old)`);
+    }
+  }
+  
+  // Re-authenticate only if needed
+  if (shouldReAuth) {
+    console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
+    const authSuccess = await reAuthenticate();
+    
+    if (!authSuccess) {
     console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
     // Update lock file and database
     jobStatus.status = 'failed';
@@ -173,32 +189,44 @@ async function scrapeEdgePropFinal() {
     process.exit(1);
   }
   
-  // Verify auth state exists after re-auth
-  const updatedStateExists = fs.existsSync(stateFilePath);
-  if (!updatedStateExists) {
-    console.error('❌ Authentication state file not found after re-authentication!');
-    // Update lock file and database
+  // Verify auth state exists after re-auth (only if we re-authenticated)
+  if (shouldReAuth) {
+    const updatedStateExists = fs.existsSync(stateFilePath);
+    if (!updatedStateExists) {
+      console.error('❌ Authentication state file not found after re-authentication!');
+      // Update lock file and database
+      jobStatus.status = 'failed';
+      jobStatus.statusMessage = 'Authentication state file not found';
+      jobStatus.completedAt = new Date().toISOString();
+      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+      
+      if (jobId) {
+        try {
+          const supabase = getSupabaseClient();
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Authentication state file not found'
+            })
+            .eq('id', jobId);
+        } catch (error) {
+          console.error('Failed to update database:', error);
+        }
+      }
+      
+      process.exit(1);
+    }
+  }
+  
+  // Final check: ensure auth state file exists before proceeding
+  if (!fs.existsSync(stateFilePath)) {
+    console.error('❌ Authentication state file not found! Cannot proceed.');
     jobStatus.status = 'failed';
     jobStatus.statusMessage = 'Authentication state file not found';
     jobStatus.completedAt = new Date().toISOString();
     fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-    
-    if (jobId) {
-      try {
-        const supabase = getSupabaseClient();
-        await supabase
-          .from('scraper_jobs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: 'Authentication state file not found'
-          })
-          .eq('id', jobId);
-      } catch (error) {
-        console.error('Failed to update database:', error);
-      }
-    }
-    
     process.exit(1);
   }
   

@@ -187,16 +187,48 @@ export async function POST(request: NextRequest) {
     
     console.log('🔍 [DEBUG] Event:', event);
     console.log('🔍 [DEBUG] Payload:', payload);
+    console.log('🔍 [DEBUG] Body keys:', Object.keys(body));
+
+    // WAHA can send messages in two formats:
+    // 1. Wrapped: { event: "message", payload: { from, body, ... } }
+    // 2. Direct: { from, body, ... } (message fields directly in body)
+    
+    let messageData = null;
+    
+    // Check wrapped format first
+    if (event === 'message' && payload?.body) {
+      console.log('✅ [DEBUG] Processing wrapped message format');
+      messageData = {
+        from: payload.from,
+        to: payload.to,
+        body: payload.body,
+        id: payload.id,
+        timestamp: payload.timestamp,
+        fromMe: payload.fromMe,
+      };
+    }
+    // Check direct format (message fields directly in body)
+    else if (body.from && body.body && !body.event) {
+      console.log('✅ [DEBUG] Processing direct message format');
+      messageData = {
+        from: body.from,
+        to: body.to,
+        body: body.body,
+        id: body.id,
+        timestamp: body.timestamp,
+        fromMe: body.fromMe,
+      };
+    }
 
     // Handle incoming message events
-    if (event === 'message' && payload?.body) {
+    if (messageData) {
       console.log('✅ [DEBUG] Processing message event');
-      const from = payload.from; // Phone number (e.g., "6591234567@c.us")
-      const to = payload.to; // Who the message is sent to
-      const messageText = payload.body;
-      const messageId = payload.id;
-      const timestamp = payload.timestamp;
-      const fromMe = payload.fromMe; // Is this message from us?
+      const from = messageData.from; // Phone number (e.g., "6591234567@c.us")
+      const to = messageData.to; // Who the message is sent to
+      const messageText = messageData.body;
+      const messageId = messageData.id;
+      const timestamp = messageData.timestamp;
+      const fromMe = messageData.fromMe; // Is this message from us?
 
       console.log('[WAHA Inbound Message]', {
         from,

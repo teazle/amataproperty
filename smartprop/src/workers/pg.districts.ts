@@ -482,8 +482,22 @@ async function scrapePropertyGuruByDistrict() {
         if (pageText && (pageText.includes('Pardon Our Interruption') || 
             pageText.includes('Verify you are human') ||
             pageText.includes('Enable JavaScript and cookies to continue'))) {
-          console.log(`   🛡️  Cloudflare detected! Please run with headless: false to resolve manually.`);
-          break;
+          if (!headlessMode) {
+            console.log(`   🛡️  Cloudflare detected! Waiting for manual resolution (30 seconds)...`);
+            await page.waitForTimeout(30000); // Wait 30 seconds for manual resolution
+            // Check again after waiting
+            const newPageText = await page.textContent('body').catch(() => null);
+            if (newPageText && !newPageText.includes('Pardon Our Interruption') && 
+                !newPageText.includes('Verify you are human') &&
+                !newPageText.includes('Enable JavaScript and cookies to continue')) {
+              console.log(`   ✅ Cloudflare challenge resolved! Continuing...`);
+            } else {
+              console.log(`   ⚠️  Cloudflare challenge not resolved. Continuing anyway...`);
+            }
+          } else {
+            console.log(`   🛡️  Cloudflare detected! Skipping page (run with HEADLESS=false to resolve manually).`);
+            break;
+          }
         }
 
         // Get organic listing cards - use broader selector to catch all variations

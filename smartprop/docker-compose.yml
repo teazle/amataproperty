@@ -61,5 +61,5 @@ volumes:
 #    - Scan QR code with WhatsApp on your phone
 # 
 # 6. Set webhook URL in production:
-#    Update PUBLIC_BASE_URL in .env to your domain:
+#    Update PUBLIC_BASE_URL in .env.local to your domain:
 #    PUBLIC_BASE_URL=https://yourdomain.com

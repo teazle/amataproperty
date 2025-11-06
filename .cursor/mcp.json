@@ -12,6 +12,13 @@
         "SUPABASE_ACCESS_TOKEN": "sbp_73904a875bbc63a37cc1ee6b00c085e026717932"
       }
     },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ]
+    },
     "aws-ccapi-mcp-server": {
       "command": "uvx",
       "args": [

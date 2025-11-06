@@ -6,7 +6,7 @@
  */
 
 // Load environment variables FIRST before any other imports (use require for immediate execution)
-require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') });
+// Load from .env.local only
 require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env.local') });
 
 import { createClient } from '@supabase/supabase-js';

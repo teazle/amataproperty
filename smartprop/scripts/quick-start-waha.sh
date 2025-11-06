@@ -25,14 +25,14 @@ if [ ! -f "docker-compose.yml" ]; then
     exit 1
 fi
 
-# Check if .env exists, if not create from example
-if [ ! -f ".env" ]; then
-    echo "⚠️  .env file not found"
-    if [ -f "env.example" ]; then
-        echo "   Creating .env from env.example..."
-        cp env.example .env
-        echo "✅ Created .env file"
-        echo "   Please edit .env and configure your settings"
+# Check if .env.local exists, if not create from example
+if [ ! -f ".env.local" ]; then
+    echo "⚠️  .env.local file not found"
+    if [ -f ".env.example" ]; then
+        echo "   Creating .env.local from .env.example..."
+        cp .env.example .env.local
+        echo "✅ Created .env.local file"
+        echo "   Please edit .env.local and configure your settings"
     else
         echo "❌ env.example not found"
         exit 1

@@ -9,8 +9,7 @@ import { sendCoBrokingInquiry, generateCoBrokingInquiryMessage } from '../src/li
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
-// Load environment variables
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Load environment variables from .env.local only
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -18,7 +17,7 @@ const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE;
 
 if (!supabaseUrl || !supabaseServiceRole) {
   console.error('❌ Missing required environment variables');
-  console.error('Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE in .env');
+  console.error('Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE in .env.local');
   process.exit(1);
 }
 

@@ -1,21 +1,21 @@
 {
-  "startedAt": "2025-11-03T02:23:06.632Z",
-  "districts": "09",
-  "pid": 91640,
+  "startedAt": "2025-11-06T11:14:27.202Z",
+  "districts": "11",
+  "pid": 14584,
   "status": "completed",
-  "statusMessage": "Scraping District 09 - Page 1/1",
+  "statusMessage": "Scraping District 11 - Page 2/2",
   "progress": {
-    "currentDistrict": "09",
-    "currentPage": 1,
-    "totalPages": 1,
-    "listingsProcessed": 20
+    "currentDistrict": "11",
+    "currentPage": 2,
+    "totalPages": 2,
+    "listingsProcessed": 39
   },
-  "completedAt": "2025-11-03T02:27:14.295Z",
+  "completedAt": "2025-11-06T11:22:22.770Z",
   "stats": {
     "totalDistricts": 1,
-    "totalListings": 20,
-    "totalSuccess": 20,
+    "totalListings": 40,
+    "totalSuccess": 39,
     "totalErrors": 0,
-    "totalSkippedNoPhone": 0
+    "totalSkippedNoPhone": 1
   }
 }

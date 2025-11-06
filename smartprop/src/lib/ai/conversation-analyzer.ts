@@ -419,8 +419,15 @@ export async function analyzeConversationWithAdvancedAI(
   // Check if it's a simple acknowledgment when objectives are met
   const isAcknowledgment = isSimpleAcknowledgment(context.agentMessage);
   
+  // If response is empty, don't continue regardless of other conditions
+  const isEmptyResponse = !recommendedResponse || recommendedResponse.trim().length === 0;
+  if (isEmptyResponse) {
+    console.log('⚠️ Empty response generated, setting shouldContinue to false');
+  }
+  
   // Only stop conversation if both objectives are met AND (it's not a direct question OR it's a simple acknowledgment)
-  const finalShouldContinue = bothObjectivesMet && (!isDirectQuestion || isAcknowledgment) ? false : shouldContinue;
+  // Also stop if response is empty
+  const finalShouldContinue = isEmptyResponse ? false : (bothObjectivesMet && (!isDirectQuestion || isAcknowledgment) ? false : shouldContinue);
 
   const result = {
     coBrokingAnalysis,
@@ -551,7 +558,49 @@ function assessAgentEngagement(context: ConversationContext): 'high' | 'medium' 
  * Generate completion message when both objectives are met
  */
 function generateCompletionMessage(context: ConversationContext): string {
-  return `Perfect! Thank you for confirming co-broking and providing the viewing times. I'll coordinate with my buyer and get back to you shortly.`;
+  // Check conversation history to see if we've already sent a completion message
+  const recentMessages = context.conversationHistory
+    .filter(msg => msg.role === 'user')
+    .slice(-3); // Check last 3 user messages
+  
+  // Check if we've already sent a completion message
+  const completionPatterns = [
+    'thank you for confirming',
+    'coordinate with my buyer',
+    'get back to you',
+    'appreciate your openness'
+  ];
+  
+  const hasAlreadySentCompletion = recentMessages.some(msg => 
+    completionPatterns.some(pattern => 
+      msg.message.toLowerCase().includes(pattern)
+    )
+  );
+  
+  if (hasAlreadySentCompletion) {
+    // Don't send another completion message if we've already sent one
+    console.log('⚠️ Completion message already sent, skipping duplicate');
+    return '';
+  }
+  
+  // Generate varied completion messages without exclamation marks
+  const completionMessages = [
+    `Thank you for confirming co-broking and providing the viewing times. I'll coordinate with my buyer and get back to you shortly.`,
+    `Perfect. I appreciate your openness to co-broking and the viewing times. I'll check with my buyer and confirm the details.`,
+    `Thank you. I have the viewing times and co-broking confirmation. I'll coordinate with my buyer and get back to you soon.`,
+    `Great. Thank you for the timeslots and co-broking confirmation. I'll check with my buyer and confirm the arrangement.`
+  ];
+  
+  // Select a message that hasn't been used recently
+  const usedMessages = recentMessages.map(msg => msg.message.toLowerCase());
+  const availableMessages = completionMessages.filter(msg => 
+    !usedMessages.some(used => used.includes(msg.substring(0, 30).toLowerCase()))
+  );
+  
+  // Use an available message or fall back to first one if all have been used
+  return availableMessages.length > 0 
+    ? availableMessages[0] 
+    : completionMessages[0];
 }
 
 /**
@@ -604,12 +653,12 @@ export function detectBusinessQuestions(message: string): {
  */
 export function generateBusinessQuestionDeflection(questionType: string): string {
   const deflectionResponses = {
-    commission: "Let's discuss the commission details when we meet in person. I prefer to handle those specifics face-to-face.",
+    commission: "I'd prefer to discuss the commission details when we meet in person. I find it's more productive to handle those specifics face-to-face.",
     buyer_details: "I'd be happy to share more about my buyer's profile and requirements during our viewing. It's better discussed in person.",
     terms: "We can go over all the terms and conditions when we meet. I find it's more productive to discuss these details face-to-face.",
-    market: "That's a great question! Let's discuss the market dynamics when we meet. I'd love to get your insights as well.",
-    pricing: "Let's save the pricing discussion for our meeting. It's better to handle these conversations in person.",
-    general: "I appreciate your interest! Let's discuss this further when we meet. Looking forward to our conversation."
+    market: "That's a good question. I'd appreciate discussing the market dynamics when we meet. I'd value your insights as well.",
+    pricing: "I'd prefer to save the pricing discussion for our meeting. It's better to handle these conversations in person.",
+    general: "I appreciate your interest. Let's discuss this further when we meet. I look forward to our conversation."
   };
   
   return deflectionResponses[questionType as keyof typeof deflectionResponses] || deflectionResponses.general;
@@ -630,13 +679,33 @@ export function generatePersonalQuestionResponse(message: string, context: Conve
     
     // Check conversation patterns to determine next steps
     const patterns = analyzeConversationPatterns(context);
+    
+    // Check conversation history for timeslots (more reliable than context.objectivesStatus)
+    const conversationHasTimeslots = context.conversationHistory.some(msg => {
+      if (msg.role === 'agent') {
+        const msgLower = msg.message.toLowerCase();
+        return (msgLower.match(/(mon|tue|wed|thu|fri|sat|sun)/i) && msgLower.match(/\d+\s*(am|pm|:\d+)/i)) ||
+               (msgLower.includes('pm') || msgLower.includes('am')) ||
+               msgLower.includes('friday') || msgLower.includes('saturday') || msgLower.includes('sunday');
+      }
+      return false;
+    });
+    
     const coBrokingConfirmed = context.objectivesStatus?.coBrokingConfirmed || 
+                              context.objectivesStatus?.coBrokingStatus === 'willing' ||
                               patterns.lastCobrokingResponse === 'positive';
     const timeslotsReceived = context.objectivesStatus?.timeslotsReceived || 
-                             patterns.lastTimeslotResponse === 'provided';
+                             patterns.lastTimeslotResponse === 'provided' ||
+                             conversationHasTimeslots;
+    const bothObjectivesMet = coBrokingConfirmed && timeslotsReceived;
     
-    // Base deflection response
-    const baseResponse = "I'm Jeremy, a property agent working with interested buyers. I prefer to keep our conversation focused on the property.";
+    // Base deflection response - graceful and professional
+    const baseResponse = "I'm Jeremy, a buyer's agent working with interested clients.";
+    
+    // If both objectives are met, don't ask about co-broking - just acknowledge
+    if (bothObjectivesMet) {
+      return `${baseResponse} Everything is confirmed. I'll coordinate with my buyer and get back to you soon.`;
+    }
     
     // Add appropriate next step based on conversation state
     if (coBrokingConfirmed && !timeslotsReceived) {
@@ -644,7 +713,7 @@ export function generatePersonalQuestionResponse(message: string, context: Conve
     } else if (!coBrokingConfirmed) {
       return `${baseResponse} Are you open to co-broking on this property?`;
     } else {
-      return `${baseResponse} Looking forward to working together.`;
+      return `${baseResponse} I look forward to working together.`;
     }
   }
   
@@ -652,22 +721,22 @@ export function generatePersonalQuestionResponse(message: string, context: Conve
   if (lowerMessage.includes('who are you') ||
       lowerMessage.includes('what are you') ||
       lowerMessage.includes('your name')) {
-    return "I'm Jeremy, a property agent. I have a buyer interested in your property. Are you open to co-broking?";
+    return "I'm Jeremy, a buyer's agent. I have a buyer interested in your property. Are you open to co-broking?";
   }
   
   // Handle simple greetings
   if (lowerMessage === 'hello' || lowerMessage === 'hi' || lowerMessage === 'hey') {
-    return "Hello! I'm Jeremy, a property agent. I have a buyer interested in your property. Are you open to co-broking?";
+    return "Hello. I'm Jeremy, a buyer's agent. I have a buyer interested in your property. Are you open to co-broking?";
   }
   
   // Handle acknowledgments
   if (lowerMessage === 'thanks' || lowerMessage === 'thank you' || 
       lowerMessage === 'ok' || lowerMessage === 'okay') {
-    return "You're welcome! Are you open to co-broking on this property?";
+    return "You're welcome. Are you open to co-broking on this property?";
   }
   
   // Default response for other personal questions
-  return "I'm Jeremy, a property agent with an interested buyer. Are you open to co-broking on this property?";
+  return "I'm Jeremy, a buyer's agent with an interested buyer. Are you open to co-broking on this property?";
 }
 
 /**
@@ -718,7 +787,9 @@ function isSimpleAcknowledgment(message: string): boolean {
          lowerMessage === 'understood' ||
          lowerMessage === 'sure' ||
          lowerMessage === 'alright' ||
-         lowerMessage === 'good';
+         lowerMessage === 'good' ||
+         lowerMessage === 'testing' ||
+         lowerMessage === 'test';
 }
 
 /**
@@ -765,18 +836,104 @@ async function generateNaturalResponse(
   console.log('Final condition (bothObjectivesMet && (!isDirectQuestion || isAcknowledgment)):', bothObjectivesMet && (!isDirectQuestion || isAcknowledgment));
   console.log('🚨🚨🚨 END CRITICAL DEBUG 🚨🚨🚨');
   
-  // If both objectives are met AND (it's not a direct question OR it's a simple acknowledgment), send final thank you message
-  if (bothObjectivesMet && (!isDirectQuestion || isAcknowledgment)) {
-    console.log('🎯 Sending completion message because bothObjectivesMet=true and (!isDirectQuestion || isAcknowledgment)=true');
-    return generateCompletionMessage(context);
+  // If both objectives are met, handle responses very carefully
+  if (bothObjectivesMet) {
+    // If it's a simple acknowledgment (ok, thanks, etc.), NEVER respond - conversation is complete
+    if (isAcknowledgment) {
+      console.log('✅ Both objectives met + simple acknowledgment - NOT responding');
+      return '';
+    }
+    
+    // Check if we've already sent a completion message recently
+    // Look at the LAST user message (most recent one we sent)
+    const lastUserMessage = context.conversationHistory
+      .filter(msg => msg.role === 'user')
+      .slice(-1)[0];
+    
+    const hasRecentCompletion = lastUserMessage && (() => {
+      const msgLower = lastUserMessage.message.toLowerCase();
+      return msgLower.includes('coordinate with my buyer') ||
+             msgLower.includes('get back to you') ||
+             msgLower.includes('confirming co-broking') ||
+             msgLower.includes('viewing times') ||
+             msgLower.includes('thank you for confirming');
+    })();
+    
+    if (hasRecentCompletion) {
+      console.log('✅ Both objectives met + completion already sent in last message - NOT responding to:', context.agentMessage);
+      return '';
+    }
+    
+    // If it's a direct question that needs an answer, respond briefly
+    if (isDirectQuestion) {
+      console.log('✅ Both objectives met + direct question - responding briefly');
+      const lowerMessage = context.agentMessage.toLowerCase().trim();
+      
+      // For greetings when objectives are met, just acknowledge briefly
+      if (lowerMessage === 'hello' || lowerMessage === 'hi' || lowerMessage === 'hey') {
+        return "Hi. Everything is confirmed. I'll coordinate with my buyer and get back to you soon.";
+      }
+      
+      // For bot questions when objectives are met, respond naturally without asking about co-broking
+      if (lowerMessage.includes('are you a bot') || lowerMessage.includes('are you ai')) {
+        return "I'm Jeremy, a buyer's agent. Everything is confirmed for the viewing. I'll coordinate with my buyer and get back to you soon.";
+      }
+      
+      // For other direct questions, let AI generate a brief response
+      // (will continue to AI generation below, but with special handling)
+    } else {
+      // Not a question, not an acknowledgment - don't respond if completion already sent
+      const completionMessage = generateCompletionMessage(context);
+      if (!completionMessage) {
+        console.log('✅ Both objectives met + completion already sent - NOT responding');
+        return '';
+      }
+      // If we haven't sent completion yet, send it
+      console.log('🎯 Sending completion message because both objectives are met');
+      return completionMessage;
+    }
+  }
+  
+  // IMPORTANT: If we reach here and both objectives are met, we should NOT continue to AI generation
+  // This is a safety check to prevent generating responses when objectives are already met
+  if (bothObjectivesMet) {
+    // Double-check: if it's an acknowledgment, definitely don't respond
+    if (isAcknowledgment) {
+      console.log('🛑 SAFETY CHECK: Both objectives met + acknowledgment - stopping before AI generation');
+      return '';
+    }
+    
+    // Also check if we just sent a completion message
+    const lastUserMessage = context.conversationHistory
+      .filter(msg => msg.role === 'user')
+      .slice(-1)[0];
+    
+    if (lastUserMessage) {
+      const msgLower = lastUserMessage.message.toLowerCase();
+      if (msgLower.includes('coordinate with my buyer') ||
+          msgLower.includes('get back to you') ||
+          msgLower.includes('confirming co-broking') ||
+          msgLower.includes('viewing times') ||
+          msgLower.includes('thank you for confirming')) {
+        console.log('🛑 SAFETY CHECK: Both objectives met + completion just sent - stopping before AI generation');
+        return '';
+      }
+    }
   }
     
     // Use AI generation for ALL responses after the initial message
     // Only the initial message should be a template
 
     // For follow-up messages, use fully natural AI generation
+    // Format conversation history as proper message array for better context understanding
+    const conversationMessages = context.conversationHistory.map(msg => ({
+      role: msg.role === 'user' ? 'assistant' : 'user', // Flip roles: our messages are 'assistant', theirs are 'user'
+      content: msg.message
+    }));
+    
+    // Create natural conversation text from history
     const conversationText = context.conversationHistory
-      .map(msg => `${msg.role === 'user' ? 'Buyer Agent' : 'Property Agent'}: ${msg.message}`)
+      .map(msg => `${msg.role === 'user' ? 'Jeremy (Buyer Agent)' : 'Property Agent'}: ${msg.message}`)
       .join('\n');
 
     // Get the active prompt from database - this should always exist now
@@ -797,35 +954,6 @@ async function generateNaturalResponse(
       minute: '2-digit'
     });
     
-    // Create conversation pattern context for the AI
-    const patternContext = `
-CONVERSATION PATTERNS ANALYSIS:
-- Has asked about co-broking: ${patterns.hasAskedAboutCobroking ? 'Yes' : 'No'}
-- Has asked about timeslots: ${patterns.hasAskedAboutTimeslots ? 'Yes' : 'No'}
-- Last co-broking response: ${patterns.lastCobrokingResponse || 'None'}
-- Last timeslot response: ${patterns.lastTimeslotResponse || 'None'}
-- Recent question count: ${patterns.recentQuestionCount}
-- Co-broking confirmed: ${coBrokingConfirmed ? 'Yes' : 'No'}
-- Timeslots received: ${timeslotsReceived ? 'Yes' : 'No'}
-
-RESPONSE STRATEGY:
-${coBrokingConfirmed && !timeslotsReceived
-  ? '- PRIORITY: Co-broking confirmed! Now ask for viewing availability this week. Be natural and appreciative.'
-  : patterns.hasAskedAboutCobroking && patterns.lastCobrokingResponse === 'negative'
-  ? '- Co-broking declined, conversation should end gracefully'
-  : !patterns.hasAskedAboutCobroking && coBrokingAnalysis.status === 'unknown'
-  ? '- Priority: Ask about co-broking willingness first'
-  : coBrokingAnalysis.status === 'needs_discussion'
-  ? '- Co-broking needs discussion, ask about availability while showing willingness to discuss terms'
-  : '- Respond naturally to their message and assess next steps'
-}
-${patterns.recentQuestionCount > 2 
-  ? '- IMPORTANT: Avoid asking more questions - be conversational and responsive instead'
-  : coBrokingConfirmed && !timeslotsReceived
-  ? '- CRITICAL: Ask for viewing availability now - this is the natural next step'
-  : '- Can ask strategic questions if needed'
-}`;
-    
     // Replace template variables in the unified prompt
     const responsePrompt = activePrompt
       .replace('{currentDateTime}', currentDateTime)
@@ -836,62 +964,188 @@ ${patterns.recentQuestionCount > 2
       .replace('{conversationHistory}', conversationText)
       .replace('{agentMessage}', context.agentMessage);
 
-    // Add pattern context to the prompt
-    const enhancedPrompt = responsePrompt + '\n\n' + patternContext;
+    // Add minimal context hints (not rigid rules)
+    const naturalContext = `
+CURRENT SITUATION:
+- Co-broking status: ${coBrokingAnalysis.status}
+- Timeslots: ${timeslotsReceived ? 'Already provided' : 'Not yet provided'}
+- Both objectives met: ${bothObjectivesMet ? 'YES - conversation is complete' : 'No'}
+- Conversation flow: ${conversationText.split('\n').length} messages exchanged
+
+CRITICAL: ${bothObjectivesMet 
+  ? 'BOTH OBJECTIVES ARE ALREADY MET. The conversation is COMPLETE. If they send "Ok", "Thanks", or any simple acknowledgment, do NOT respond at all. Only respond if they ask a direct question that needs an answer, and keep it to 1 sentence maximum. Do NOT ask about co-broking or timeslots again.'
+  : 'OBJECTIVES NOT YET MET. Continue working toward the objectives naturally. If they send "Ok", "Sure", or similar acknowledgment, treat it as engagement and respond to continue the conversation. Ask about co-broking or timeslots as appropriate.'}
+
+NATURAL CONVERSATION GUIDANCE:
+- Read the full conversation above to understand what's been discussed
+- Respond naturally to what the Property Agent just said: "${context.agentMessage}"
+- Match their tone - if they're casual, be casual; if formal, be formal
+- Don't repeat questions that were already asked
+- Build on the conversation naturally, don't restart topics
+- ${bothObjectivesMet 
+  ? 'DO NOT respond to "Ok" or simple acknowledgments. Only respond to direct questions, and keep it to 1 sentence.' 
+  : 'If they send "Ok" or similar acknowledgment, respond to continue the conversation and work toward objectives.'}`;
+
+    const enhancedPrompt = responsePrompt + '\n\n' + naturalContext;
 
     const client = getGroqClient();
-    const response = await client.chat.completions.create({
+    
+    // Build request with natural conversation parameters
+    const requestParams: any = {
       messages: [
         {
-          role: 'user',
+          role: 'system',
           content: enhancedPrompt,
         },
       ],
       model: AI_CONFIG.MODEL,
       temperature: AI_CONFIG.TEMPERATURE,
       max_tokens: AI_CONFIG.MAX_TOKENS.RESPONSE_GENERATION,
-    });
+      // Use JSON mode for structured outputs (best practice from OpenAI/Anthropic)
+      response_format: { type: "json_object" },
+      // Add stop sequences to prevent unwanted continuation
+      stop: bothObjectivesMet ? ['"', "'", 'Thank you', 'Thanks'] : undefined,
+    };
+    
+    // Add penalty parameters if available (Groq may support these)
+    if (AI_CONFIG.FREQUENCY_PENALTY !== undefined) {
+      requestParams.frequency_penalty = AI_CONFIG.FREQUENCY_PENALTY;
+    }
+    if (AI_CONFIG.PRESENCE_PENALTY !== undefined) {
+      requestParams.presence_penalty = AI_CONFIG.PRESENCE_PENALTY;
+    }
+    
+    const response = await client.chat.completions.create(requestParams);
+
+    // Check finish_reason to understand why generation stopped (best practice)
+    const finishReason = response.choices[0]?.finish_reason;
+    console.log('📊 AI finish_reason:', finishReason);
+    
+    // If stopped due to length or other issues, log it
+    if (finishReason && finishReason !== 'stop') {
+      console.warn('⚠️ AI stopped for reason:', finishReason);
+    }
 
     const aiResponse = response.choices[0]?.message?.content?.trim();
     
-    // Parse JSON response from AI (the prompt returns JSON format)
+    // Parse JSON response from AI (using structured output best practice)
     try {
       const parsedResponse = JSON.parse(aiResponse || '{}');
+      
+      // Best practice: Check explicit stopping conditions first
+      if (parsedResponse.shouldReply === false) {
+        console.log('✅ AI explicitly set shouldReply to false - not responding');
+        return '';
+      }
+      
+      // Best practice: Validate response structure
+      if (!parsedResponse.replyMessage && parsedResponse.shouldReply !== true) {
+        console.log('✅ AI response indicates no reply needed - not responding');
+        return '';
+      }
+      
       let replyMessage = parsedResponse.replyMessage;
       
-      // Clean up any unwanted quotation marks from the reply message
+      // If replyMessage is null, empty, or "null" string and shouldReply is false, don't respond
+      if ((!replyMessage || replyMessage.trim() === '' || replyMessage === 'null' || replyMessage === null) && parsedResponse.shouldReply === false) {
+        console.log('✅ AI set shouldReply to false and replyMessage is empty - not responding');
+        return '';
+      }
+      
+      // Best practice: If both objectives met and message is empty/null, don't respond
+      if (bothObjectivesMet && (!replyMessage || replyMessage.trim() === '' || replyMessage === 'null' || replyMessage === null)) {
+        console.log('✅ Both objectives met and AI returned empty message - not responding');
+        return '';
+      }
+      
+      // Aggressively clean up any unwanted quotation marks from the reply message
       if (replyMessage && typeof replyMessage === 'string') {
-        // Remove surrounding quotes if they exist (both single and double)
-        replyMessage = replyMessage.replace(/^["']|["']$/g, '');
-        // Remove any escaped quotes that might appear in the middle
+        // First, handle JSON-encoded strings (the AI might return the message as a JSON string)
+        // Try to parse it as JSON if it looks like a JSON string
+        if (replyMessage.trim().startsWith('"') && replyMessage.trim().endsWith('"')) {
+          try {
+            const parsed = JSON.parse(replyMessage);
+            if (typeof parsed === 'string') {
+              replyMessage = parsed;
+            }
+          } catch (e) {
+            // Not valid JSON, continue with normal cleaning
+          }
+        }
+        
+        // Remove all escaped quotes
         replyMessage = replyMessage.replace(/\\"/g, '"').replace(/\\'/g, "'");
-        // Remove any double quotes that might wrap the entire message
-        replyMessage = replyMessage.replace(/^"(.*)"$/g, '$1');
-        // Remove any single quotes that might wrap the entire message
-        replyMessage = replyMessage.replace(/^'(.*)'$/g, '$1');
+        
+        // Remove quotes at the very start and end (handle multiple layers)
+        replyMessage = replyMessage.trim();
+        
+        // Remove leading quotes (single or double, multiple layers)
+        let previousLength = 0;
+        while (replyMessage.length !== previousLength && 
+               ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
+                (replyMessage.startsWith("'") && replyMessage.endsWith("'")))) {
+          previousLength = replyMessage.length;
+          replyMessage = replyMessage.slice(1, -1).trim();
+        }
+        
+        // Remove any remaining quotes at start/end with regex (more aggressive)
+        replyMessage = replyMessage.replace(/^["']+/g, '').replace(/["']+$/g, '');
+        
+        // Remove quotes that wrap the entire message using regex (multiline support)
+        const quotePattern = /^["']([\s\S]+)["']$/;
+        const match = replyMessage.match(quotePattern);
+        if (match) {
+          replyMessage = match[1];
+        }
+        
+        // Final trim
+        replyMessage = replyMessage.trim();
+        
+        // If still wrapped in quotes after all cleaning, force remove them
+        if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
+            (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
+          replyMessage = replyMessage.slice(1, -1).trim();
+        }
       }
       
       // Return the cleaned message content
-      return replyMessage || "Thank you for your message. I'd be happy to discuss this further with you.";
+      // If replyMessage is empty/null, return empty string (don't use fallback)
+      // The calling code should handle empty responses appropriately
+      return replyMessage || '';
     } catch (parseError) {
       console.warn('⚠️ Failed to parse AI JSON response, using raw response:', parseError);
       console.warn('Raw AI response:', aiResponse);
       
       // If JSON parsing fails, use the raw response but clean up any surrounding quotes
-      let cleanResponse = aiResponse || "Thank you for your message. I'd be happy to discuss this further with you.";
+      // Don't use fallback message - return empty if no valid response
+      let cleanResponse = aiResponse || '';
       
-      // Comprehensive quote cleaning for raw responses
+      // Aggressively clean up quotes from raw responses
       if (cleanResponse && typeof cleanResponse === 'string') {
-        // Remove surrounding quotes (both single and double)
-        cleanResponse = cleanResponse.replace(/^["']|["']$/g, '');
-        // Remove any escaped quotes
+        // Remove all escaped quotes first
         cleanResponse = cleanResponse.replace(/\\"/g, '"').replace(/\\'/g, "'");
-        // Remove any double quotes that might wrap the entire message
-        cleanResponse = cleanResponse.replace(/^"(.*)"$/g, '$1');
-        // Remove any single quotes that might wrap the entire message
-        cleanResponse = cleanResponse.replace(/^'(.*)'$/g, '$1');
-        // Remove any quotes at the beginning and end that might have been missed
-        cleanResponse = cleanResponse.trim().replace(/^["']+|["']+$/g, '');
+        
+        // Remove quotes at the very start and end (handle multiple quotes)
+        cleanResponse = cleanResponse.trim();
+        
+        // Remove leading quotes (single or double, multiple)
+        while ((cleanResponse.startsWith('"') || cleanResponse.startsWith("'")) && 
+               (cleanResponse.endsWith('"') || cleanResponse.endsWith("'"))) {
+          cleanResponse = cleanResponse.slice(1, -1).trim();
+        }
+        
+        // Remove any remaining quotes at start/end with regex
+        cleanResponse = cleanResponse.replace(/^["']+/g, '').replace(/["']+$/g, '');
+        
+        // Remove quotes that wrap the entire message
+        const quotePattern = /^["'](.+)["']$/;
+        const match = cleanResponse.match(quotePattern);
+        if (match) {
+          cleanResponse = match[1];
+        }
+        
+        // Final trim
+        cleanResponse = cleanResponse.trim();
       }
       
       return cleanResponse;
@@ -900,7 +1154,8 @@ ${patterns.recentQuestionCount > 2
     console.error('❌ Error generating natural response:', error);
     
     // Generic fallback when AI fails - avoid hardcoded templates
-    return "Thank you for your message. I'd be happy to discuss this further with you.";
+    // Don't return a generic fallback - let the calling code handle empty responses
+    return '';
   }
 }
 
@@ -992,16 +1247,34 @@ function analyzeConversationPatterns(context: ConversationContext): {
       }
     }
     
-    // Check if Jeremy has asked about timeslots/viewing times
-    if (msg.role === 'user' && (
+    // Check if Jeremy has asked about timeslots/viewing times OR if agent provided timeslots
+    // IMPORTANT: If agent provides timeslots, it implies co-broking agreement
+    if ((msg.role === 'user' && (
       msgLower.includes('time') || 
       msgLower.includes('when') ||
       msgLower.includes('viewing') ||
       msgLower.includes('meet') ||
       msgLower.includes('available') ||
       msgLower.includes('schedule')
-    )) {
+    )) || (msg.role === 'agent' && (
+      // Agent providing timeslots (like "Mon to Wed 5pm to 9pm") implies co-broking
+      (msgLower.match(/(mon|tue|wed|thu|fri|sat|sun)/i) && msgLower.match(/\d+\s*(am|pm|:\d+)/i)) ||
+      msgLower.includes('available') && (msgLower.includes('pm') || msgLower.includes('am'))
+    ))) {
       hasAskedAboutTimeslots = true;
+      
+      // If agent provided timeslots directly (not in response to a question), it implies co-broking
+      if (msg.role === 'agent') {
+        if (msgLower.match(/\d+[:\.]?\d*\s*(am|pm|morning|afternoon|evening)/i) ||
+            msgLower.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i) ||
+            (msgLower.match(/(mon|tue|wed|thu|fri|sat|sun)/i) && msgLower.match(/\d+\s*(am|pm|:\d+)/i))) {
+          lastTimeslotResponse = 'provided';
+          // IMPORTANT: Providing timeslots implies co-broking agreement
+          if (!lastCobrokingResponse || lastCobrokingResponse === 'neutral') {
+            lastCobrokingResponse = 'positive';
+          }
+        }
+      }
       
       // Check the agent's response to timeslot question
       if (i + 1 < recentMessages.length) {
@@ -1012,6 +1285,10 @@ function analyzeConversationPatterns(context: ConversationContext): {
           if (responseLower.match(/\d+[:\.]?\d*\s*(am|pm|morning|afternoon|evening)/i) ||
               responseLower.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)) {
             lastTimeslotResponse = 'provided';
+            // IMPORTANT: Providing timeslots implies co-broking agreement
+            if (!lastCobrokingResponse || lastCobrokingResponse === 'neutral') {
+              lastCobrokingResponse = 'positive';
+            }
           } else if (responseLower.includes('busy') || responseLower.includes('can\'t') || responseLower.includes('not available')) {
             lastTimeslotResponse = 'declined';
           } else {

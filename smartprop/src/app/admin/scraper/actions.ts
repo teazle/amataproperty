@@ -139,6 +139,17 @@ export async function startScrapeJob(config: ScraperConfig) {
 }
 
 /**
+ * Check if a process is actually running
+ */
+async function isProcessRunning(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec(`kill -0 ${pid}`, (error) => {
+      resolve(!error); // Process exists if no error
+    });
+  });
+}
+
+/**
  * Get current active scraper job status
  */
 export async function getActiveJob(): Promise<ScraperJobStatus | null> {
@@ -544,6 +555,515 @@ export async function deleteScraperJob(jobId: string) {
 
   } catch (error) {
     console.error('Error deleting scraper job:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * Force reset stuck jobs - marks all queued/running jobs as failed and removes lock files
+ * Use this when jobs are stuck and can't be stopped normally
+ */
+export async function forceResetStuckJobs() {
+  try {
+    // Find all stuck jobs
+    const { data: stuckJobs, error: queryError } = await supabase
+      .from('scraper_jobs')
+      .select('id, platform, pid')
+      .in('status', ['queued', 'running']);
+
+    if (queryError) {
+      console.error('Error querying stuck jobs:', queryError);
+    }
+
+    const jobsToReset = stuckJobs || [];
+    const pidsToKill: Array<{ pid: number; jobId: string }> = [];
+
+    // Collect PIDs and verify processes are actually running
+    for (const job of jobsToReset) {
+      let pid: number | null | undefined = job.pid || null;
+      
+      // Try to get PID from lock file if not in database
+      if (!pid) {
+        try {
+          const lockFile = path.join(process.cwd(), 'storage', 
+            job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+          
+          if (fs.existsSync(lockFile)) {
+            const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+            pid = lockData.pid || null;
+          }
+        } catch (error) {
+          console.log(`Could not read lock file for job ${job.id}:`, error);
+        }
+      }
+
+      if (pid && typeof pid === 'number' && pid > 0) {
+        // Verify process is actually running before adding to kill list
+        const isRunning = await isProcessRunning(pid);
+        if (isRunning) {
+          pidsToKill.push({ pid, jobId: job.id });
+        } else {
+          console.log(`Process ${pid} for job ${job.id} is not running, will just clean up database and lock file`);
+        }
+      }
+    }
+
+    // Kill all processes that are actually running
+    const killPromises = pidsToKill.map(({ pid, jobId }) => {
+      return new Promise<void>((resolve) => {
+        // Try SIGTERM first
+        exec(`kill -TERM ${pid}`, async (error) => {
+          if (error) {
+            // Try SIGKILL if TERM fails
+            exec(`kill -KILL ${pid}`, async () => {
+              // Wait a moment and verify it's gone
+              await new Promise(resolve => setTimeout(resolve, 500));
+              const stillRunning = await isProcessRunning(pid);
+              if (!stillRunning) {
+                console.log(`Successfully killed process ${pid} for job ${jobId}`);
+              }
+              resolve();
+            });
+          } else {
+            // Wait a moment and check if still running
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const stillRunning = await isProcessRunning(pid);
+            if (stillRunning) {
+              // Try SIGKILL
+              exec(`kill -KILL ${pid}`, () => {
+                console.log(`Sent SIGKILL to process ${pid} for job ${jobId}`);
+                resolve();
+              });
+            } else {
+              console.log(`Process ${pid} for job ${jobId} terminated successfully`);
+              resolve();
+            }
+          }
+        });
+      });
+    });
+
+    // Wait for all kills to complete
+    await Promise.all(killPromises);
+
+    // Mark all stuck jobs as failed - update by specific job IDs for reliability
+    if (jobsToReset.length > 0) {
+      const jobIds = jobsToReset.map(job => job.id);
+      
+      // Update each job individually to ensure they all get updated
+      let updateCount = 0;
+      for (const jobId of jobIds) {
+        // Try update without pid first (pid column may not exist)
+        const updateData: any = {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: 'Force reset by user - job was stuck'
+        };
+        
+        const { error: updateError } = await supabase
+          .from('scraper_jobs')
+          .update(updateData)
+          .eq('id', jobId);
+
+        if (updateError) {
+          console.error(`Error updating job ${jobId}:`, updateError);
+        } else {
+          updateCount++;
+        }
+      }
+
+      console.log(`Successfully marked ${updateCount}/${jobsToReset.length} job(s) as failed`);
+      
+      // Wait a moment for database to propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Verify the updates worked by checking the database multiple times
+      let verificationAttempts = 0;
+      const maxAttempts = 5;
+      
+      while (verificationAttempts < maxAttempts) {
+        const { data: verifyJobs } = await supabase
+          .from('scraper_jobs')
+          .select('id, status')
+          .in('id', jobIds);
+        
+        const stillActive = verifyJobs?.filter(j => j.status === 'queued' || j.status === 'running');
+        
+        if (!stillActive || stillActive.length === 0) {
+          // All jobs successfully updated
+          break;
+        }
+        
+        console.warn(`Attempt ${verificationAttempts + 1}: ${stillActive.length} job(s) still show as active, retrying...`);
+        
+        // Force update again for jobs that are still active
+        for (const job of stillActive) {
+          const retryUpdateData: any = {
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Force reset by user - job was stuck'
+          };
+          
+          await supabase
+            .from('scraper_jobs')
+            .update(retryUpdateData)
+            .eq('id', job.id);
+        }
+        
+        // Wait before next verification
+        await new Promise(resolve => setTimeout(resolve, 500));
+        verificationAttempts++;
+      }
+    }
+
+    // Remove all lock files
+    const pgLockFile = path.join(process.cwd(), 'storage', 'pg-scraper.lock');
+    const epLockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
+
+    try {
+      if (fs.existsSync(pgLockFile)) {
+        fs.unlinkSync(pgLockFile);
+        console.log('Removed PG lock file');
+      }
+    } catch (error) {
+      console.error('Error removing PG lock file:', error);
+    }
+
+    try {
+      if (fs.existsSync(epLockFile)) {
+        fs.unlinkSync(epLockFile);
+        console.log('Removed EP lock file');
+      }
+    } catch (error) {
+      console.error('Error removing EP lock file:', error);
+    }
+
+    try {
+      revalidatePath('/admin/scraper');
+    } catch (revalidateError) {
+      console.error('Error revalidating path:', revalidateError);
+    }
+
+    // Final verification - make sure no jobs are still active
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for final propagation
+    
+    const { data: finalCheck } = await supabase
+      .from('scraper_jobs')
+      .select('id, status')
+      .in('status', ['queued', 'running'])
+      .limit(10);
+
+    if (finalCheck && finalCheck.length > 0) {
+      console.warn(`⚠️  Still found ${finalCheck.length} active job(s) after reset. Force updating individually...`);
+      // Update each remaining job individually
+      for (const job of finalCheck) {
+        const finalUpdateData: any = {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: 'Force reset by user - job was stuck'
+        };
+        
+        await supabase
+          .from('scraper_jobs')
+          .update(finalUpdateData)
+          .eq('id', job.id);
+      }
+    }
+
+    // One final check to confirm all jobs are reset
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const { data: ultimateCheck } = await supabase
+      .from('scraper_jobs')
+      .select('id, status, platform, started_at')
+      .in('status', ['queued', 'running'])
+      .limit(10);
+
+    const finalActiveCount = ultimateCheck?.length || 0;
+    if (finalActiveCount > 0) {
+      console.error(`⚠️  CRITICAL: ${finalActiveCount} job(s) still active after all reset attempts.`);
+      console.error('Stuck jobs:', JSON.stringify(ultimateCheck, null, 2));
+      
+      // Try one more time with even more aggressive approach - direct SQL update
+      const stuckJobIds = ultimateCheck?.map(j => j.id) || [];
+      
+      // Try using RPC or direct update with explicit error handling
+      for (const stuckJob of ultimateCheck || []) {
+        try {
+          // Try updating with explicit where clause (without pid field)
+          const finalUpdateData: any = {
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Force reset by user - job was stuck (final attempt)'
+          };
+          
+          const { error: finalError, data: finalData } = await supabase
+            .from('scraper_jobs')
+            .update(finalUpdateData)
+            .eq('id', stuckJob.id)
+            .eq('status', stuckJob.status) // Only update if status hasn't changed
+            .select();
+          
+          if (finalError) {
+            console.error(`Failed to update job ${stuckJob.id}:`, finalError);
+          } else {
+            console.log(`Successfully updated job ${stuckJob.id} in final attempt`);
+          }
+        } catch (err) {
+          console.error(`Exception updating job ${stuckJob.id}:`, err);
+        }
+      }
+      
+      // One more verification after final attempt
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const { data: lastCheck } = await supabase
+        .from('scraper_jobs')
+        .select('id, status, platform')
+        .in('id', stuckJobIds);
+      
+      const stillStuck = lastCheck?.filter(j => j.status === 'queued' || j.status === 'running') || [];
+      
+      if (stillStuck.length > 0) {
+        const stuckJobDetails = stillStuck.map(j => ({
+          id: j.id,
+          platform: j.platform,
+          status: j.status
+        }));
+        
+        return {
+          success: false,
+          error: `${stillStuck.length} job(s) could not be reset after multiple attempts. Job IDs: ${stillStuck.map(j => j.id).join(', ')}. Try using the diagnostic function or check database manually.`,
+          jobsReset: jobsToReset.length - stillStuck.length,
+          stuckJobs: stuckJobDetails
+        };
+      }
+    }
+
+    return {
+      success: true,
+      message: `Reset ${jobsToReset.length} stuck job(s)`,
+      jobsReset: jobsToReset.length
+    };
+
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error force resetting stuck jobs:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg || 'Unknown error occurred'
+    };
+  }
+}
+
+/**
+ * Diagnose stuck jobs - returns detailed information about jobs that can't be reset
+ */
+export async function diagnoseStuckJobs() {
+  try {
+    // Get all active jobs
+    const { data: activeJobs, error: queryError } = await supabase
+      .from('scraper_jobs')
+      .select('id, platform, status, started_at, pid, error_message')
+      .in('status', ['queued', 'running'])
+      .order('started_at', { ascending: false });
+
+    if (queryError) {
+      return {
+        success: false,
+        error: `Error querying jobs: ${queryError.message}`,
+        stuckJobs: []
+      };
+    }
+
+    const stuckJobs = [];
+    
+    for (const job of activeJobs || []) {
+      let pid: number | null | undefined = job.pid || null;
+      
+      // Try to get PID from lock file
+      try {
+        const lockFile = path.join(process.cwd(), 'storage', 
+          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+        
+        if (fs.existsSync(lockFile)) {
+          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+          pid = lockData.pid || pid;
+        }
+      } catch (error) {
+        // Ignore lock file errors
+      }
+
+      let isProcessRunningValue = false;
+      if (pid && typeof pid === 'number' && pid > 0) {
+        isProcessRunningValue = await isProcessRunning(pid);
+      }
+
+      stuckJobs.push({
+        id: job.id,
+        platform: job.platform,
+        status: job.status,
+        startedAt: job.started_at,
+        pid: pid,
+        isProcessRunning: isProcessRunningValue,
+        hasLockFile: fs.existsSync(path.join(process.cwd(), 'storage', 
+          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock')),
+        errorMessage: job.error_message,
+        sqlFix: `UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed - job was stuck' WHERE id = '${job.id}';`
+      });
+    }
+
+    return {
+      success: true,
+      stuckJobs: stuckJobs,
+      count: stuckJobs.length
+    };
+
+  } catch (error) {
+    console.error('Error diagnosing stuck jobs:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      stuckJobs: []
+    };
+  }
+}
+
+/**
+ * Force fix a specific stuck job by ID - uses multiple approaches
+ */
+export async function forceFixStuckJob(jobId: string) {
+  try {
+    // First, get the job details
+    const { data: job, error: jobError } = await supabase
+      .from('scraper_jobs')
+      .select('id, platform, status, pid')
+      .eq('id', jobId)
+      .single();
+
+    if (jobError || !job) {
+      return {
+        success: false,
+        error: `Job ${jobId} not found: ${jobError?.message || 'Unknown error'}`
+      };
+    }
+
+    // Kill process if PID exists and process is running
+    let pid: number | null | undefined = job.pid || null;
+    
+    if (!pid) {
+      try {
+        const lockFile = path.join(process.cwd(), 'storage', 
+          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+        
+        if (fs.existsSync(lockFile)) {
+          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+          pid = lockData.pid || null;
+        }
+      } catch (error) {
+        // Ignore
+      }
+    }
+
+    if (pid && typeof pid === 'number' && pid > 0) {
+      const processRunning = await isProcessRunning(pid);
+      if (processRunning) {
+        try {
+          exec(`kill -TERM ${pid}`, async (error) => {
+            if (error) {
+              exec(`kill -KILL ${pid}`, () => {});
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const stillRunning = await isProcessRunning(pid);
+              if (stillRunning) {
+                exec(`kill -KILL ${pid}`, () => {});
+              }
+            }
+          });
+        } catch (killError) {
+          console.error(`Error killing process ${pid}:`, killError);
+        }
+      }
+    }
+
+    // Remove lock file
+    try {
+      const lockFile = path.join(process.cwd(), 'storage', 
+        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile);
+      }
+    } catch (lockError) {
+      console.error('Error removing lock file:', lockError);
+    }
+
+    // Try multiple update approaches
+    const updateData: any = {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: 'Manually fixed - job was stuck'
+    };
+
+    // Only try to set pid if column might exist (will fail silently if it doesn't)
+    try {
+      updateData.pid = null;
+    } catch (e) {
+      // Ignore if pid column doesn't exist
+    }
+
+    // Approach 1: Standard update
+    let { error: updateError } = await supabase
+      .from('scraper_jobs')
+      .update(updateData)
+      .eq('id', jobId);
+
+    if (updateError) {
+      console.error('Standard update failed:', updateError);
+      
+      // Approach 2: Update without pid field
+      const { pid: _, ...updateWithoutPid } = updateData;
+      const { error: updateError2 } = await supabase
+        .from('scraper_jobs')
+        .update(updateWithoutPid)
+        .eq('id', jobId);
+
+      if (updateError2) {
+        console.error('Update without pid also failed:', updateError2);
+        return {
+          success: false,
+          error: `Could not update job. Database error: ${updateError2.message}. You may need to run SQL manually: UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed' WHERE id = '${jobId}';`,
+          sqlFix: `UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed - job was stuck' WHERE id = '${jobId}';`
+        };
+      }
+    }
+
+    // Verify update worked
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const { data: verifyJob } = await supabase
+      .from('scraper_jobs')
+      .select('id, status')
+      .eq('id', jobId)
+      .single();
+
+    if (verifyJob && (verifyJob.status === 'queued' || verifyJob.status === 'running')) {
+      return {
+        success: false,
+        error: `Job status still shows as '${verifyJob.status}' after update. This may indicate a database constraint issue. Please run SQL manually: UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed' WHERE id = '${jobId}';`,
+        sqlFix: `UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed - job was stuck' WHERE id = '${jobId}';`
+      };
+    }
+
+    revalidatePath('/admin/scraper');
+
+    return {
+      success: true,
+      message: `Successfully fixed stuck job ${jobId}`
+    };
+
+  } catch (error) {
+    console.error('Error force fixing stuck job:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error)

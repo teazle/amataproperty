@@ -7,11 +7,13 @@
 export const AI_CONFIG = {
   // Groq API Configuration
   MODEL: 'llama-3.1-8b-instant',
-  TEMPERATURE: 0.7,
+  TEMPERATURE: 0.8, // Increased for more natural, varied responses
+  FREQUENCY_PENALTY: 0.5, // Reduces repetition of phrases
+  PRESENCE_PENALTY: 0.3, // Encourages topic variation
   MAX_TOKENS: {
     CO_BROKING_ANALYSIS: 500,
     TIMESLOT_DETECTION: 300,
-    RESPONSE_GENERATION: 150,
+    RESPONSE_GENERATION: 200, // Increased for more natural responses
   },
   
   // Timeout and Retry Configuration

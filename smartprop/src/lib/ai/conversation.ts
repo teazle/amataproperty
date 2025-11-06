@@ -239,9 +239,12 @@ export async function analyzeConversationWithAdvancedContext(
     const analysis = await analyzeConversationWithAdvancedAI(advancedContext);
     
     // Convert back to legacy format
+    // If recommendedResponse is empty, don't reply
+    const shouldReply = analysis.shouldContinue && analysis.recommendedResponse && analysis.recommendedResponse.trim().length > 0;
+    
     return {
-      shouldReply: analysis.shouldContinue,
-      replyMessage: analysis.recommendedResponse || 'Thanks for the update!',
+      shouldReply,
+      replyMessage: analysis.recommendedResponse || '',
       newPhase: analysis.coBrokingAnalysis.conversationPhase,
       reason: `Advanced AI analysis: ${analysis.coBrokingAnalysis.reasoning}`,
       deflectionDetected: analysis.conversationTone === 'negative',

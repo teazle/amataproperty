@@ -4,8 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 
-// Load environment variables - try .env first, then .env.local
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Load environment variables from .env.local only
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -13,7 +12,7 @@ const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE;
 
 if (!supabaseUrl || !supabaseServiceRole) {
   console.error('Error: Missing required environment variables');
-  console.error('Please set NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE in .env or .env.local');
+  console.error('Please set NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE in .env.local');
   process.exit(1);
 }
 

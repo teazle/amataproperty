@@ -55,7 +55,7 @@ pre_deployment_checks() {
     
     # Check if environment file exists
     if [ ! -f "$ENV_FILE" ]; then
-        error "Environment file $ENV_FILE not found. Please copy .env.production to .env.local and configure it."
+        error "Environment file $ENV_FILE not found. Please create .env.local and configure it."
         exit 1
     fi
     success "Environment file found"

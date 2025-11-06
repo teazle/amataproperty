@@ -853,7 +853,13 @@ async function scrapePropertyGuruByDistrict() {
               }
             }
             
-            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            // Navigate to the page
+            await page.goto(searchUrl, { 
+              waitUntil: 'domcontentloaded', 
+              timeout: 60000,
+              // Add referer to make it look more natural
+              referer: 'https://www.propertyguru.com.sg/',
+            });
             await humanPause(3000, 5000); // Normal wait
             
             // Check for Cloudflare using EdgeProp's approach: check for actual errors AND content

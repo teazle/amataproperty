@@ -1015,6 +1015,15 @@ NATURAL CONVERSATION GUIDANCE:
       requestParams.presence_penalty = AI_CONFIG.PRESENCE_PENALTY;
     }
     
+    // Add explicit instruction to return plain strings (not JSON-encoded) in replyMessage
+    // This prevents the AI from returning {"replyMessage": "\"Hello\""} instead of {"replyMessage": "Hello"}
+    const jsonInstruction = `\n\nCRITICAL JSON FORMATTING: When returning JSON, the "replyMessage" field must be a plain string value, NOT a JSON-encoded string. 
+Example CORRECT: {"replyMessage": "Hello there"} 
+Example WRONG: {"replyMessage": "\\"Hello there\\""}
+Return the message text directly without extra quotes or JSON encoding.`;
+    
+    requestParams.messages[0].content = requestParams.messages[0].content + jsonInstruction;
+    
     const response = await client.chat.completions.create(requestParams);
 
     // Check finish_reason to understand why generation stopped (best practice)
@@ -1060,6 +1069,8 @@ NATURAL CONVERSATION GUIDANCE:
       
       // Aggressively clean up any unwanted quotation marks from the reply message
       if (replyMessage && typeof replyMessage === 'string') {
+        const originalMessage = replyMessage;
+        
         // First, handle JSON-encoded strings (the AI might return the message as a JSON string)
         // Try to parse it as JSON if it looks like a JSON string
         if (replyMessage.trim().startsWith('"') && replyMessage.trim().endsWith('"')) {
@@ -1067,25 +1078,37 @@ NATURAL CONVERSATION GUIDANCE:
             const parsed = JSON.parse(replyMessage);
             if (typeof parsed === 'string') {
               replyMessage = parsed;
+              console.log('✅ Stripped JSON quotes from replyMessage');
             }
           } catch (e) {
             // Not valid JSON, continue with normal cleaning
           }
         }
         
-        // Remove all escaped quotes
+        // Remove all escaped quotes (both double and single)
         replyMessage = replyMessage.replace(/\\"/g, '"').replace(/\\'/g, "'");
         
         // Remove quotes at the very start and end (handle multiple layers)
         replyMessage = replyMessage.trim();
         
-        // Remove leading quotes (single or double, multiple layers)
-        let previousLength = 0;
-        while (replyMessage.length !== previousLength && 
-               ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
-                (replyMessage.startsWith("'") && replyMessage.endsWith("'")))) {
-          previousLength = replyMessage.length;
-          replyMessage = replyMessage.slice(1, -1).trim();
+        // Remove leading/trailing quotes (single or double, multiple layers) - more aggressive loop
+        let iterations = 0;
+        const maxIterations = 10; // Prevent infinite loops
+        while (iterations < maxIterations) {
+          const before = replyMessage;
+          
+          // Remove outer quotes if they match
+          if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
+              (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
+            replyMessage = replyMessage.slice(1, -1).trim();
+          }
+          
+          // If no change, break
+          if (replyMessage === before) {
+            break;
+          }
+          
+          iterations++;
         }
         
         // Remove any remaining quotes at start/end with regex (more aggressive)
@@ -1101,10 +1124,18 @@ NATURAL CONVERSATION GUIDANCE:
         // Final trim
         replyMessage = replyMessage.trim();
         
-        // If still wrapped in quotes after all cleaning, force remove them
+        // If still wrapped in quotes after all cleaning, force remove them one more time
         if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
             (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
           replyMessage = replyMessage.slice(1, -1).trim();
+        }
+        
+        // Log if we actually cleaned something
+        if (originalMessage !== replyMessage) {
+          console.log('🧹 Cleaned quotes from replyMessage:', {
+            before: originalMessage.substring(0, 100),
+            after: replyMessage.substring(0, 100)
+          });
         }
       }
       

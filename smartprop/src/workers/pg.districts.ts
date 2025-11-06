@@ -547,6 +547,10 @@ async function scrapePropertyGuruByDistrict() {
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
       '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-site-isolation-trials',
     ]
   });
 
@@ -568,9 +572,33 @@ async function scrapePropertyGuruByDistrict() {
 
   const context = await browser.newContext(contextOptions);
 
+  // Comprehensive stealth script to match auth.pg.ts (works locally)
   await context.addInitScript(() => {
+    // Override the navigator.webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
+    });
+    
+    // Mock chrome object (Cloudflare checks for this)
+    (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
+      runtime: {},
+    };
+    
+    // Mock permissions (Cloudflare may check this)
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
+      (parameters as PermissionDescriptor & { name: string }).name === 'notifications' ?
+        Promise.resolve({ state: Notification.permission } as PermissionStatus) :
+        originalQuery(parameters)
+    );
+    
+    // Hide automation indicators
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-SG', 'en', 'en-US'],
     });
   });
 

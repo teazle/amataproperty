@@ -32,6 +32,9 @@ interface LiveProgressPanelProps {
 export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
   const handleStopScraper = async () => {
     setIsStopping(true);
@@ -76,6 +79,35 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
       setIsResetting(false);
     }
   };
+
+  const handleViewLogs = async () => {
+    if (showLogs) {
+      setShowLogs(false);
+      return;
+    }
+
+    setIsLoadingLogs(true);
+    setShowLogs(true);
+    
+    try {
+      const platform = job.platform || 'edgeprop';
+      const response = await fetch(`/api/scraper/logs?platform=${platform}&lines=200`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setLogs(data.lines || []);
+      } else {
+        toast.error(data.error || 'Failed to load logs');
+        setLogs([`Error: ${data.error || 'Failed to load logs'}`]);
+      }
+    } catch (error) {
+      toast.error('Failed to load logs');
+      console.error('Error loading logs:', error);
+      setLogs([`Error: ${error instanceof Error ? error.message : 'Unknown error'}`]);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
   const progress = job.listingsProcessed && job.totalPages 
     ? Math.round((job.listingsProcessed / (job.totalPages * 20)) * 100)
     : 0;
@@ -102,6 +134,14 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             Live Progress - {job.platform === 'propertyguru' ? 'PropertyGuru' : 'EdgeProp'}
           </CardTitle>
           <div className="flex gap-2">
+            <Button
+              onClick={handleViewLogs}
+              disabled={isLoadingLogs}
+              variant="outline"
+              size="sm"
+            >
+              {showLogs ? 'Hide Logs' : 'View Logs'}
+            </Button>
             <Button
               onClick={handleStopScraper}
               disabled={isStopping || isResetting}
@@ -184,6 +224,34 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             </p>
           )}
         </div>
+
+        {/* Logs Viewer */}
+        {showLogs && (
+          <div className="pt-4 border-t">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-medium text-gray-700">Console Logs</span>
+              <Button
+                onClick={handleViewLogs}
+                variant="ghost"
+                size="sm"
+                className="h-6 text-xs"
+              >
+                Refresh
+              </Button>
+            </div>
+            <div className="bg-gray-900 text-gray-100 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96">
+              {isLoadingLogs ? (
+                <div className="text-gray-400">Loading logs...</div>
+              ) : logs.length === 0 ? (
+                <div className="text-gray-400">No logs available</div>
+              ) : (
+                <pre className="whitespace-pre-wrap">
+                  {logs.join('\n')}
+                </pre>
+              )}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

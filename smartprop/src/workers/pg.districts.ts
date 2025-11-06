@@ -634,13 +634,24 @@ async function scrapePropertyGuruByDistrict() {
             const priceText = await listingPage.locator(priceSelector).textContent().catch(() => '');
             const price = priceText ? parsePrice(priceText) : undefined;
 
-            // Check for Cloudflare on listing page
-            const listingPageText = await listingPage.textContent('body').catch(() => null);
-            if (listingPageText && listingPageText.includes('Pardon Our Interruption')) {
-              console.log(`   🛡️  Cloudflare detected. Skipping...`);
+            // Check for Cloudflare on listing page - but verify if content actually loaded
+            const listingPageText = await listingPage.textContent('body').catch(() => null) || '';
+            const hasCloudflareText = listingPageText.includes('Pardon Our Interruption') || 
+                                      listingPageText.includes('Verify you are human') ||
+                                      listingPageText.includes('Enable JavaScript and cookies');
+            
+            // Check if we have actual property content (title, price, etc.)
+            const hasPropertyContent = title && title !== 'Untitled' && title.length > 10;
+            
+            if (hasCloudflareText && !hasPropertyContent) {
+              console.log(`   🛡️  Cloudflare detected on listing page. Skipping...`);
               overallStats.totalErrors++;
               await listingPage.close();
+              clearTimeout(listingTimeout);
               continue;
+            } else if (hasCloudflareText && hasPropertyContent) {
+              // Cloudflare warning but content loaded - continue
+              console.log(`   ⚠️  Cloudflare warning on listing but content available. Continuing...`);
             }
 
             // Extract agent name

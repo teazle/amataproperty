@@ -163,34 +163,33 @@ async function scrapeEdgePropFinal() {
     const authSuccess = await reAuthenticate();
     
     if (!authSuccess) {
-    console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
-    // Update lock file and database
-    jobStatus.status = 'failed';
-    jobStatus.statusMessage = 'Re-authentication failed';
-    jobStatus.completedAt = new Date().toISOString();
-    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-    
-    if (jobId) {
-      try {
-        const supabase = getSupabaseClient();
-        await supabase
-          .from('scraper_jobs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: 'Re-authentication failed'
-          })
-          .eq('id', jobId);
-      } catch (error) {
-        console.error('Failed to update database:', error);
+      console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
+      // Update lock file and database
+      jobStatus.status = 'failed';
+      jobStatus.statusMessage = 'Re-authentication failed';
+      jobStatus.completedAt = new Date().toISOString();
+      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+      
+      if (jobId) {
+        try {
+          const supabase = getSupabaseClient();
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Re-authentication failed'
+            })
+            .eq('id', jobId);
+        } catch (error) {
+          console.error('Failed to update database:', error);
+        }
       }
+      
+      process.exit(1);
     }
     
-    process.exit(1);
-  }
-  
-  // Verify auth state exists after re-auth (only if we re-authenticated)
-  if (shouldReAuth) {
+    // Verify auth state exists after re-auth (only if we re-authenticated)
     const updatedStateExists = fs.existsSync(stateFilePath);
     if (!updatedStateExists) {
       console.error('❌ Authentication state file not found after re-authentication!');

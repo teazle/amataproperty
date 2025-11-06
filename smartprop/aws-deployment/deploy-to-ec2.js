@@ -6,7 +6,7 @@
 
 import { spawn } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 
 const CONFIG = {
   // EC2 Configuration
@@ -17,7 +17,7 @@ const CONFIG = {
   
   // Application Configuration
   appName: 'smartprop',
-  domain: null, // No domain yet - will use EC2 public IP
+  domain: process.env.DOMAIN || null, // If not set, will use EC2 public IP
   
   // Repository
   repoUrl: 'https://github.com/teazle/amataproperty.git',
@@ -25,6 +25,22 @@ const CONFIG = {
   // Environment
   profile: 'new-profile'
 };
+
+// Helper: resolve path for files under aws-deployment whether invoked from repo root or smartprop/
+function resolveAwsPath(subpath) {
+  const direct = join(process.cwd(), 'aws-deployment', subpath);
+  if (existsSync(direct)) return direct;
+  return join(process.cwd(), 'smartprop', 'aws-deployment', subpath);
+}
+
+// Helper: resolve application root (directory containing Dockerfile)
+function resolveAppRoot() {
+  const cwdDocker = join(process.cwd(), 'Dockerfile');
+  if (existsSync(cwdDocker)) return process.cwd();
+  const nestedDocker = join(process.cwd(), 'smartprop', 'Dockerfile');
+  if (existsSync(nestedDocker)) return join(process.cwd(), 'smartprop');
+  throw new Error('Could not locate Dockerfile in current project. Run script from repo root or smartprop/.');
+}
 
 class EC2Deployer {
   constructor() {
@@ -36,9 +52,9 @@ class EC2Deployer {
     console.log(`[${new Date().toISOString()}] ${message}`);
   }
 
-  async runCommand(command, args = []) {
+  async runCommand(command, args = [], options = {}) {
     return new Promise((resolve, reject) => {
-      const proc = spawn(command, args, { stdio: 'pipe' });
+      const proc = spawn(command, args, { stdio: 'pipe', ...options });
       let stdout = '';
       let stderr = '';
 
@@ -85,8 +101,16 @@ class EC2Deployer {
           '--profile', CONFIG.profile,
           '--region', CONFIG.region
         ]);
-        await this.log('✅ Key pair already exists');
-        return true;
+        const pemPath = resolveAwsPath(`${CONFIG.keyPairName}.pem`);
+        if (existsSync(pemPath)) {
+          await this.log('✅ Key pair already exists');
+          return true;
+        } else {
+          // Local PEM missing; create a new key pair with unique name
+          const newName = `${CONFIG.keyPairName}-${Date.now()}`;
+          await this.log(`Local key file missing. Creating new key pair: ${newName}`);
+          CONFIG.keyPairName = newName;
+        }
       } catch {
         // Key pair doesn't exist, create it
       }
@@ -101,9 +125,10 @@ class EC2Deployer {
 
       const keyPair = JSON.parse(result);
       
-      // Save private key
-      writeFileSync(`${CONFIG.keyPairName}.pem`, keyPair.KeyMaterial);
-      await this.runCommand('chmod', ['400', `${CONFIG.keyPairName}.pem`]);
+      // Save private key in aws-deployment directory
+      const savePath = resolveAwsPath(`${CONFIG.keyPairName}.pem`);
+      writeFileSync(savePath, keyPair.KeyMaterial);
+      await this.runCommand('chmod', ['400', savePath]);
       
       await this.log('✅ Key pair created and saved');
       return true;
@@ -172,9 +197,116 @@ class EC2Deployer {
     }
   }
 
+  async findExistingInstance() {
+    try {
+      await this.log('Checking for existing EC2 instance with SmartProp tags...');
+
+      const result = await this.runCommand('aws', [
+        'ec2', 'describe-instances',
+        '--profile', CONFIG.profile,
+        '--region', CONFIG.region,
+        '--filters',
+        `Name=tag:Name,Values=${CONFIG.appName}-server`,
+        'Name=instance-type,Values=' + CONFIG.instanceType,
+        'Name=instance-state-name,Values=pending,running,stopping,stopped'
+      ]);
+
+      const data = JSON.parse(result);
+      const instances = (data.Reservations || [])
+        .flatMap(r => r.Instances || [])
+        .filter(i => !!i.InstanceId);
+
+      if (instances.length === 0) {
+        await this.log('No existing instance found. Will launch a new one.');
+        return null;
+      }
+
+      const running = instances.filter(i => i.State && i.State.Name === 'running');
+      const chosen = (running[0]) || instances.sort((a, b) => (new Date(b.LaunchTime) - new Date(a.LaunchTime)))[0];
+
+      this.instanceId = chosen.InstanceId;
+      this.instanceKeyName = chosen.KeyName || null;
+
+      const ipResult = await this.runCommand('aws', [
+        'ec2', 'describe-instances',
+        '--instance-ids', this.instanceId,
+        '--query', 'Reservations[0].Instances[0].PublicIpAddress',
+        '--output', 'text',
+        '--profile', CONFIG.profile,
+        '--region', CONFIG.region
+      ]);
+
+      this.publicIp = (ipResult || '').trim();
+      await this.log(`Found existing instance: ${this.instanceId} (state: ${chosen.State?.Name}, ip: ${this.publicIp || 'none'})`);
+
+      if (instances.length > 1) {
+        const others = instances.map(i => i.InstanceId).filter(id => id !== this.instanceId);
+        await this.log(`⚠️ Multiple instances detected (${instances.length}). Keeping ${this.instanceId}, others: ${others.join(', ')}`);
+      }
+
+      return this.instanceId;
+    } catch (error) {
+      await this.log(`Failed to check existing instances: ${error.message}`);
+      return null;
+    }
+  }
+
   async launchEC2Instance(securityGroupId) {
     try {
       await this.log('Launching EC2 instance...');
+
+      // Idempotency: reuse existing instance if present
+      if (await this.findExistingInstance()) {
+        // If local key file is missing or key pair mismatched, we cannot SSH; replace instance
+        const pemPath = resolveAwsPath(`${CONFIG.keyPairName}.pem`);
+        const hasLocalKey = existsSync(pemPath);
+        const keyMismatch = this.instanceKeyName && this.instanceKeyName !== CONFIG.keyPairName;
+        if (!hasLocalKey || keyMismatch) {
+          await this.log('Local key file missing; terminating existing instance to relaunch with a new key pair.');
+          await this.runCommand('aws', [
+            'ec2', 'terminate-instances',
+            '--instance-ids', this.instanceId,
+            '--profile', CONFIG.profile,
+            '--region', CONFIG.region
+          ]);
+          await this.runCommand('aws', [
+            'ec2', 'wait', 'instance-terminated',
+            '--instance-ids', this.instanceId,
+            '--profile', CONFIG.profile,
+            '--region', CONFIG.region
+          ]);
+          await this.log('Existing instance terminated. Proceeding to launch a new instance...');
+        } else {
+          if (this.publicIp) {
+            await this.log('Reusing existing instance; skipping launch.');
+            return this.instanceId;
+          }
+          await this.log('Existing instance found without public IP; ensuring it is running...');
+          await this.runCommand('aws', [
+            'ec2', 'start-instances',
+            '--instance-ids', this.instanceId,
+            '--profile', CONFIG.profile,
+            '--region', CONFIG.region
+          ]);
+          await this.runCommand('aws', [
+            'ec2', 'wait', 'instance-running',
+            '--instance-ids', this.instanceId,
+            '--profile', CONFIG.profile,
+            '--region', CONFIG.region
+          ]);
+          const describeResult = await this.runCommand('aws', [
+            'ec2', 'describe-instances',
+            '--instance-ids', this.instanceId,
+            '--query', 'Reservations[0].Instances[0].PublicIpAddress',
+            '--output', 'text',
+            '--profile', CONFIG.profile,
+            '--region', CONFIG.region
+          ]);
+          this.publicIp = describeResult.trim();
+          await this.log(`✅ Instance running at: ${this.publicIp}`);
+          return this.instanceId;
+        }
+      }
 
       // Get latest Ubuntu 22.04 AMI
       const amiResult = await this.runCommand('aws', [
@@ -201,6 +333,7 @@ class EC2Deployer {
         '--key-name', CONFIG.keyPairName,
         '--security-group-ids', securityGroupId,
         '--tag-specifications', `ResourceType=instance,Tags=[{Key=Name,Value=${CONFIG.appName}-server},{Key=Environment,Value=production}]`,
+        '--block-device-mappings', '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30}}]',
         '--profile', CONFIG.profile,
         '--region', CONFIG.region,
         '--output', 'json'
@@ -240,6 +373,48 @@ class EC2Deployer {
     }
   }
 
+  async cleanupDuplicateInstances() {
+    if (!process.env.CLEANUP_DUPLICATES || process.env.CLEANUP_DUPLICATES !== 'true') {
+      await this.log('Duplicate cleanup skipped (set CLEANUP_DUPLICATES=true to enable).');
+      return;
+    }
+
+    try {
+      await this.log('Looking for duplicate instances to terminate...');
+      const result = await this.runCommand('aws', [
+        'ec2', 'describe-instances',
+        '--profile', CONFIG.profile,
+        '--region', CONFIG.region,
+        '--filters',
+        `Name=tag:Name,Values=${CONFIG.appName}-server`,
+        'Name=instance-type,Values=' + CONFIG.instanceType,
+        'Name=instance-state-name,Values=pending,running,stopping,stopped'
+      ]);
+
+      const data = JSON.parse(result);
+      const instances = (data.Reservations || [])
+        .flatMap(r => r.Instances || [])
+        .map(i => i.InstanceId);
+
+      const toTerminate = instances.filter(id => id !== this.instanceId);
+      if (toTerminate.length === 0) {
+        await this.log('No duplicates found to terminate.');
+        return;
+      }
+
+      await this.log(`Terminating duplicate instances: ${toTerminate.join(', ')}`);
+      await this.runCommand('aws', [
+        'ec2', 'terminate-instances',
+        '--instance-ids', ...toTerminate,
+        '--profile', CONFIG.profile,
+        '--region', CONFIG.region
+      ]);
+      await this.log('✅ Duplicate instances termination initiated.');
+    } catch (error) {
+      await this.log(`Duplicate cleanup failed: ${error.message}`);
+    }
+  }
+
   async setupInstance() {
     try {
       await this.log('Setting up instance (this may take a few minutes)...');
@@ -249,15 +424,15 @@ class EC2Deployer {
 
       // Copy setup script
       await this.runCommand('scp', [
-        '-i', `${CONFIG.keyPairName}.pem`,
+        '-i', resolveAwsPath(`${CONFIG.keyPairName}.pem`),
         '-o', 'StrictHostKeyChecking=no',
-        './ec2-setup.sh',
+        resolveAwsPath('ec2-setup.sh'),
         `ubuntu@${this.publicIp}:~/setup.sh`
       ]);
 
       // Run setup script
       await this.runCommand('ssh', [
-        '-i', `${CONFIG.keyPairName}.pem`,
+        '-i', resolveAwsPath(`${CONFIG.keyPairName}.pem`),
         '-o', 'StrictHostKeyChecking=no',
         `ubuntu@${this.publicIp}`,
         'chmod +x ~/setup.sh && sudo ~/setup.sh'
@@ -278,17 +453,32 @@ class EC2Deployer {
       const envContent = this.generateEnvFile();
       writeFileSync('.env.production', envContent);
 
+      await this.log('Syncing application files to EC2...');
+      const appRoot = resolveAppRoot();
+      const rsyncArgs = [
+        '-avz',
+        '--delete',
+        `-e`, `ssh -i ${resolveAwsPath(`${CONFIG.keyPairName}.pem`)} -o StrictHostKeyChecking=no`,
+        '--exclude', '.git',
+        '--exclude', 'node_modules',
+        '--exclude', '.next',
+        '--exclude', 'aws-deployment',
+        `${appRoot}/`,
+        `ubuntu@${this.publicIp}:/opt/smartprop/app/`
+      ];
+      await this.runCommand('rsync', rsyncArgs);
+
       // Copy files to server
       const filesToCopy = [
-        './docker-compose.ec2.yml',
-        './nginx-ec2.conf',
-        '.env.production'
+        resolveAwsPath('docker-compose.ec2.yml'),
+        resolveAwsPath('nginx-ec2.conf'),
+        join(process.cwd(), '.env.production'),
       ];
 
       for (const file of filesToCopy) {
         if (existsSync(file)) {
           await this.runCommand('scp', [
-            '-i', `${CONFIG.keyPairName}.pem`,
+            '-i', resolveAwsPath(`${CONFIG.keyPairName}.pem`),
             '-o', 'StrictHostKeyChecking=no',
             file,
             `ubuntu@${this.publicIp}:/opt/smartprop/`
@@ -296,25 +486,27 @@ class EC2Deployer {
         }
       }
 
-      // Clone repository and deploy
+      // Deploy using copied sources (no git clone dependency)
       const deployCommands = [
         'cd /opt/smartprop',
-        `git clone ${CONFIG.repoUrl} app || (cd app && git pull)`,
-        'cd app',
-        'cp ../docker-compose.ec2.yml docker-compose.prod.yml',
-        'cp ../.env.production .env',
+        'cp docker-compose.ec2.yml app/docker-compose.prod.yml',
+        'cp .env.production app/.env',
+        'cd /opt/smartprop/app',
         'mkdir -p /opt/smartprop/{storage,logs,waha-sessions,waha-files}',
-        'docker-compose -f docker-compose.prod.yml build',
-        'docker-compose -f docker-compose.prod.yml up -d',
+        'sudo docker compose -f docker-compose.prod.yml --progress plain build --no-cache',
+        'sudo docker-compose -f docker-compose.prod.yml up -d',
         'sudo systemctl start smartprop'
       ];
 
       await this.runCommand('ssh', [
-        '-i', `${CONFIG.keyPairName}.pem`,
+        '-i', resolveAwsPath(`${CONFIG.keyPairName}.pem`),
         '-o', 'StrictHostKeyChecking=no',
         `ubuntu@${this.publicIp}`,
         deployCommands.join(' && ')
       ]);
+
+      // Cleanup local tarball
+      try { await this.runCommand('rm', ['-f', tarballPath]); } catch {}
 
       await this.log('✅ Application deployed successfully');
     } catch (error) {
@@ -324,11 +516,13 @@ class EC2Deployer {
   }
 
   generateEnvFile() {
+    const baseUrl = CONFIG.domain ? `https://${CONFIG.domain}` : (this.publicIp ? `http://${this.publicIp}` : '');
     return `# Production Environment Variables
 NODE_ENV=production
-PUBLIC_BASE_URL=https://${CONFIG.domain}
+PUBLIC_BASE_URL=${baseUrl}
 
 # Supabase (Update these with your values)
+SUPABASE_URL=${process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'your_supabase_url'}
 NEXT_PUBLIC_SUPABASE_URL=${process.env.NEXT_PUBLIC_SUPABASE_URL || 'your_supabase_url'}
 NEXT_PUBLIC_SUPABASE_ANON_KEY=${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'your_anon_key'}
 SUPABASE_SERVICE_ROLE=${process.env.SUPABASE_SERVICE_ROLE || 'your_service_role'}
@@ -384,11 +578,14 @@ ENABLE_TYPING_SIMULATION=true
       // Step 6: Deploy application
       await this.deployApplication();
 
+      // Optional: Clean up duplicates to control costs
+      await this.cleanupDuplicateInstances();
+
       await this.log('🎉 Deployment completed successfully!');
       await this.log('');
       await this.log('Next steps:');
       await this.log(`1. Point your domain ${CONFIG.domain} to ${this.publicIp}`);
-      await this.log(`2. SSH into server: ssh -i ${CONFIG.keyPairName}.pem ubuntu@${this.publicIp}`);
+      await this.log(`2. SSH into server: ssh -i $(pwd)/smartprop/aws-deployment/${CONFIG.keyPairName}.pem ubuntu@${this.publicIp}`);
       await this.log(`3. Setup SSL: sudo certbot --nginx -d ${CONFIG.domain}`);
       await this.log(`4. Access WAHA dashboard: https://${CONFIG.domain}/waha/`);
       await this.log('');

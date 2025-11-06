@@ -26,7 +26,11 @@ import fs from 'fs';
 import { CHROME_UA, humanPause } from './stealth.js';
 import { upsertAgentAndListing } from './upsert.js';
 import { execSync, exec } from 'child_process';
-import { supabase } from './supa.js';
+import { getSupabaseClient } from './supa.js';
+const supabase = getSupabaseClient();
+
+// Allow disabling automatic re-authentication via environment flag
+const REAUTH_ENABLED = process.env.PG_DISABLE_REAUTH !== '1';
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate() {
@@ -341,14 +345,18 @@ async function scrapePropertyGuruByDistrict() {
   }
 
   // Simple approach: Re-authenticate before scraping to ensure fresh auth
-  console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
-  await reAuthenticate();
-  
-  // Verify auth state exists after re-auth
-  const updatedStateExists = fs.existsSync(stateFilePath);
-  if (!updatedStateExists) {
-    console.error('❌ Authentication state file not found after re-authentication!');
-    process.exit(1);
+  if (REAUTH_ENABLED) {
+    console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
+    await reAuthenticate();
+    
+    // Verify auth state exists after re-auth
+    const updatedStateExists = fs.existsSync(stateFilePath);
+    if (!updatedStateExists) {
+      console.error('❌ Authentication state file not found after re-authentication!');
+      process.exit(1);
+    }
+  } else {
+    console.log('⏭️ Skipping re-authentication (PG_DISABLE_REAUTH=1). Using existing storage state if present.');
   }
   
 
@@ -647,6 +655,14 @@ async function scrapePropertyGuruByDistrict() {
                 // Update status message
                 jobStatus.statusMessage = '🔄 Re-authenticating...';
                 fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+
+                // If re-authentication is disabled, skip restarting and continue with current session
+                if (!REAUTH_ENABLED) {
+                  console.log('⏭️ Skipping re-authentication (PG_DISABLE_REAUTH=1); continuing with current session.');
+                  consecutiveNoPhone = 0;
+                  await listingPage.close();
+                  continue;
+                }
                 
                 await listingPage.close();
                 await page.close();
@@ -667,38 +683,47 @@ async function scrapePropertyGuruByDistrict() {
                 jobStatus.statusMessage = '✅ Re-authenticated! Restarting in 2s...';
                 fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
                 
-                console.log('✅ Re-authentication complete! Auto-restarting scraper...\n');
-                console.log('🔄 Restarting with fresh authentication in 2 seconds...');
+                                console.log('✅ Re-authentication complete! Auto-restarting scraper...\n');                               
+                console.log('🔄 Restarting with fresh authentication...');                                    
                 
                 // Wait a moment for UI to show the message
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                await new Promise(resolve => setTimeout(resolve, 2000));                                                  
                 
                 // Remove lock file to allow restart
                 if (fs.existsSync(lockFile)) {
                   fs.unlinkSync(lockFile);
                 }
                 
-                // Restart the entire scraping process with fresh authentication
-                // Preserve the original environment variables from the admin page
-                setTimeout(() => {
-                  // Re-execute the same command that was originally started by the admin page
-                  const cwd = process.cwd();
-                  const districts = process.env.PG_DISTRICTS || 'ALL';
-                  const maxPages = process.env.PG_MAX_PAGES || '3';
-                  const jobId = process.env.PG_JOB_ID || '';
-                  
-                  const restartCmd = `cd ${cwd} && PG_DISTRICTS="${districts}" PG_MAX_PAGES=${maxPages} PG_JOB_ID="${jobId}" bun src/workers/pg.districts.ts > /tmp/pg-scraper-${jobId}.log 2>&1 &`;
-                  
-                  console.log(`🔄 Restarting with command: ${restartCmd}`);
+                // Restart the entire scraping process with fresh authentication                                          
+                // Preserve the original environment variables from the admin page                                        
+                // Execute restart command immediately (command runs in background with &)
+                const cwd = process.cwd();
+                const districts = process.env.PG_DISTRICTS || 'ALL';                                                    
+                const maxPages = process.env.PG_MAX_PAGES || '3';                                                       
+                const jobId = process.env.PG_JOB_ID || '';
+                
+                const restartCmd = `cd ${cwd} && PG_DISTRICTS="${districts}" PG_MAX_PAGES=${maxPages} PG_JOB_ID="${jobId}" bun src/workers/pg.districts.ts > /tmp/pg-scraper-${jobId}.log 2>&1 &`;                                                
+                
+                console.log(`🔄 Restarting with command: ${restartCmd}`);                                               
+                
+                // Execute restart command and wait for it to spawn before exiting
+                // The & at the end makes it run in background, so exec callback fires immediately
+                await new Promise<void>((resolve, reject) => {
                   exec(restartCmd, (error: unknown) => {
                     if (error) {
-                      console.error('❌ Failed to restart scraper:', error);
-                      process.exit(1);
+                      console.error('❌ Failed to restart scraper:', error);                                              
+                      reject(error);
+                    } else {
+                      // Command spawned successfully, give it a moment to start
+                      setTimeout(() => {
+                        resolve();
+                      }, 500);
                     }
                   });
-                }, 2000); // 2 second delay to ensure auth state is settled
+                });
                 
-                return;
+                // Exit after restart command has been spawned
+                process.exit(0);
               }
               
               await listingPage.close();

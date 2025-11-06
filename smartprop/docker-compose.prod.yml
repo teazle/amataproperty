@@ -1,15 +1,10 @@
 # Production Docker Compose Configuration for SmartProp
 # Includes all services: app, database, WhatsApp, and reverse proxy
 
-version: '3.8'
-
 services:
   # Main Application
   smartprop-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: teazle/smartprop-app:latest
     container_name: smartprop-app
     restart: unless-stopped
     environment:
@@ -21,8 +16,6 @@ services:
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
       - WAHA_URL=http://waha:3030
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - WABA_TOKEN=${WABA_TOKEN}
-      - WABA_PHONE_ID=${WABA_PHONE_ID}
     ports:
       - "3000:3000"
     volumes:
@@ -85,7 +78,7 @@ services:
 
   # Nginx Reverse Proxy
   nginx:
-    image: nginx:alpine
+    image: nginx:latest
     container_name: smartprop-nginx
     restart: unless-stopped
     ports:
@@ -119,7 +112,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.21.0.0/16
 
 # Volumes
 volumes:

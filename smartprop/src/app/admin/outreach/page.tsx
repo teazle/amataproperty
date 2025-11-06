@@ -525,15 +525,42 @@ export default function OutreachPage() {
         
         if (response.ok) {
           const result = await response.json();
-          console.log('Outreach processing result:', result);
-          toast.success(`Outreach initiated and message sent for ${listing.title}`);
+          console.log('Outreach processing result:', JSON.stringify(result, null, 2));
+          
+          // Check the actual processing results
+          if (result.stats) {
+            const { sent, failed, processed } = result.stats;
+            if (sent > 0) {
+              toast.success(`Message sent successfully for ${listing.title}`, {
+                description: `Sent: ${sent}, Failed: ${failed} of ${processed} processed`,
+              });
+            } else if (failed > 0) {
+              toast.error(`Failed to send message for ${listing.title}`, {
+                description: `Failed: ${failed} of ${processed} processed. Check server logs for details.`,
+                duration: 6000,
+              });
+            } else {
+              toast.info(`No messages processed for ${listing.title}`, {
+                description: 'No queued outreach messages found.',
+              });
+            }
+          } else {
+            toast.success(`Outreach initiated for ${listing.title}`);
+          }
         } else {
-          console.error('Failed to process outreach:', response.statusText);
-          toast.success(`Outreach initiated for ${listing.title} (processing failed - check logs)`);
+          const errorData = await response.json().catch(() => ({}));
+          console.error('Failed to process outreach:', response.statusText, errorData);
+          toast.error(`Failed to process outreach for ${listing.title}`, {
+            description: errorData.error || errorData.details || 'Check server logs for details',
+            duration: 6000,
+          });
         }
       } catch (processingError) {
         console.error('Error processing outreach:', processingError);
-        toast.success(`Outreach initiated for ${listing.title} (processing failed - check logs)`);
+        toast.error(`Failed to process outreach for ${listing.title}`, {
+          description: processingError instanceof Error ? processingError.message : 'Network error',
+          duration: 6000,
+        });
       }
       
       await fetchListings();
@@ -706,17 +733,50 @@ export default function OutreachPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to send message');
+        // Extract error message with details
+        const errorMessage = data.error || 'Failed to send message';
+        const errorDetails = data.details ? `: ${data.details}` : '';
+        throw new Error(`${errorMessage}${errorDetails}`);
       }
 
-      toast.success('Message sent successfully via WhatsApp');
+      // Check for warnings (message sent but database update failed)
+      if (data.warning) {
+        toast.warning(data.warning, {
+          description: data.error || 'Message was sent but status may not be updated correctly',
+          duration: 6000,
+        });
+      } else {
+        toast.success('Message sent successfully via WhatsApp');
+      }
+
       setIsManualMessageOpen(false);
       setManualMessageTarget(null);
       setManualMessage('');
-      await fetchListings();
+      
+      // Refresh listings with a small delay to ensure database is updated
+      try {
+        await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms
+        await fetchListings();
+      } catch (fetchError) {
+        console.error('Error refreshing listings after send:', fetchError);
+        // Don't show error toast for refresh failure, just log it
+      }
     } catch (error) {
-      toast.error('Failed to send message');
+      // Show the actual error message from the API
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send message';
+      toast.error(errorMessage, {
+        description: 'Check browser console for more details',
+        duration: 5000,
+      });
       console.error('Manual message error:', error);
+      
+      // Log additional debugging info
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          message: error.message,
+          stack: error.stack,
+        });
+      }
     } finally {
       setIsSendingMessage(false);
     }

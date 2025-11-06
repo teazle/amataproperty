@@ -35,3 +35,7 @@ playwright-screenshots/
 
 # Archive directory
 archive/
+*.pem
+
+# Large Docker image files
+*.tar

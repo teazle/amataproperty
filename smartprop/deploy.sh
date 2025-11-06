@@ -106,11 +106,7 @@ deploy() {
     
     # Pull latest images
     log "Pulling latest images..."
-    docker-compose -f "$COMPOSE_FILE" pull
-    
-    # Build application image
-    log "Building application image..."
-    docker-compose -f "$COMPOSE_FILE" build --no-cache smartprop-app
+    docker-compose -f "$COMPOSE_FILE" pull smartprop-app
     
     # Start services
     log "Starting services..."

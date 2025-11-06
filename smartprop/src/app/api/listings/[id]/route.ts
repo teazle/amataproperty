@@ -1,10 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://pfdsmpfgwbbeijdzevpu.supabase.co';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmZHNtcGZnd2JiZWlqZHpldnB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3MDM5MjgsImV4cCI6MjA3NTI3OTkyOH0.5Jtac-IeAqv_4dswX0BhFB571dP2bh5xG0zl-jrmFHY';
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Supabase env not configured');
+  return createClient(url, key);
+}
 
 interface UpdateListingRequest {
   // Listing details
@@ -38,6 +43,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const supabase = getSupabase();
     const { id } = await params;
     const listingId = id;
     const body: UpdateListingRequest = await request.json();
@@ -252,6 +258,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const supabase = getSupabase();
     const { id } = await params;
     const listingId = id;
 
@@ -329,6 +336,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const supabase = getSupabase();
     const { id } = await params;
     const listingId = id;
 

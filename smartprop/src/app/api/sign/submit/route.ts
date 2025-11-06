@@ -3,10 +3,12 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { createClient } from '@supabase/supabase-js';
 import { sendTemplate } from '@/lib/wa/send';
 
-// Initialize Supabase client
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Supabase env not configured');
+  return createClient(url, key);
+}
 
 interface SignSubmitRequest {
   aid: string;
@@ -22,6 +24,7 @@ interface SignSubmitRequest {
  */
 export async function POST(request: NextRequest) {
   try {
+    const supabase = getSupabase();
     const body: SignSubmitRequest = await request.json();
     const { aid, lid, commissionSplit, buyerRequirements, listingUrl } = body;
 
@@ -216,6 +219,7 @@ async function generateAgreementPDF(data: {
  */
 async function storePDF(pdfBuffer: Buffer, filename: string): Promise<string> {
   // Upload to Supabase Storage
+  const supabase = getSupabase();
   const { data, error } = await supabase.storage
     .from('agreements')
     .upload(filename, pdfBuffer, {
@@ -239,6 +243,7 @@ async function storePDF(pdfBuffer: Buffer, filename: string): Promise<string> {
  */
 async function sendWhatsAppNotification(agentId: string, listingUrl: string): Promise<void> {
   // Get agent phone number from database
+  const supabase = getSupabase();
   const { data: agent, error } = await supabase
     .from('agents')
     .select('phone')

@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../../workers/supa';
 
 /**
  * Get the active AI prompt from the database

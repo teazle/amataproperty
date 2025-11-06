@@ -129,7 +129,7 @@ export default function ListingsPage() {
       console.log('Successfully fetched listings:', result.listings?.length || 0);
       
       // Transform the data to handle agents properly
-      const transformedData = (result.listings || []).map((listing: any) => ({
+      const transformedData = (result.listings || []).map((listing: Listing) => ({
         ...listing,
         agents: Array.isArray(listing.agents) ? listing.agents[0] : listing.agents
       }));
@@ -1147,7 +1147,7 @@ export default function ListingsPage() {
             
             <div className="mb-6">
               <p className="text-gray-700">
-                Are you sure you want to delete the listing <strong>"{deletingListing.title}"</strong>?
+                Are you sure you want to delete the listing <strong>&quot;{deletingListing.title}&quot;</strong>?
               </p>
               <p className="text-sm text-gray-500 mt-2">
                 This will permanently remove the listing and all associated data.

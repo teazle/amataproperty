@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { motion, useMotionValue, useTransform } from 'framer-motion';
+import { motion, useMotionValue, useTransform } from 'motion/react';
 import { ViewingCalendar, ViewingSlot } from '@/components/viewing-calendar';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';

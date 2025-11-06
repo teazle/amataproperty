@@ -44,7 +44,7 @@ export default function AdminDashboard() {
         <p className="text-gray-600 mb-6">Reliable, tested pages for daily development work</p>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* Listings */}
-        <Card className="border-2 border-green-200 bg-green-50">
+        <Card className="border-2 border-green-200 bg-green-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-green-100">
@@ -58,12 +58,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Listings</CardTitle>
             <CardDescription>Property listings with full functionality</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 All 209 listings with filtering, expandable rows, and agent details
               </div>
-              <Link href="/admin/listings">
+              <Link href="/admin/listings" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Listings</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
@@ -74,7 +74,7 @@ export default function AdminDashboard() {
         </Card>
 
         {/* Agents */}
-        <Card className="border-2 border-purple-200 bg-purple-50">
+        <Card className="border-2 border-purple-200 bg-purple-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-purple-100">
@@ -88,12 +88,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Agents</CardTitle>
             <CardDescription>Agent management and contact information</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 Agent profiles, contact details, and co-broking status
               </div>
-              <Link href="/admin/agents">
+              <Link href="/admin/agents" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Agents</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
@@ -104,7 +104,7 @@ export default function AdminDashboard() {
         </Card>
 
         {/* Outreach */}
-        <Card className="border-2 border-yellow-200 bg-yellow-50">
+        <Card className="border-2 border-yellow-200 bg-yellow-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-yellow-100">
@@ -118,12 +118,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Outreach</CardTitle>
             <CardDescription>Conversation management and co-broking tracking</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 Message history, conversation phases, and co-broking status
               </div>
-              <Link href="/admin/outreach">
+              <Link href="/admin/outreach" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Outreach</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
@@ -134,7 +134,7 @@ export default function AdminDashboard() {
         </Card>
 
         {/* Scraper */}
-        <Card className="border-2 border-orange-200 bg-orange-50">
+        <Card className="border-2 border-orange-200 bg-orange-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-orange-100">
@@ -148,12 +148,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Scraper</CardTitle>
             <CardDescription>Property scraping and job management</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 Control scrapers, monitor progress, and manage jobs
               </div>
-              <Link href="/admin/scraper">
+              <Link href="/admin/scraper" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Scraper</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
@@ -164,7 +164,7 @@ export default function AdminDashboard() {
         </Card>
 
         {/* Articles */}
-        <Card className="border-2 border-indigo-200 bg-indigo-50">
+        <Card className="border-2 border-indigo-200 bg-indigo-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-indigo-100">
@@ -178,12 +178,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Articles</CardTitle>
             <CardDescription>Scraped articles and content management</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 View and manage scraped articles from various sources
               </div>
-              <Link href="/admin/articles">
+              <Link href="/admin/articles" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Articles</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
@@ -194,7 +194,7 @@ export default function AdminDashboard() {
         </Card>
 
         {/* Viewings */}
-        <Card className="border-2 border-teal-200 bg-teal-50">
+        <Card className="border-2 border-teal-200 bg-teal-50 h-full">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="p-3 rounded-lg bg-teal-100">
@@ -208,12 +208,12 @@ export default function AdminDashboard() {
             <CardTitle className="text-xl">Viewings</CardTitle>
             <CardDescription>Viewing requests and timeslot management</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
+          <CardContent className="flex flex-col flex-1">
+            <div className="flex-1 flex flex-col gap-4">
               <div className="text-sm text-gray-600">
                 Manage viewing requests and track timeslot availability
               </div>
-              <Link href="/admin/viewings">
+              <Link href="/admin/viewings" className="mt-auto">
                 <Button className="w-full" variant="default">
                   <span>Open Viewings</span>
                   <ArrowRight className="h-4 w-4 ml-2" />

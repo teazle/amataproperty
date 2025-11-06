@@ -1,29 +1,24 @@
 # Production Docker Compose for EC2 t3.medium
 # Optimized for 4GB RAM, 2 vCPUs
 
-version: '3.8'
+
 
 services:
   # Main Application
   smartprop-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: smartprop:latest  # Using locally built image for manual deploy
     container_name: smartprop-app
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - PORT=3000
       - HOSTNAME=0.0.0.0
+      - SUPABASE_URL=${SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
-      - WAHA_URL=http://waha:3030
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - WABA_TOKEN=${WABA_TOKEN}
-      - WABA_PHONE_ID=${WABA_PHONE_ID}
       - BUYER_AGENT_NAME=${BUYER_AGENT_NAME}
       - BUYER_AGENT_CEA_REG=${BUYER_AGENT_CEA_REG}
       - BUYER_AGENT_AVAILABILITY=${BUYER_AGENT_AVAILABILITY}
@@ -42,8 +37,6 @@ services:
       - app-logs:/opt/smartprop/logs
     networks:
       - smartprop-network
-    depends_on:
-      - waha
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -58,50 +51,6 @@ services:
         reservations:
           memory: 400M
           cpus: '0.4'
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # WhatsApp Business API (WAHA) - x86 version for EC2
-  waha:
-    image: devlikeapro/waha:latest-2025.9.8
-    container_name: smartprop-waha
-    restart: unless-stopped
-    environment:
-      - WAHA_DASHBOARD_ENABLED=true
-      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}
-      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
-      - WAHA_WEBHOOK_URL=${PUBLIC_BASE_URL}/api/whatsapp/webhook
-      - WAHA_WEBHOOK_EVENTS=message,message.any,state.change,group.join,presence.update
-      - WAHA_SESSION_STORE_ENABLED=true
-      - WAHA_SESSION_STORE_PATH=/app/sessions
-      - WAHA_FILES_STORE_ENABLED=true
-      - WAHA_FILES_STORE_PATH=/app/files
-      - WAHA_LOG_LEVEL=info
-      - WAHA_PRINT_QR=true
-    expose:
-      - "3030"
-    volumes:
-      - waha-sessions:/app/sessions
-      - waha-files:/app/files
-    networks:
-      - smartprop-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3030/api/sessions"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 800M
-          cpus: '0.6'
-        reservations:
-          memory: 400M
-          cpus: '0.3'
     logging:
       driver: "json-file"
       options:
@@ -154,6 +103,7 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - SUPABASE_URL=${SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
       - PG_EMAIL=${PG_EMAIL}
@@ -164,7 +114,7 @@ services:
       - PG_MAX_PAGES=${PG_MAX_PAGES:-3}
       - EP_MAX_PAGES=${EP_MAX_PAGES:-3}
       - GROQ_API_KEY=${GROQ_API_KEY}
-    command: ["bun", "worker.ts"]
+    command: ["bun", "scripts/outreach-worker.ts"]
     volumes:
       - app-storage:/app/storage
       - app-logs:/opt/smartprop/logs
@@ -208,15 +158,3 @@ volumes:
       type: none
       o: bind
       device: /opt/smartprop/logs
-  waha-sessions:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/smartprop/waha-sessions
-  waha-files:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/smartprop/waha-files

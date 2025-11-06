@@ -1,7 +1,7 @@
 {
-  "startedAt": "2025-11-03T02:23:06.632Z",
+  "startedAt": "2025-11-05T08:34:59.669Z",
   "districts": "09",
-  "pid": 91640,
+  "pid": 82071,
   "status": "completed",
   "statusMessage": "Scraping District 09 - Page 1/1",
   "progress": {
@@ -10,7 +10,7 @@
     "totalPages": 1,
     "listingsProcessed": 20
   },
-  "completedAt": "2025-11-03T02:27:14.295Z",
+  "completedAt": "2025-11-05T08:39:04.711Z",
   "stats": {
     "totalDistricts": 1,
     "totalListings": 20,

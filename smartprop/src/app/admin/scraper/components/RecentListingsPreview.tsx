@@ -60,8 +60,20 @@ export function RecentListingsPreview() {
           }
         };
 
-        eventSource.onerror = (error) => {
-          console.error('SSE error for recent listings:', error);
+        eventSource.onerror = (event) => {
+          const readyState = eventSource?.readyState;
+          const url = eventSource?.url;
+          
+          // Log useful information about the error
+          console.error('SSE error for recent listings:', {
+            readyState: readyState,
+            readyStateName: readyState === EventSource.CONNECTING ? 'CONNECTING' : 
+                           readyState === EventSource.OPEN ? 'OPEN' : 
+                           readyState === EventSource.CLOSED ? 'CLOSED' : 'UNKNOWN',
+            url: url,
+            type: event.type
+          });
+          
           setIsConnected(false);
           
           // Close current connection
@@ -69,11 +81,13 @@ export function RecentListingsPreview() {
             eventSource.close();
           }
           
-          // Reconnect after 3 seconds
-          reconnectTimeout = setTimeout(() => {
-            console.log('Reconnecting to recent listings SSE...');
-            connectSSE();
-          }, 3000);
+          // Reconnect after 3 seconds if connection was closed
+          if (readyState === EventSource.CLOSED) {
+            reconnectTimeout = setTimeout(() => {
+              console.log('Reconnecting to recent listings SSE...');
+              connectSSE();
+            }, 3000);
+          }
         };
 
       } catch (error) {

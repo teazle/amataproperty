@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/workers/supa';
-
-const supabase = getSupabaseClient();
+import { getSupabaseClient } from '../../../workers/supa';
 
 export async function GET() {
   try {
+    const supabase = getSupabaseClient();
     const { data, error } = await supabase
       .from('agents')
       .select(`

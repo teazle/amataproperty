@@ -14,7 +14,7 @@ import {
   analyzeConversationWithAdvancedAI,
   ConversationContext
 } from '@/lib/ai/conversation-analyzer';
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../../../../workers/supa';
 import { useConversationStore } from '@/lib/stores/conversation-store';
 
 // Type declarations for global properties

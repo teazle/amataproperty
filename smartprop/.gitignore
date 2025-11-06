@@ -55,7 +55,6 @@ final-*
 fixed-*
 validate-*
 direct-*
-worker.ts
 
 # screenshots and images (except in public/)
 *.png

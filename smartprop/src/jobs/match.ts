@@ -3,14 +3,10 @@
  * Fetches new listings and creates outreach entries for agents
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from '../workers/supa';
 import { sendCoBrokingInquiry } from '@/lib/wa/waha';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
-
-// Create a client with service role key for admin operations
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Supabase client is created lazily inside functions to avoid build-time env access
 
 interface Listing {
   id: string;
@@ -48,6 +44,7 @@ interface Outreach {
  * Fetches new listings from the last 24 hours matching criteria
  */
 async function fetchNewListings(): Promise<Listing[]> {
+  const supabase = getSupabaseClient();
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
   
@@ -72,6 +69,7 @@ async function fetchNewListings(): Promise<Listing[]> {
  * Fetches all active agents
  */
 async function fetchAgents(): Promise<Agent[]> {
+  const supabase = getSupabaseClient();
   const { data, error } = await supabase
     .from('agents')
     .select('*')
@@ -89,6 +87,7 @@ async function fetchAgents(): Promise<Agent[]> {
  * Creates outreach entries for agent-listing combinations that don't exist
  */
 async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Promise<Outreach[]> {
+  const supabase = getSupabaseClient();
   const outreachEntries: Partial<Outreach>[] = [];
   
   // Create all possible agent-listing combinations
@@ -158,6 +157,7 @@ async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Prom
  * Processes up to 25 queued outreach messages
  */
 export async function processOutreachMessages(): Promise<{ processed: number; sent: number; failed: number }> {
+  const supabase = getSupabaseClient();
   // Fetch up to 25 queued outreach messages
   const { data: queuedOutreach, error: fetchError } = await supabase
     .from('outreach')
@@ -187,71 +187,98 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
   // Process each message
   for (const outreach of queuedOutreach) {
     try {
-      // Update status to 'sent' first
-      const { error: updateError } = await supabase
-        .from('outreach')
-        .update({ status: 'sent' })
-        .eq('id', outreach.id);
-
-      if (updateError) {
-        console.error(`Failed to update outreach status for ${outreach.id}:`, updateError);
-        failed++;
-        continue;
-      }
-
-      // Send co-broking inquiry via WhatsApp
+      console.log(`📤 Processing outreach ${outreach.id} for agent ${outreach.agents.phone}`);
+      
+      // Send co-broking inquiry via WhatsApp FIRST
+      let sendResult;
       try {
-        const result = await sendCoBrokingInquiry(
+        sendResult = await sendCoBrokingInquiry(
           outreach.agents.phone,
           outreach.agents.name,
           outreach.listings.title || 'New Property',
           outreach.listings.url
         );
 
-        if (result.success) {
-          // Initialize conversation history with the initial message
-          const initialMessage = {
-            role: 'user',
-            message: result.messageText || 'Co-broking inquiry sent',
-            timestamp: new Date().toISOString()
-          };
+        if (!sendResult.success) {
+          console.error(`❌ Failed to send WhatsApp message to ${outreach.agents.phone}: ${sendResult.error}`);
+          // Update status to 'failed'
+          const { error: updateError } = await supabase
+            .from('outreach')
+            .update({ status: 'failed' })
+            .eq('id', outreach.id);
+          
+          if (updateError) {
+            console.error(`❌ Also failed to update status to 'failed':`, updateError);
+          }
+          
+          failed++;
+          continue;
+        }
 
-          // Update outreach record with message details and conversation history
+        console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone}`);
+        
+        // Initialize conversation history with the initial message
+        const initialMessage = {
+          role: 'user',
+          message: sendResult.messageText || 'Co-broking inquiry sent',
+          timestamp: new Date().toISOString(),
+          messageId: sendResult.messageId || `auto_${Date.now()}`
+        };
+
+        // Update outreach record with message details and conversation history
+        const { error: updateError } = await supabase
+          .from('outreach')
+          .update({ 
+            status: 'sent',
+            message_text: sendResult.messageText || 'Co-broking inquiry sent',
+            wa_conversation_id: sendResult.messageId ? JSON.stringify(sendResult.messageId) : null,
+            first_message_sent_at: new Date().toISOString(),
+            conversation_history: [initialMessage]
+          })
+          .eq('id', outreach.id);
+
+        if (updateError) {
+          console.error(`❌ Failed to update outreach record after sending message to ${outreach.agents.phone}:`, updateError);
+          console.error(`⚠️  Message was sent but database update failed. Status may show incorrectly.`);
+          // Message was sent successfully, but database update failed
+          // Don't fail the whole operation, but log the error
+          // Try to update status at least
           await supabase
             .from('outreach')
-            .update({ 
-              status: 'sent',
-              message_text: result.messageText || 'Co-broking inquiry sent',
-              wa_conversation_id: result.messageId ? JSON.stringify(result.messageId) : null,
-              first_message_sent_at: new Date().toISOString(),
-              conversation_history: [initialMessage]
-            })
+            .update({ status: 'sent' })
             .eq('id', outreach.id);
-
-          console.log(`WhatsApp message sent successfully to ${outreach.agents.phone}`);
-          sent++;
         } else {
-          throw new Error(result.error || 'Failed to send message');
+          console.log(`✅ WhatsApp message sent and database updated for ${outreach.agents.phone}`);
         }
-      } catch (error) {
-        console.error(`Failed to send WhatsApp message to ${outreach.agents.phone}:`, error);
+        
+        sent++;
+      } catch (sendError) {
+        console.error(`❌ Exception while sending WhatsApp message to ${outreach.agents.phone}:`, sendError);
         
         // Update status to 'failed'
-        await supabase
+        const { error: updateError } = await supabase
           .from('outreach')
           .update({ status: 'failed' })
           .eq('id', outreach.id);
         
+        if (updateError) {
+          console.error(`❌ Also failed to update status to 'failed':`, updateError);
+        }
+        
         failed++;
       }
     } catch (error) {
-      console.error(`Error processing outreach ${outreach.id}:`, error);
+      console.error(`❌ Unexpected error processing outreach ${outreach.id}:`, error);
       
       // Update status to 'failed'
-      await supabase
+      const { error: updateError } = await supabase
         .from('outreach')
         .update({ status: 'failed' })
         .eq('id', outreach.id);
+      
+      if (updateError) {
+        console.error(`❌ Also failed to update status to 'failed':`, updateError);
+      }
       
       failed++;
     }

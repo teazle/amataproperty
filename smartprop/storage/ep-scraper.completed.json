@@ -1,0 +1,19 @@
+{
+  "startedAt": "2025-11-06T03:50:56.291Z",
+  "pid": 31710,
+  "status": "failed",
+  "statusMessage": "No listings were processed. This may indicate a page structure change or authentication issue.",
+  "progress": {
+    "currentPage": 1,
+    "totalPages": 2,
+    "listingsProcessed": 0,
+    "listingsAttempted": 0
+  },
+  "completedAt": "2025-11-06T03:52:35.811Z",
+  "stats": {
+    "totalProcessed": 0,
+    "totalSuccess": 0,
+    "totalErrors": 0,
+    "totalSkipped": 0
+  }
+}

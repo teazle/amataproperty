@@ -1,6 +1,15 @@
 import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs';
+import { config as dotenvConfig } from 'dotenv';
+
+// Load environment variables from .env and .env.local in the current project
+// This mirrors the EP auth worker behavior to enable automated login
+dotenvConfig({ path: path.resolve(process.cwd(), '.env') });
+dotenvConfig({ path: path.resolve(process.cwd(), '.env.local') });
+// Fallback: also attempt to load env files from repository root
+dotenvConfig({ path: path.resolve(process.cwd(), '..', '.env') });
+dotenvConfig({ path: path.resolve(process.cwd(), '..', '.env.local') });
 
 async function authenticatePropertyGuru() {
   const email = process.env.PG_EMAIL;

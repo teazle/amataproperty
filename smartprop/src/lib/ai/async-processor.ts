@@ -3,7 +3,7 @@
  * Handles AI analysis and response generation without blocking webhook
  */
 
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../../workers/supa';
 import { analyzeConversationWithAdvancedContext } from './conversation';
 import { sendAutoReply } from './conversation';
 import { ConversationContext, ConversationMessage } from './conversation';

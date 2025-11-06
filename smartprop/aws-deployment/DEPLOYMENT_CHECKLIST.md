@@ -50,9 +50,11 @@ node aws-deployment/deploy-to-ec2.js
 **Expected outcomes:**
 - [ ] EC2 key pair created (`smartprop-key.pem`)
 - [ ] Security group configured
-- [ ] t3.medium instance launched
+ - [ ] t3.small instance launched
 - [ ] Docker and dependencies installed
 - [ ] Application deployed and running
+
+Note: The deployment script is idempotent. If an instance tagged `Name=smartprop-server` already exists, it reuses that instance instead of launching a new one. To clean up duplicates automatically, set `CLEANUP_DUPLICATES=true` before running the script.
 
 ### Step 2: DNS Configuration
 - [ ] **Point your domain** to the EC2 public IP address

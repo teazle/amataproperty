@@ -4,9 +4,10 @@
 
 import { createClient } from '@supabase/supabase-js';
 
+// Use server-side Supabase URL and service role for all scraper DB operations
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE! // Fixed: using correct env var name
+  process.env.SUPABASE_URL!,
+  (process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY)!
 );
 
 export interface Article {

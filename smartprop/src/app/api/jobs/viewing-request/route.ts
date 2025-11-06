@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
  */
 export async function GET() {
   try {
-    const { getSupabaseClient } = await import('@/workers/supa');
+    const { getSupabaseClient } = await import('../../../../workers/supa');
     const supabase = getSupabaseClient();
 
     // Count listings by viewing status

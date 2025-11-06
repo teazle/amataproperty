@@ -1,81 +1,92 @@
-# Multi-stage Dockerfile for SmartProp Production Deployment
-# Optimized for performance, security, and minimal image size
+# Optimized Multi-stage Dockerfile for SmartProp
+# Fixes: duplicate installs, layer caching, build context
 
-# Stage 1: Base image with dependencies
-FROM oven/bun:1.1.38-alpine AS base
+# Stage 1: Base with system dependencies
+FROM debian:bookworm AS base
+
+# Install bun
+RUN apt-get update && apt-get install -y curl unzip
+ENV BUN_INSTALL=/usr/local
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/usr/local/bin:$PATH"
+
 WORKDIR /app
 
-# Install system dependencies for canvas and other native modules
-RUN apk add --no-cache \
-    cairo-dev \
-    pango-dev \
-    jpeg-dev \
-    giflib-dev \
-    librsvg-dev \
-    pixman-dev \
+
+
+
+
+# Install all system dependencies in one layer
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg62-turbo-dev \
+    libgif-dev \
+    librsvg2-dev \
     python3 \
     make \
     g++ \
-    pkgconfig
+    pkg-config \
+    dumb-init && \
+    rm -rf /var/lib/apt/lists/*
 
-# Stage 2: Dependencies installation
+# Stage 2: Dependencies (SINGLE install)
 FROM base AS deps
-COPY package.json bun.lockb* ./
-RUN bun install --frozen-lockfile
-
-# Stage 3: Build stage
-FROM base AS builder
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-
-# Set build-time environment variables
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-# Build the application
-RUN bun run build
-
-# Stage 4: Production dependencies only
-FROM base AS prod-deps
-COPY package.json bun.lockb* ./
-RUN bun install --frozen-lockfile --production
-
-# Stage 5: Runtime stage
-FROM oven/bun:1.1.38-alpine AS runtime
-
-# Create non-root user for security
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Install runtime dependencies
-RUN apk add --no-cache \
-    cairo \
-    pango \
-    jpeg \
-    giflib \
-    librsvg \
-    pixman \
-    dumb-init
 
 WORKDIR /app
 
-# Copy built application
+COPY package.json bun.lock ./
+RUN bun install --ignore-scripts
+
+# Rebuild the source code only when needed
+FROM base AS builder
+
+WORKDIR /app
+
+COPY . .
+
+COPY --from=deps /app/node_modules ./node_modules
+
+# Build the application
+WORKDIR /app/src
+RUN bun run build
+
+# Stage 4: Production runtime
+FROM node:18-bullseye-slim AS runtime
+
+
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Install runtime system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libpango-1.0-0 \
+    libjpeg62-turbo \
+    libgif7 \
+    librsvg2-2 \
+    dumb-init && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy built application and dependencies from previous stages
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 
-# Copy production dependencies
-COPY --from=prod-deps --chown=nextjs:nodejs /app/node_modules ./node_modules
-
-# Copy necessary configuration files
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.ts ./
+# Copy configuration
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
 
-# Create directories for storage and logs
+# Create necessary directories
 RUN mkdir -p /app/storage /app/logs && \
     chown -R nextjs:nodejs /app/storage /app/logs
 
-# Set environment variables
+# Environment variables
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
@@ -89,10 +100,8 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD bun --version && curl -f http://localhost:3000/api/health || exit 1
+    CMD node --version || exit 1
 
-# Use dumb-init to handle signals properly
+# Use dumb-init and start application
 ENTRYPOINT ["dumb-init", "--"]
-
-# Start the application
-CMD ["bun", "run", "server.js"]
+CMD ["node", "server.js"]

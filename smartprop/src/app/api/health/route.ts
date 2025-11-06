@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
 // Health check endpoint for load balancer
 export async function GET(request: NextRequest) {
@@ -8,25 +7,39 @@ export async function GET(request: NextRequest) {
   let overallStatus = 'healthy';
 
   try {
-    // Check database connectivity
+    // Check database connectivity using Supabase REST with server-only env vars
     try {
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE!
-      );
-      
-      const { data, error } = await supabase
-        .from('listings')
-        .select('id')
-        .limit(1);
-      
-      checks.database = {
-        status: error ? 'unhealthy' : 'healthy',
-        responseTime: Date.now() - startTime,
-        error: error?.message
-      };
-      
-      if (error) overallStatus = 'degraded';
+      const supabaseUrl = process.env.SUPABASE_URL;
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!supabaseUrl || !serviceKey) {
+        throw new Error('Missing SUPABASE_URL or service role key');
+      }
+      const dbStart = Date.now();
+      const resp = await fetch(`${supabaseUrl}/rest/v1/listings?select=id&limit=1`, {
+        method: 'GET',
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`
+        }
+      } as any);
+
+      if (resp.ok) {
+        checks.database = {
+          status: 'healthy',
+          responseTime: Date.now() - dbStart,
+          method: 'undici-rest'
+        };
+      } else {
+        const text = await resp.text().catch(() => '');
+        checks.database = {
+          status: 'unhealthy',
+          responseTime: Date.now() - dbStart,
+          statusCode: resp.status,
+          error: text || 'Non-2xx response from Supabase REST',
+          method: 'undici-rest'
+        };
+        overallStatus = 'degraded';
+      }
     } catch (error) {
       checks.database = {
         status: 'unhealthy',
@@ -61,7 +74,7 @@ export async function GET(request: NextRequest) {
 
     // Check environment variables
     const requiredEnvVars = [
-      'NEXT_PUBLIC_SUPABASE_URL',
+      'SUPABASE_URL',
       'SUPABASE_SERVICE_ROLE',
       'GROQ_API_KEY'
     ];

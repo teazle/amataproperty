@@ -114,39 +114,226 @@ async function authenticateEdgeProp() {
       
       // Wait for login to complete - check for bookmark link which appears when logged in
       console.log('⏳ Waiting for login to complete...');
-      await humanPause(2000, 3000);
+      await humanPause(3000, 4000);
       
       // Check for any popup/dialog about logging out from other device
+      // Wait a bit longer for the popup to appear after clicking login
+      await humanPause(3000, 5000);
+      
+      // Variables to track dialog state (declared outside try-catch for access later)
+      let dialogVisible = false;
+      let buttonClicked = false;
+      
       try {
-        const logoutDialog = page.locator('text=/signed out elsewhere|simultaneous sessions/i');
-        const dialogVisible = await logoutDialog.isVisible({ timeout: 3000 }).catch(() => false);
+        // Look for the popup text - it appears after login button is clicked
+        // Use multiple methods to detect the dialog
+        const dialogTextPattern = /signed out elsewhere|simultaneous sessions|logged out|maximum number of simultaneous|will be logged out|other device|another device|existing session|continue.*login|proceed.*login/i;
+        
+        // Wait longer for dialog to appear
+        await humanPause(2000, 3000);
+        
+        // Try multiple detection methods
+        
+        // Method 1: Check page text content first (most reliable)
+        try {
+          const pageText = await page.textContent('body').catch(() => '') || '';
+          dialogVisible = dialogTextPattern.test(pageText);
+          if (dialogVisible) {
+            console.log('⚠️  Detected multi-session dialog in page text');
+          }
+        } catch (e) {
+          // Continue to other methods
+        }
+        
+        // Method 2: Look for text with regex pattern
+        if (!dialogVisible) {
+          try {
+            const logoutDialog = page.locator('text=/signed out elsewhere|simultaneous sessions|logged out|maximum number of simultaneous|will be logged out|other device|another device|existing session/i');
+            dialogVisible = await logoutDialog.isVisible({ timeout: 3000 }).catch(() => false);
+            if (dialogVisible) {
+              console.log('⚠️  Detected multi-session dialog via text locator');
+            }
+          } catch (e) {
+            // Continue
+          }
+        }
+        
+        // Method 3: Look for modal/dialog elements
+        if (!dialogVisible) {
+          try {
+            const modalElements = await page.locator('[role="dialog"], [class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"]').all();
+            for (const modal of modalElements) {
+              const modalText = await modal.textContent().catch(() => '') || '';
+              const isVisible = await modal.isVisible().catch(() => false);
+              if (isVisible && dialogTextPattern.test(modalText)) {
+                dialogVisible = true;
+                console.log('⚠️  Detected multi-session dialog via modal element');
+                break;
+              }
+            }
+          } catch (e3) {
+            // All methods failed
+          }
+        }
         
         if (dialogVisible) {
-          console.log('⚠️  Detected multi-session warning dialog, clicking LOGIN...');
+          console.log('⚠️  Detected multi-session warning dialog, looking for LOGIN button...');
           
-          // Try to find and click the LOGIN button (uppercase)
-          const confirmButton = page.locator('text=LOGIN').first();
-          const buttonVisible = await confirmButton.isVisible({ timeout: 2000 }).catch(() => false);
+          // Wait longer for the dialog to fully render and be interactive
+          await humanPause(3000, 4000);
           
-          if (buttonVisible) {
-            await confirmButton.click();
-            await humanPause(2000, 3000);
+          // Use JavaScript to find and click the LOGIN button
+          buttonClicked = false;
+          
+          const jsClickResult = await page.evaluate(() => {
+            // Find the center element with class jsx-1156695421
+            const center = document.querySelector('center.jsx-1156695421') as HTMLElement;
+            if (center) {
+              const text = center.textContent?.trim().toUpperCase() || '';
+              if (text === 'LOGIN' || text.includes('LOGIN')) {
+                // Click the parent button div (this is the actual clickable element)
+                const parent = center.parentElement;
+                if (parent && parent.classList.contains('button')) {
+                  try {
+                    (parent as HTMLElement).click();
+                    return { success: true, method: 'click-center-parent' };
+                  } catch (e) {
+                    return { success: false, method: 'error' };
+                  }
+                }
+              }
+            }
+            return { success: false, method: 'not-found' };
+          }).catch(() => ({ success: false, method: 'error' }));
+          
+          if (jsClickResult.success) {
+            console.log(`✅ Clicked LOGIN button in multi-session dialog (via JavaScript, method: ${jsClickResult.method})`);
+            buttonClicked = true;
+            
+            // Wait for login to complete after clicking
+            await humanPause(8000, 10000);
+            
+            // Wait for navigation or page change that indicates login completed
+            try {
+              await page.waitForURL((url) => !url.href.includes('/user/login'), { timeout: 20000 }).catch(() => null);
+              await humanPause(3000, 4000);
+              await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+              await humanPause(2000, 3000);
+            } catch (e) {
+              // Continue
+            }
           } else {
-            console.log('⚠️  Could not find LOGIN button, trying to press Enter...');
-            await page.keyboard.press('Enter');
-            await humanPause(1500, 2000);
+            console.log(`⚠️  Could not click LOGIN button: ${jsClickResult.method}`);
           }
+        } else {
+          console.log('ℹ️  No multi-session dialog detected');
         }
       } catch (e) {
         // No dialog, continue
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        console.log(`ℹ️  Error checking for multi-session dialog: ${errorMsg}`);
       }
       
-      // Final check for successful login
+      // Wait longer after dialog click to ensure login completes
+      if (dialogVisible && buttonClicked) {
+        console.log('⏳ Waiting for login to complete after dialog click...');
+        // Wait longer for the login process to complete and session cookies to be set
+        await humanPause(10000, 12000);
+        
+        // Wait for network to be idle (all API calls completed)
+        try {
+          await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => null);
+        } catch (e) {
+          // Continue even if networkidle times out
+        }
+        
+        // Wait a bit more for cookies to be set
+        await humanPause(3000, 4000);
+      }
+      
+      // Final check for successful login - wait longer and verify                                                        
+      let loginSuccess = false;
+      
+      // Wait a bit more for the page to fully render after login
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // Re-check if we're still on login page - if so, navigate to homepage
+      const currentUrlAfterWait = page.url();
+      if (currentUrlAfterWait.includes('/user/login')) {
+        console.log('⚠️  Still on login page after dialog click, navigating to homepage...');
+        await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await humanPause(3000, 4000);
+      }
+      
       try {
-        await page.locator('[href="/bookmarks"]').waitFor({ state: 'visible', timeout: 10000 });
-        console.log('✅ Login successful!');
+        // Try multiple selectors for bookmark link
+        const bookmarkSelectors = [
+          '[href="/bookmarks"]',
+          'a[href*="/bookmarks"]',
+          '[href="/bookmarks"]',
+          'a:has-text("Bookmarks")',
+          'a:has-text("Bookmark")'
+        ];
+        
+        let bookmarkFound = false;
+        for (const selector of bookmarkSelectors) {
+          try {
+            const bookmarkLink = page.locator(selector);
+            const isVisible = await bookmarkLink.isVisible({ timeout: 5000 }).catch(() => false);
+            if (isVisible) {
+              console.log(`✅ Login successful! Bookmark link found with selector: ${selector}`);                         
+              loginSuccess = true;
+              bookmarkFound = true;
+              break;
+            }
+          } catch (e) {
+            // Try next selector
+            continue;
+          }
+        }
+        
+        if (!bookmarkFound) {
+          // Check if we're on a logged-in page (URL might have changed)
+          const currentUrl = page.url();
+          if (currentUrl.includes('/user/') || currentUrl.includes('/bookmarks') || !currentUrl.includes('/user/login')) {
+            console.log('✅ Login appears successful (URL indicates logged-in state)');                                   
+            loginSuccess = true;
+          }
+        }
       } catch (e) {
-        console.log('⚠️  Login check timed out, proceeding anyway...');
+        // Continue to cookie check
+      }
+      
+      if (!loginSuccess) {
+        // Try alternative check - look for any session cookie or user profile indicator                                  
+        const cookies = await context.cookies();
+        const hasSessionCookie = cookies.some(c => 
+          c.name.includes('session') || 
+          c.name.includes('auth') || 
+          c.name.includes('token') ||
+          c.name.includes('user') ||
+          c.name.includes('edgeprop')
+        );
+        
+        if (hasSessionCookie) {
+          console.log('✅ Login appears successful (session cookie found)');                                              
+          loginSuccess = true;
+        } else {
+          // Check if page has any user-specific content
+          const pageText = await page.textContent('body').catch(() => '') || '';
+          if (pageText.includes('Bookmarks') || pageText.includes('Logout') || pageText.includes('Profile')) {
+            console.log('✅ Login appears successful (user-specific content found on page)');                             
+            loginSuccess = true;
+          } else {
+            console.error('❌ Login check failed - no bookmark link, no session cookies, and no user content found!');    
+            console.error('   This usually means the login credentials are incorrect or the login flow has changed.');      
+            throw new Error('Login verification failed - cannot proceed without valid authentication');                     
+          }
+        }
+      }
+      
+      if (!loginSuccess) {
+        throw new Error('Login verification failed');
       }
       
       await humanPause(1000, 1500);
@@ -164,7 +351,45 @@ async function authenticateEdgeProp() {
     console.log('📁 Created storage directory');
   }
 
-  // Save the storage state
+  // Save the storage state - navigate to homepage first to ensure all cookies are set
+  console.log('💾 Saving authentication state...');
+  
+  // Navigate to homepage to ensure all cookies are properly set
+  await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 30000 });
+  await humanPause(3000, 4000);
+  
+  // Verify we're still logged in before saving - check multiple indicators
+  const finalBookmarkCheck = page.locator('[href*="/bookmarks"], a:has-text("Bookmarks")').first();
+  const stillLoggedIn = await finalBookmarkCheck.isVisible({ timeout: 5000 }).catch(() => false);
+  
+  // Also check for session cookies
+  const allCookies = await context.cookies();
+  const hasSessionCookie = allCookies.some(c => 
+    c.name.includes('session') || 
+    c.name.includes('auth') || 
+    c.name.includes('token') ||
+    c.name.includes('user') ||
+    (c.name.includes('edgeprop') && !c.name.startsWith('_')) // Exclude analytics cookies
+  );
+  
+  console.log(`🍪 Found ${allCookies.length} cookies`);
+  console.log('   Cookie names:', allCookies.map(c => c.name).join(', '));
+  
+  if (!stillLoggedIn && !hasSessionCookie) {
+    console.error('⚠️  Warning: Not logged in when trying to save state!');
+    console.error('   No bookmark link found and no session cookies detected.');
+    console.error('   Only analytics cookies found - authentication may have failed.');
+    
+    // Try one more time - wait a bit and check again
+    await humanPause(5000, 6000);
+    const finalCheck = page.locator('[href*="/bookmarks"], a:has-text("Bookmarks")').first();
+    const finalLoggedIn = await finalCheck.isVisible({ timeout: 5000 }).catch(() => false);
+    
+    if (!finalLoggedIn) {
+      throw new Error('Authentication failed - no session cookies or login indicators found after dialog click');
+    }
+  }
+  
   const stateFilePath = path.join(storagePath, 'ep.state.json');
   await context.storageState({ path: stateFilePath });
   

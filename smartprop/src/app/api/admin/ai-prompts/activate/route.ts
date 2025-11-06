@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../../../../../workers/supa';
 
 /**
  * POST /api/admin/ai-prompts/activate

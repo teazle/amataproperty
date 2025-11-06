@@ -321,6 +321,25 @@ export async function scrapeEdgePropMCP(
           waitUntil: 'domcontentloaded', 
           timeout: 45000 
         });
+        
+        // Check if we were redirected to special-feature page
+        const currentUrl = page.url();
+        if (currentUrl.includes('/property-news/special-feature')) {
+          console.log(`⚠️ Redirected to special-feature page during navigation! Original URL: ${url}, Current URL: ${currentUrl}`);
+          console.log(`   This might be due to Cloudflare or rate limiting. Skipping this page.`);
+          onProgress({
+            currentPage: pageNum,
+            totalPages: maxPages,
+            currentArticle: 0,
+            articlesDiscovered: seenIds.size,
+            articlesScraped: allArticles.length,
+            articlesFailed,
+            status: 'running',
+            message: `Redirected to special-feature page, skipping page ${pageNum}`
+          });
+          continue; // Skip this page
+        }
+        
       console.log(`✅ Navigation completed for page ${pageNum}`);
       
       // Enhanced Cloudflare detection and bypass - comprehensive approach
@@ -332,11 +351,30 @@ export async function scrapeEdgePropMCP(
         const pageTitle = await page.title().catch(() => '');
         
         // Enhanced Cloudflare detection patterns - more specific to avoid false positives
+        // Also check for redirect to special-feature (might be Cloudflare redirect)
+        const currentUrl = page.url();
+        if (currentUrl.includes('/property-news/special-feature')) {
+          console.log(`⚠️ Redirected to special-feature page during Cloudflare check! Skipping page ${pageNum}.`);
+          onProgress({
+            currentPage: pageNum,
+            totalPages: maxPages,
+            currentArticle: 0,
+            articlesDiscovered: seenIds.size,
+            articlesScraped: allArticles.length,
+            articlesFailed,
+            status: 'running',
+            message: `Redirected to special-feature page, skipping page ${pageNum}`
+          });
+          continue; // Skip this page
+        }
+        
         const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('Just a moment')) ||
           (pageContent.includes('checking-your-browser') && pageContent.includes('Cloudflare')) ||
           (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
           pageContent.includes('cf-challenge-running') ||
           pageContent.includes('Verifying you are human') ||
+          pageContent.includes('Verify you are human') ||
+          pageContent.includes('verify you are human') ||
           (pageContent.includes('Please enable JavaScript') && pageContent.includes('Cloudflare')) ||
           page.url().includes('challenge-platform.cloudflare.com');
 
@@ -624,7 +662,7 @@ export async function scrapeEdgePropMCP(
         // Strategy 3: Look for divs that contain article links and images
         const linkContainers = Array.from(document.querySelectorAll('div')).filter(div => {
           // Look for divs that contain an article link and an image, likely article cards
-          const hasArticleLink = div.querySelector('a[href*="/property-news/"]:not([href*="/property-news-search"]):not([href*="/property-news/latest"]):not([href*="/property-news/news"]):not([href*="/property-news/in-depth"])');
+          const hasArticleLink = div.querySelector('a[href*="/property-news/"]:not([href*="/property-news-search"]):not([href*="/property-news/latest"]):not([href*="/property-news/news"]):not([href*="/property-news/in-depth"]):not([href*="/property-news/special-feature"]):not([href*="/property-news/showcase"]):not([href*="/property-news/deal-watch"]):not([href*="/property-news/international"]):not([href*="/property-news/personality"]):not([href*="/property-news/mandarin"])');
           const hasImage = div.querySelector('img');
           const href = hasArticleLink?.getAttribute('href');
           // Only count if it's a proper article URL (not a category page)
@@ -678,6 +716,7 @@ export async function scrapeEdgePropMCP(
                    !href.includes('/property-news/international') &&
                    !href.includes('/property-news/personality') &&
                    !href.includes('/property-news/mandarin') &&
+                   !href.includes('/property-news/special-feature') &&
                    // For relative URLs: ['', 'property-news', 'article-slug'] = 3 segments minimum
                    // For absolute URLs: ['https:', '', 'www.edgeprop.sg', 'property-news', 'article-slug'] = 5 segments minimum
                    ((isRelativeUrl && pathSegments >= 3) || (isAbsoluteUrl && pathSegments >= 5));
@@ -847,6 +886,26 @@ export async function scrapeEdgePropMCP(
                 waitUntil: 'domcontentloaded', // Use domcontentloaded instead of networkidle for faster navigation
                 timeout: 60000
               });
+              
+              // Check if we were redirected to special-feature page
+              const currentUrl = page.url();
+              if (currentUrl.includes('/property-news/special-feature')) {
+                console.log(`⚠️ Redirected to special-feature page! Original URL: ${articleUrl}, Current URL: ${currentUrl}`);
+                console.log(`   This might be due to Cloudflare or rate limiting. Skipping this article.`);
+                articlesFailed++;
+                onProgress({
+                  currentPage: pageNum,
+                  totalPages: maxPages,
+                  currentArticle: i + 1,
+                  articlesDiscovered: seenIds.size,
+                  articlesScraped: allArticles.length,
+                  articlesFailed,
+                  status: 'running',
+                  message: `Redirected to special-feature: ${article.title}`
+                });
+                continue; // Skip this article
+              }
+              
             console.log(`✅ Successfully navigated to: ${article.title}`);
             } catch (navError: unknown) {
               console.log(`⚠️ Navigation timeout (may be Cloudflare), waiting and retrying...`);
@@ -859,13 +918,36 @@ export async function scrapeEdgePropMCP(
               const pageContent = await page.content().catch(() => '');
               const pageTitle = await page.title().catch(() => '');
               const pageText = await page.textContent('body').catch(() => '') || '';
+              const currentUrl = page.url();
               
-              // More specific Cloudflare detection for article pages
+              // Check again for redirect to special-feature (might happen after initial load)
+              if (currentUrl.includes('/property-news/special-feature')) {
+                console.log(`⚠️ Redirected to special-feature page during Cloudflare check! Skipping article.`);
+                articlesFailed++;
+                onProgress({
+                  currentPage: pageNum,
+                  totalPages: maxPages,
+                  currentArticle: i + 1,
+                  articlesDiscovered: seenIds.size,
+                  articlesScraped: allArticles.length,
+                  articlesFailed,
+                  status: 'running',
+                  message: `Redirected to special-feature: ${article.title}`
+                });
+                continue; // Skip this article
+              }
+              
+              // More specific Cloudflare detection for article pages - including "Verify you are human"
               const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('cloudflare')) || 
                                   (pageContent.includes('checking-your-browser') && pageContent.includes('cloudflare')) ||
                                   (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
                                   pageContent.includes('cf-challenge-running') ||
-                                  page.url().includes('challenge-platform.cloudflare.com');
+                                  page.url().includes('challenge-platform.cloudflare.com') ||
+                                  pageText.includes('Verify you are human') ||
+                                  pageText.includes('verify you are human') ||
+                                  pageContent.includes('Verify you are human') ||
+                                  pageContent.includes('verify you are human') ||
+                                  (pageText.includes('completing the action below') && pageContent.includes('checkbox'));
               
               if (!isCloudflare) {
                 // Verify actual content is loaded with better selectors
@@ -972,47 +1054,126 @@ export async function scrapeEdgePropMCP(
                             console.log(`   📊 Frame elements: ${frameContent.checkboxes} checkboxes, ${frameContent.labels} labels, ${frameContent.buttons} buttons`);
                           }
                           
-                          // Try multiple approaches to find and click checkbox - wait longer for each
-                          const checkboxSelectors = [
-                            'input[type="checkbox"]',
-                            'input[type="checkbox"]#challenge-form',
-                            'input[id*="challenge"]',
-                            'input[name*="challenge"]',
-                            'input[class*="checkbox"]',
-                            '#cf-challenge-checkbox',
-                            '.cb-lb input',
-                            '.cb-lb',
-                            'label[for*="challenge"] input',
-                            'label[for*="challenge"]'
-                          ];
-                          
-                          for (const selector of checkboxSelectors) {
-                            try {
-                              console.log(`   🔍 Trying selector: ${selector}`);
-                              await frame.waitForSelector(selector, { timeout: 5000, state: 'visible' }).catch(() => null);
-                              const checkbox = await frame.$(selector);
-                              if (checkbox) {
-                                const isVisible = await checkbox.isVisible().catch(() => false);
-                                const isEnabled = await checkbox.isEnabled().catch(() => true);
-                                const boundingBox = await checkbox.boundingBox().catch(() => null);
-                                console.log(`   📍 Element found: visible=${isVisible}, enabled=${isEnabled}, hasBox=${!!boundingBox}`);
-                                
-                                if ((isVisible || boundingBox) && isEnabled) {
-                                  // Scroll into view first
-                                  await checkbox.scrollIntoViewIfNeeded().catch(() => null);
-                                  await frame.waitForTimeout(1000);
-                                  
-                                  console.log(`   ✅ Found checkbox in iframe with selector: ${selector}`);
-                                  await checkbox.click({ timeout: 5000, force: false });
-                                  clicked = true;
-                                  console.log(`   ✅ Clicked checkbox in iframe`);
-                                  await page.waitForTimeout(10000); // Wait longer for verification
-                                  break;
+                          // First, try to find "Verify you are human" checkbox using JavaScript evaluation
+                          try {
+                            const verifyCheckboxInfo = await frame.evaluate(() => {
+                              // Find labels containing "Verify you are human" or similar text
+                              const labels = Array.from(document.querySelectorAll('label'));
+                              for (const label of labels) {
+                                const text = label.textContent?.toLowerCase() || '';
+                                if ((text.includes('verify') && text.includes('human')) || text.includes('completing the action')) {
+                                  // Try to find checkbox in the label or associated with it
+                                  const checkbox = label.querySelector('input[type="checkbox"]') || 
+                                                 document.querySelector(`input[type="checkbox"][id="${label.getAttribute('for')}"]`);
+                                  if (checkbox) {
+                                    return { 
+                                      found: true, 
+                                      id: checkbox.id || '',
+                                      hasId: !!checkbox.id,
+                                      selector: checkbox.id ? `input[type="checkbox"][id="${checkbox.id}"]` : null
+                                    };
+                                  }
+                                  // If label wraps checkbox
+                                  const wrappedCheckbox = label.querySelector('input[type="checkbox"]');
+                                  if (wrappedCheckbox) {
+                                    return { found: true, id: '', hasId: false, selector: null };
+                                  }
                                 }
                               }
+                              // Also try finding any checkbox near "Verify" or "human" text
+                              const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                              for (const checkbox of allCheckboxes) {
+                                const parent = checkbox.closest('label, div, form');
+                                if (parent) {
+                                  const text = parent.textContent?.toLowerCase() || '';
+                                  if (text.includes('verify') || text.includes('human') || text.includes('completing the action')) {
+                                    return { 
+                                      found: true, 
+                                      id: checkbox.id || '',
+                                      hasId: !!checkbox.id,
+                                      selector: checkbox.id ? `input[type="checkbox"][id="${checkbox.id}"]` : null
+                                    };
+                                  }
+                                }
+                              }
+                              return { found: false, id: '', hasId: false, selector: null };
+                            });
+                            
+                            if (verifyCheckboxInfo.found) {
+                              let checkboxElement = null;
+                              if (verifyCheckboxInfo.hasId && verifyCheckboxInfo.selector) {
+                                checkboxElement = await frame.$(verifyCheckboxInfo.selector).catch(() => null);
+                              } else {
+                                // Fallback: find any checkbox in the iframe
+                                checkboxElement = await frame.$('input[type="checkbox"]').catch(() => null);
+                              }
+                              
+                              if (checkboxElement) {
+                                const isVisible = await checkboxElement.isVisible().catch(() => false);
+                                const isEnabled = await checkboxElement.isEnabled().catch(() => true);
+                                if (isVisible && isEnabled) {
+                                  await checkboxElement.scrollIntoViewIfNeeded().catch(() => null);
+                                  await frame.waitForTimeout(1000);
+                                  console.log(`   ✅ Found "Verify you are human" checkbox in iframe`);
+                                  await checkboxElement.click({ timeout: 5000, force: false });
+                                  clicked = true;
+                                  console.log(`   ✅ Clicked "Verify you are human" checkbox in iframe`);
+                                  await page.waitForTimeout(10000);
+                                }
+                              }
+                            }
+                          } catch (e: unknown) {
+                            console.log(`   ⚠️ Error finding "Verify you are human" checkbox in iframe: ${e}`);
+                          }
+                          
+                          // Try multiple approaches to find and click checkbox - wait longer for each
+                          // Enhanced selectors to catch "Verify you are human" checkbox
+                          if (!clicked) {
+                            const checkboxSelectors = [
+                              'input[type="checkbox"]',
+                              'input[type="checkbox"]#challenge-form',
+                              'input[id*="challenge"]',
+                              'input[name*="challenge"]',
+                              'input[class*="checkbox"]',
+                              '#cf-challenge-checkbox',
+                              '.cb-lb input',
+                              '.cb-lb',
+                              'label[for*="challenge"] input',
+                              'label[for*="challenge"]',
+                              '[role="checkbox"]',
+                              '.ctp-checkbox-label',
+                              '[data-ray]',
+                              'label[class*="checkbox"]'
+                            ];
+                            
+                            for (const selector of checkboxSelectors) {
+                              try {
+                                console.log(`   🔍 Trying selector: ${selector}`);
+                                await frame.waitForSelector(selector, { timeout: 5000, state: 'visible' }).catch(() => null);
+                                const checkbox = await frame.$(selector);
+                                if (checkbox) {
+                                  const isVisible = await checkbox.isVisible().catch(() => false);
+                                  const isEnabled = await checkbox.isEnabled().catch(() => true);
+                                  const boundingBox = await checkbox.boundingBox().catch(() => null);
+                                  console.log(`   📍 Element found: visible=${isVisible}, enabled=${isEnabled}, hasBox=${!!boundingBox}`);
+                                  
+                                  if ((isVisible || boundingBox) && isEnabled) {
+                                    // Scroll into view first
+                                    await checkbox.scrollIntoViewIfNeeded().catch(() => null);
+                                    await frame.waitForTimeout(1000);
+                                    
+                                    console.log(`   ✅ Found checkbox in iframe with selector: ${selector}`);
+                                    await checkbox.click({ timeout: 5000, force: false });
+                                    clicked = true;
+                                    console.log(`   ✅ Clicked checkbox in iframe`);
+                                    await page.waitForTimeout(10000); // Wait longer for verification
+                                    break;
+                                  }
+                                }
               } catch (e: unknown) {
-                              console.log(`   ⚠️ Selector ${selector} failed: ${e}`);
-                              // Try next selector
+                                console.log(`   ⚠️ Selector ${selector} failed: ${e}`);
+                                // Try next selector
+                              }
                             }
                           }
                           
@@ -1055,34 +1216,93 @@ export async function scrapeEdgePropMCP(
                   
                   // If no iframe checkbox found, try direct page elements
                   if (!clicked) {
-                    const cloudflareSelectors = [
-                      'input[type="checkbox"]',
-                      'label[for*="challenge"]',
-                      '.cb-lb',
-                      '#challenge-form input[type="checkbox"]',
-                      'label[for*="cf-"]',
-                      '.ctp-checkbox-label',
-                      '[data-ray]',
-                      'label[class*="checkbox"]'
-                    ];
-                    
-                    for (const selector of cloudflareSelectors) {
-                      try {
-                        await page.waitForSelector(selector, { timeout: 2000 }).catch(() => null);
-                        const element = await page.$(selector);
+                    // First, try to find checkbox associated with "Verify you are human" text using evaluate
+                    try {
+                      const verifyCheckbox = await page.evaluate(() => {
+                        // Find labels containing "Verify you are human" or similar text
+                        const labels = Array.from(document.querySelectorAll('label'));
+                        for (const label of labels) {
+                          const text = label.textContent?.toLowerCase() || '';
+                          if (text.includes('verify') && text.includes('human')) {
+                            // Try to find checkbox in the label or associated with it
+                            const checkbox = label.querySelector('input[type="checkbox"]') || 
+                                           document.querySelector(`input[type="checkbox"][id="${label.getAttribute('for')}"]`);
+                            if (checkbox) {
+                              return { found: true, selector: `input[type="checkbox"][id="${checkbox.id}"]` };
+                            }
+                            // If label itself is clickable (wraps checkbox)
+                            if (label.querySelector('input[type="checkbox"]')) {
+                              return { found: true, selector: 'label' };
+                            }
+                          }
+                        }
+                        // Also try finding any checkbox near "Verify" or "human" text
+                        const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                        for (const checkbox of allCheckboxes) {
+                          const parent = checkbox.closest('label, div, form');
+                          if (parent) {
+                            const text = parent.textContent?.toLowerCase() || '';
+                            if (text.includes('verify') || text.includes('human') || text.includes('completing the action')) {
+                              return { found: true, selector: `input[type="checkbox"][id="${checkbox.id}"]` };
+                            }
+                          }
+                        }
+                        return { found: false, selector: null };
+                      });
+                      
+                      if (verifyCheckbox.found && verifyCheckbox.selector) {
+                        console.log(`   ✅ Found "Verify you are human" checkbox using selector: ${verifyCheckbox.selector}`);
+                        const element = await page.$(verifyCheckbox.selector).catch(() => null);
                         if (element) {
                           const isVisible = await element.isVisible().catch(() => false);
                           if (isVisible) {
-                            console.log(`   ✅ Found Cloudflare element: ${selector}`);
-                            await element.click({ timeout: 3000 });
+                            await element.scrollIntoViewIfNeeded().catch(() => null);
+                            await page.waitForTimeout(1000);
+                            await element.click({ timeout: 5000 });
                             clicked = true;
-                            console.log(`   ✅ Clicked Cloudflare verification`);
-                            await page.waitForTimeout(5000); // Wait for verification to process
-                            break;
+                            console.log(`   ✅ Clicked "Verify you are human" checkbox`);
+                            await page.waitForTimeout(10000); // Wait longer for verification
                           }
                         }
-                      } catch (e: unknown) {
-                        // Try next selector
+                      }
+                    } catch (e: unknown) {
+                      console.log(`   ⚠️ Error finding "Verify you are human" checkbox: ${e}`);
+                    }
+                    
+                    // Fallback to standard Cloudflare selectors
+                    if (!clicked) {
+                      const cloudflareSelectors = [
+                        'input[type="checkbox"]',
+                        'label[for*="challenge"]',
+                        '.cb-lb',
+                        '#challenge-form input[type="checkbox"]',
+                        'label[for*="cf-"]',
+                        '.ctp-checkbox-label',
+                        '[data-ray]',
+                        'label[class*="checkbox"]',
+                        '[role="checkbox"]'
+                      ];
+                      
+                      for (const selector of cloudflareSelectors) {
+                        try {
+                          await page.waitForSelector(selector, { timeout: 2000 }).catch(() => null);
+                          const element = await page.$(selector);
+                          if (element) {
+                            const isVisible = await element.isVisible().catch(() => false);
+                            if (isVisible) {
+                              console.log(`   ✅ Found Cloudflare element: ${selector}`);
+                              await element.scrollIntoViewIfNeeded().catch(() => null);
+                              await page.waitForTimeout(1000);
+                              await element.click({ timeout: 3000 });
+                              clicked = true;
+                              console.log(`   ✅ Clicked Cloudflare verification`);
+                              await page.waitForTimeout(5000); // Wait for verification to process
+                              break;
+                            }
+                          }
+                        } catch (e: unknown) {
+                          // Try next selector
+                        }
                       }
                     }
                   }

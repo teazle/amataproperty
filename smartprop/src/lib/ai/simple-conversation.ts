@@ -8,7 +8,7 @@
  * 4. No complex async processing - just simple, reliable flow
  */
 
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../../workers/supa';
 import { sendAutoReply } from './conversation';
 
 export interface SimpleConversationState {

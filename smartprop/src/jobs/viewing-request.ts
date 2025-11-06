@@ -5,7 +5,7 @@
  * for newly scraped listings that haven't been contacted yet.
  */
 
-import { getSupabaseClient } from '@/workers/supa';
+import { getSupabaseClient } from '../workers/supa';
 import { sendViewingRequest } from '@/lib/wa/waha';
 import { tryAdvisoryLock, advisoryUnlock } from './lock';
 

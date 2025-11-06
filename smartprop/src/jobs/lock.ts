@@ -3,13 +3,7 @@
  * Provides wrapper functions for pg_try_advisory_lock and pg_advisory_unlock
  */
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
-
-// Create a client with service role key for admin operations
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { getSupabaseClient } from '../workers/supa';
 
 /**
  * Attempts to acquire an advisory lock
@@ -18,6 +12,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
  */
 export async function tryAdvisoryLock(key: number): Promise<boolean> {
   try {
+    const supabase = getSupabaseClient();
     const { data, error } = await supabase.rpc('pg_try_advisory_lock', { key });
     
     if (error) {
@@ -39,6 +34,7 @@ export async function tryAdvisoryLock(key: number): Promise<boolean> {
  */
 export async function advisoryUnlock(key: number): Promise<boolean> {
   try {
+    const supabase = getSupabaseClient();
     const { data, error } = await supabase.rpc('pg_advisory_unlock', { key });
     
     if (error) {

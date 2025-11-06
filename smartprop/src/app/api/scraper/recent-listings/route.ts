@@ -1,8 +1,5 @@
 import { NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
+import { getSupabaseClient } from '../../../../workers/supa';
 
 /**
  * Server-Sent Events endpoint for real-time recent listings updates
@@ -16,13 +13,29 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
  */
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
+  const supabase = getSupabaseClient();
 
-  const stream = new ReadableStream({
+    const stream = new ReadableStream({
     async start(controller) {
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      let isClosed = false;
+      // Use supabase client created above
+
+      // Send keepalive message every 30 seconds to keep connection alive
+      const keepaliveInterval = setInterval(() => {
+        if (!isClosed) {
+          try {
+            controller.enqueue(encoder.encode(`: keepalive\n\n`));
+          } catch (error) {
+            console.error('Error sending keepalive:', error);
+            isClosed = true;
+          }
+        }
+      }, 30000);
 
       // Send recent listings
       const sendRecentListings = async () => {
+        if (isClosed) return;
+        
         try {
           const { data: listings, error } = await supabase
             .from('listings')
@@ -44,7 +57,9 @@ export async function GET(request: NextRequest) {
 
           if (error) {
             console.error('Error fetching recent listings:', error);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: error.message })}\n\n`));
+            if (!isClosed) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: error.message })}\n\n`));
+            }
             return;
           }
 
@@ -53,22 +68,43 @@ export async function GET(request: NextRequest) {
             listings: listings || []
           };
 
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(listingsData)}\n\n`));
+          if (!isClosed) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(listingsData)}\n\n`));
+          }
 
         } catch (error: any) {
-    console.error('Error fetching recent listings:', error);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`));
+          console.error('Error fetching recent listings:', error);
+          if (!isClosed) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(error?.message || error) })}\n\n`));
+          }
         }
       };
 
       // Send listings every 5 seconds
-      await sendRecentListings();
-      const interval = setInterval(sendRecentListings, 5000);
+      try {
+        await sendRecentListings();
+      } catch (error) {
+        console.error('Error in initial sendRecentListings:', error);
+      }
+      
+      const interval = setInterval(() => {
+        if (!isClosed) {
+          sendRecentListings().catch((error) => {
+            console.error('Error in periodic sendRecentListings:', error);
+          });
+        }
+      }, 5000);
 
       // Cleanup on disconnect
       request.signal.addEventListener('abort', () => {
+        isClosed = true;
         clearInterval(interval);
-        controller.close();
+        clearInterval(keepaliveInterval);
+        try {
+          controller.close();
+        } catch (error) {
+          // Ignore errors on close
+        }
       });
     }
   });

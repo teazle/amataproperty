@@ -24,7 +24,7 @@
     "test:extraction": "bun scripts/test-card-extraction.ts",
     "test:card-info": "bun scripts/test-card-info.ts",
     "test:single": "bun scripts/test-single-property.ts",
-    "worker": "bun worker.ts"
+    "worker": "bun scripts/outreach-worker.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agent-runtime": "^3.922.0",
@@ -55,6 +55,7 @@
     "next": "15.5.4",
     "next-themes": "^0.4.6",
     "node-cron": "^4.2.1",
+    "undici": "^6.19.8",
     "pdf-lib": "^1.17.1",
     "playwright": "^1.56.1",
     "playwright-ghost": "^0.15.0",

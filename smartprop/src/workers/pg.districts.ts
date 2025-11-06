@@ -722,7 +722,7 @@ async function scrapePropertyGuruByDistrict() {
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
             await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
-            await humanPause(8000, 12000); // Give Cloudflare more time to auto-resolve (datacenter IPs need longer)
+            await humanPause(15000, 20000); // Give Cloudflare more time to auto-resolve (datacenter IPs need much longer)
             
             // Check for Cloudflare using EdgeProp's approach: check for actual errors AND content
             const pageText = await page.textContent('body').catch(() => null) || '';
@@ -750,9 +750,9 @@ async function scrapePropertyGuruByDistrict() {
             if (hasActualError && !hasPropertyContent) {
               navRetryCount++;
               if (navRetryCount < maxNavRetries) {
-                const waitTime = 5000 * navRetryCount; // Exponential backoff: 5s, 10s, 15s
+                const waitTime = 10000 * navRetryCount; // Longer exponential backoff: 10s, 20s, 30s
                 console.log(`   ⚠️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), waiting ${waitTime/1000}s and retrying...`);
-                await humanPause(waitTime, waitTime + 2000);
+                await humanPause(waitTime, waitTime + 5000);
                 continue;
               } else {
                 console.log(`   ❌ Cloudflare persists after ${maxNavRetries} attempts. Skipping this page.`);

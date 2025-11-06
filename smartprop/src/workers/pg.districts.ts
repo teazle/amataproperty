@@ -30,23 +30,69 @@ import { supabase } from './supa.js';
 
 // Flaresolverr API endpoint (running on EC2)
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1';
+let flaresolverrSession: string | null = null;
 
-// Helper function to solve Cloudflare challenge using Flaresolverr
-async function solveCloudflareWithFlaresolverr(url: string): Promise<{ cookies: any[], userAgent: string } | null> {
+// Helper function to create a Flaresolverr session
+async function createFlaresolverrSession(): Promise<string | null> {
   try {
-    console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
-    
     const response = await fetch(FLARESOLVERR_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        cmd: 'request.get',
-        url: url,
-        maxTimeout: 120000,
-        returnOnlyCookies: false,
+        cmd: 'sessions.create',
       }),
+    });
+
+    if (!response.ok) {
+      console.log(`   ⚠️  Failed to create Flaresolverr session: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.status === 'ok' && data.session) {
+      console.log(`   ✅ Created Flaresolverr session: ${data.session}`);
+      return data.session;
+    }
+    return null;
+  } catch (error) {
+    console.log(`   ⚠️  Error creating Flaresolverr session:`, error);
+    return null;
+  }
+}
+
+// Helper function to solve Cloudflare challenge using Flaresolverr
+async function solveCloudflareWithFlaresolverr(url: string, useSession: boolean = true): Promise<{ cookies: any[], userAgent: string } | null> {
+  try {
+    console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
+    
+    // Use existing session or create new one
+    let session = flaresolverrSession;
+    if (!session && useSession) {
+      session = await createFlaresolverrSession();
+      if (session) {
+        flaresolverrSession = session;
+      }
+    }
+    
+    const requestBody: any = {
+      cmd: 'request.get',
+      url: url,
+      maxTimeout: 120000,
+      returnOnlyCookies: false,
+    };
+    
+    if (session) {
+      requestBody.session = session;
+    }
+    
+    const response = await fetch(FLARESOLVERR_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {

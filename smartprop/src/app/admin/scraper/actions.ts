@@ -445,7 +445,7 @@ export async function stopScraperJob() {
     // Find active jobs
     const { data: activeJobs } = await supabase
       .from('scraper_jobs')
-      .select('id, platform, pid')
+      .select('id, platform')
       .in('status', ['queued', 'running'])
       .limit(1);
 
@@ -458,13 +458,25 @@ export async function stopScraperJob() {
 
     const job = activeJobs[0];
 
-    // Kill the process if we have a PID
-    if (job.pid) {
+    // Try to get PID from lock file and kill the process
+    let pid: number | null = null;
+    try {
+      const lockFile = path.join(process.cwd(), 'storage', 
+        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      if (fs.existsSync(lockFile)) {
+        const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+        pid = lockData.pid || null;
+      }
+    } catch (error) {
+      console.log(`Could not read lock file for job ${job.id}:`, error);
+    }
+
+    if (pid && typeof pid === 'number' && pid > 0) {
       try {
-        process.kill(job.pid, 'SIGTERM');
-        console.log(`Killed process ${job.pid} for job ${job.id}`);
+        process.kill(pid, 'SIGTERM');
+        console.log(`Killed process ${pid} for job ${job.id}`);
       } catch (killError) {
-        console.log(`Process ${job.pid} may have already stopped`);
+        console.log(`Process ${pid} may have already stopped`);
       }
     }
 
@@ -569,9 +581,10 @@ export async function deleteScraperJob(jobId: string) {
 export async function forceResetStuckJobs() {
   try {
     // Find all stuck jobs
+    // Note: pid column may not exist in database, so we'll get it from lock files instead
     const { data: stuckJobs, error: queryError } = await supabase
       .from('scraper_jobs')
-      .select('id, platform, pid')
+      .select('id, platform')
       .in('status', ['queued', 'running']);
 
     if (queryError) {
@@ -583,7 +596,7 @@ export async function forceResetStuckJobs() {
 
     // Collect PIDs and verify processes are actually running
     for (const job of jobsToReset) {
-      let pid: number | null | undefined = job.pid || null;
+      let pid: number | null | undefined = null;
       
       // Try to get PID from lock file if not in database
       if (!pid) {
@@ -865,7 +878,7 @@ export async function diagnoseStuckJobs() {
     // Get all active jobs
     const { data: activeJobs, error: queryError } = await supabase
       .from('scraper_jobs')
-      .select('id, platform, status, started_at, pid, error_message')
+      .select('id, platform, status, started_at, error_message')
       .in('status', ['queued', 'running'])
       .order('started_at', { ascending: false });
 
@@ -880,7 +893,7 @@ export async function diagnoseStuckJobs() {
     const stuckJobs = [];
     
     for (const job of activeJobs || []) {
-      let pid: number | null | undefined = job.pid || null;
+      let pid: number | null | undefined = null;
       
       // Try to get PID from lock file
       try {
@@ -938,7 +951,7 @@ export async function forceFixStuckJob(jobId: string) {
     // First, get the job details
     const { data: job, error: jobError } = await supabase
       .from('scraper_jobs')
-      .select('id, platform, status, pid')
+      .select('id, platform, status')
       .eq('id', jobId)
       .single();
 
@@ -950,20 +963,19 @@ export async function forceFixStuckJob(jobId: string) {
     }
 
     // Kill process if PID exists and process is running
-    let pid: number | null | undefined = job.pid || null;
+    // Get PID from lock file (pid column doesn't exist in database)
+    let pid: number | null | undefined = null;
     
-    if (!pid) {
-      try {
-        const lockFile = path.join(process.cwd(), 'storage', 
-          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-        
-        if (fs.existsSync(lockFile)) {
-          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-          pid = lockData.pid || null;
-        }
-      } catch (error) {
-        // Ignore
+    try {
+      const lockFile = path.join(process.cwd(), 'storage', 
+        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      
+      if (fs.existsSync(lockFile)) {
+        const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+        pid = lockData.pid || null;
       }
+    } catch (error) {
+      // Ignore
     }
 
     if (pid && typeof pid === 'number' && pid > 0) {

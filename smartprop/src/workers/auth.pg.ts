@@ -91,8 +91,22 @@ async function authenticatePropertyGuru() {
   const page = await context.newPage();
 
   // Navigate to PropertyGuru login page
-  await page.goto('https://www.propertyguru.com.sg/login');
+  await page.goto('https://www.propertyguru.com.sg/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
   console.log('📄 Navigated to PropertyGuru login page');
+  
+  // Wait for Cloudflare to auto-resolve (datacenter IPs need more time)
+  await page.waitForTimeout(8000);
+  
+  // Check if page loaded successfully (check for login form OR property content)
+  const pageText = await page.textContent('body').catch(() => '') || '';
+  const hasLoginForm = await page.locator('input[type="email"], input[name="email"]').count().catch(() => 0) > 0;
+  const hasPropertyContent = pageText.length > 10000 || pageText.includes('Login') || pageText.includes('Sign in');
+  
+  if (!hasLoginForm && !hasPropertyContent) {
+    // Might be Cloudflare challenge - wait longer
+    console.log('⏳ Waiting for Cloudflare to resolve...');
+    await page.waitForTimeout(15000);
+  }
 
   if (isAutomated) {
     console.log('\n🤖 Performing automated login...');

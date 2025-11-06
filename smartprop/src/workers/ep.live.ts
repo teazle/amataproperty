@@ -9,9 +9,10 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
+import { getSupabaseClient } from './supa';
 
 // Helper function to re-authenticate if needed
-async function reAuthenticate() {
+async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to EdgeProp...');
   try {
     execSync('bun src/workers/auth.ep.ts', { 
@@ -20,8 +21,8 @@ async function reAuthenticate() {
     });
     console.log('✅ Re-authentication complete!\n');
     return true;
-  } catch (_error) {
-    console.error('❌ Re-authentication failed:', _error);
+  } catch (error) {
+    console.error('❌ Re-authentication failed:', error);
     return false;
   }
 }
@@ -90,22 +91,113 @@ async function scrapeEdgePropFinal() {
   console.log('🚀 Starting Final EdgeProp Scraper...');
   
   const maxPages = parseInt(process.env.EP_MAX_PAGES || '10'); // Default to 10 pages
+  const jobId = process.env.EP_JOB_ID;
   const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+  const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
   const hasStorageState = fs.existsSync(stateFilePath);
+  
+  // Check for existing lock file
+  if (fs.existsSync(lockFile)) {
+    const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+    const lockAge = Date.now() - new Date(lockData.startedAt).getTime();
+    
+    // If lock is older than 2 hours, assume stale and remove
+    if (lockAge > 2 * 60 * 60 * 1000) {
+      console.log('⚠️  Found stale lock file (>2h old), removing...');
+      fs.unlinkSync(lockFile);
+    } else {
+      console.error('❌ Another EdgeProp scraper is already running!');
+      console.error(`   Started: ${lockData.startedAt}`);
+      console.error('   Wait for it to complete or delete storage/ep-scraper.lock manually.');
+      process.exit(1);
+    }
+  }
   
   console.log(`📍 Districts: ALL`);
   console.log(`💰 Price range: $1,000,000 - $3,000,000`);
   console.log(`📄 Max pages: ${maxPages}`);
   console.log(`📁 Storage state: ${hasStorageState ? 'Found' : 'Not found'}`);
+  console.log(`🔧 Job ID: ${jobId || 'Not provided'}`);
+  
+  // Create initial lock file for progress tracking
+  const jobStatus = {
+    startedAt: new Date().toISOString(),
+    pid: process.pid,
+    status: 'running',
+    statusMessage: 'Starting scraper...',
+    progress: {
+      currentPage: 0,
+      totalPages: maxPages,
+      listingsProcessed: 0
+    },
+    stats: {
+      totalSuccess: 0,
+      totalSkippedNoPhone: 0,
+      totalErrors: 0
+    },
+    completedAt: undefined as string | undefined
+  };
+  
+  fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+  console.log('📝 Lock file created for progress tracking');
   
   // Simple approach: Re-authenticate before scraping to ensure fresh auth
   console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
-  await reAuthenticate();
+  const authSuccess = await reAuthenticate();
+  
+  if (!authSuccess) {
+    console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
+    // Update lock file and database
+    jobStatus.status = 'failed';
+    jobStatus.statusMessage = 'Re-authentication failed';
+    jobStatus.completedAt = new Date().toISOString();
+    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+    
+    if (jobId) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Re-authentication failed'
+          })
+          .eq('id', jobId);
+      } catch (error) {
+        console.error('Failed to update database:', error);
+      }
+    }
+    
+    process.exit(1);
+  }
   
   // Verify auth state exists after re-auth
   const updatedStateExists = fs.existsSync(stateFilePath);
   if (!updatedStateExists) {
     console.error('❌ Authentication state file not found after re-authentication!');
+    // Update lock file and database
+    jobStatus.status = 'failed';
+    jobStatus.statusMessage = 'Authentication state file not found';
+    jobStatus.completedAt = new Date().toISOString();
+    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+    
+    if (jobId) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Authentication state file not found'
+          })
+          .eq('id', jobId);
+      } catch (error) {
+        console.error('Failed to update database:', error);
+      }
+    }
+    
     process.exit(1);
   }
   
@@ -199,6 +291,44 @@ async function scrapeEdgePropFinal() {
   let totalSkipped = 0; // Track duplicates/already processed
   const startTime = Date.now();
   let currentPage = 1;
+  
+  // Helper function to update lock file and database
+  async function updateProgress(statusMessage?: string) {
+    try {
+      jobStatus.progress.currentPage = currentPage;
+      jobStatus.progress.listingsProcessed = totalProcessed;
+      jobStatus.stats.totalSuccess = totalSuccess;
+      jobStatus.stats.totalSkippedNoPhone = totalSkipped;
+      jobStatus.stats.totalErrors = totalErrors;
+      if (statusMessage) {
+        jobStatus.statusMessage = statusMessage;
+      }
+      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+      
+      // Update database job status periodically (every 5 listings or on page change)
+      if (jobId && (totalProcessed % 5 === 0 || statusMessage?.includes('PAGE'))) {
+        try {
+          const supabase = getSupabaseClient();
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'running',
+              listings_processed: totalProcessed,
+              progress: {
+                currentPage,
+                totalPages: maxPages,
+                listingsProcessed: totalProcessed
+              }
+            })
+            .eq('id', jobId);
+        } catch (error) {
+          console.error('Failed to update database job status:', error);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update progress:', error);
+    }
+  }
 
   const page = await context.newPage();
 
@@ -211,6 +341,9 @@ async function scrapeEdgePropFinal() {
       console.log(`\n${'='.repeat(60)}`);
       console.log(`📄 PAGE ${currentPage}/${maxPages}`);
       console.log(`${'='.repeat(60)}`);
+      
+      // Update progress for new page
+      await updateProgress(`Processing page ${currentPage}/${maxPages}`);
       
       const searchUrl = `${baseUrl}&page=${currentPage}`;
       
@@ -989,6 +1122,7 @@ async function scrapeEdgePropFinal() {
               
               console.log(`💾 Saved to database: ${agentName} (${cleanPhone})`);
               totalSuccess++;
+              await updateProgress();
             } catch (dbError: unknown) {
               // Check if it's a duplicate error (unique constraint violation)
               const errorObj = dbError as { message?: string; code?: string };
@@ -998,11 +1132,13 @@ async function scrapeEdgePropFinal() {
               } else {
                 console.error(`❌ Database error: ${dbError}`);
                 totalErrors++;
+                await updateProgress();
               }
             }
           } else {
             console.log(`⚠️  Missing agent info - Name: ${agentName || 'Not found'}, Phone: ${cleanPhone || 'Not found'}`);
             totalErrors++;
+            await updateProgress();
           }
           
           // Close popup (only if it's not the main page)
@@ -1024,12 +1160,14 @@ async function scrapeEdgePropFinal() {
           }
           
           totalProcessed++;
+          await updateProgress();
           
         } catch (error: unknown) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error(`❌ Error processing property ${i + 1}: ${errorMessage}`);
           totalErrors++;
           totalProcessed++;
+          await updateProgress();
           
           // Try to close popup if it's still open and navigate back
           try {
@@ -1084,10 +1222,41 @@ async function scrapeEdgePropFinal() {
       }
       
       currentPage++;
+      await updateProgress();
     } // End of while loop
     
   } catch (error: unknown) {
     console.error('❌ Fatal error during scraping:', error);
+    // Update lock file and database on error
+    jobStatus.status = 'failed';
+    jobStatus.statusMessage = error instanceof Error ? error.message : 'Fatal error during scraping';
+    jobStatus.completedAt = new Date().toISOString();
+    jobStatus.progress.currentPage = currentPage;
+    jobStatus.progress.listingsProcessed = totalProcessed;
+    jobStatus.stats.totalSuccess = totalSuccess;
+    jobStatus.stats.totalSkippedNoPhone = totalSkipped;
+    jobStatus.stats.totalErrors = totalErrors;
+    
+    if (fs.existsSync(lockFile)) {
+      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+    }
+    
+    if (jobId) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: error instanceof Error ? error.message : 'Fatal error during scraping',
+            listings_processed: totalProcessed
+          })
+          .eq('id', jobId);
+      } catch (dbError) {
+        console.error('Failed to update database on error:', dbError);
+      }
+    }
   } finally {
     await browser.close();
     
@@ -1105,6 +1274,48 @@ async function scrapeEdgePropFinal() {
     console.log(`   Avg time per listing: ${avgTimePerListing}s`);
     console.log(`   Success rate: ${totalProcessed > 0 ? Math.round((totalSuccess / totalProcessed) * 100) : 0}%`);
     console.log('='.repeat(60));
+    
+    // Mark job as completed and remove lock file
+    if (fs.existsSync(lockFile)) {
+      jobStatus.status = 'completed';
+      jobStatus.statusMessage = 'Scraping completed';
+      jobStatus.completedAt = new Date().toISOString();
+      jobStatus.progress.currentPage = currentPage;
+      jobStatus.progress.listingsProcessed = totalProcessed;
+      jobStatus.stats.totalSuccess = totalSuccess;
+      jobStatus.stats.totalSkippedNoPhone = totalSkipped;
+      jobStatus.stats.totalErrors = totalErrors;
+      
+      // Save completed status to a separate file
+      fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+      fs.unlinkSync(lockFile);
+      console.log('🔓 Lock file removed, job marked as completed\n');
+    }
+    
+    // Update database job status
+    if (jobId) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            listings_processed: totalProcessed,
+            stats: {
+              totalSuccess,
+              totalSkipped,
+              totalErrors,
+              totalTime,
+              avgTimePerListing
+            }
+          })
+          .eq('id', jobId);
+        console.log('✅ Database job status updated');
+      } catch (error) {
+        console.error('⚠️  Failed to update database job status:', error);
+      }
+    }
   }
 }
 

@@ -15,7 +15,8 @@ import { getSupabaseClient } from './supa';
 async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to EdgeProp...');
   try {
-    execSync('bun src/workers/auth.ep.ts', { 
+    // Use xvfb-run for headless environments (EC2)
+    execSync('xvfb-run -a bun src/workers/auth.ep.ts', { 
       cwd: process.cwd(),
       stdio: 'inherit' 
     });

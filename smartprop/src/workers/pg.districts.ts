@@ -28,6 +28,134 @@ import { upsertAgentAndListing } from './upsert.js';
 import { execSync, exec } from 'child_process';
 import { supabase } from './supa.js';
 
+// Helper function to detect and interact with Cloudflare challenge
+async function handleCloudflareChallenge(page: Page): Promise<boolean> {
+  try {
+    // Wait a bit for Cloudflare challenge to appear
+    await humanPause(2000, 3000);
+    
+    // Check if we're on a Cloudflare challenge page
+    const pageText = await page.textContent('body').catch(() => null) || '';
+    const isCloudflarePage = pageText.includes('Pardon Our Interruption') || 
+                             pageText.includes('Verify you are human') ||
+                             pageText.includes('Just a moment') ||
+                             pageText.includes('Enable JavaScript and cookies');
+    
+    if (!isCloudflarePage) {
+      return true; // Not a Cloudflare page, continue
+    }
+    
+    console.log('   🔍 Cloudflare challenge detected, attempting to solve...');
+    
+    // Try multiple selectors for Cloudflare checkbox
+    const checkboxSelectors = [
+      'input[type="checkbox"][name="cf-turnstile-response"]',
+      'input[type="checkbox"]',
+      'label:has-text("I\'m not a robot")',
+      'label:has-text("Verify")',
+      '[data-ray]', // Cloudflare turnstile
+      '.cb-lb', // Cloudflare checkbox label
+      '#challenge-form input[type="checkbox"]',
+      'iframe[src*="challenges.cloudflare.com"]',
+    ];
+    
+    let challengeSolved = false;
+    
+    // Method 1: Try clicking checkbox directly
+    for (const selector of checkboxSelectors) {
+      try {
+        const checkbox = page.locator(selector).first();
+        const isVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false);
+        
+        if (isVisible) {
+          console.log(`   ✅ Found Cloudflare checkbox with selector: ${selector}`);
+          await checkbox.click();
+          await humanPause(2000, 3000);
+          
+          // Wait for challenge to resolve
+          for (let i = 0; i < 10; i++) {
+            await humanPause(1000, 1500);
+            const newPageText = await page.textContent('body').catch(() => null) || '';
+            const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
+                                newPageText.includes('Verify you are human') ||
+                                newPageText.includes('Just a moment');
+            
+            // Check if content loaded
+            const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+            
+            if (!stillBlocked || hasContent) {
+              console.log(`   ✅ Cloudflare challenge resolved!`);
+              challengeSolved = true;
+              break;
+            }
+          }
+          
+          if (challengeSolved) break;
+        }
+      } catch (e) {
+        // Try next selector
+        continue;
+      }
+    }
+    
+    // Method 2: Try interacting with iframe (Cloudflare turnstile)
+    if (!challengeSolved) {
+      try {
+        const iframe = page.frameLocator('iframe[src*="challenges.cloudflare.com"]').first();
+        const checkbox = iframe.locator('input[type="checkbox"]').first();
+        const isVisible = await checkbox.isVisible({ timeout: 5000 }).catch(() => false);
+        
+        if (isVisible) {
+          console.log('   ✅ Found Cloudflare checkbox in iframe');
+          await checkbox.click();
+          await humanPause(3000, 5000);
+          
+          // Wait for resolution
+          for (let i = 0; i < 10; i++) {
+            await humanPause(1000, 1500);
+            const newPageText = await page.textContent('body').catch(() => null) || '';
+            const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
+                                newPageText.includes('Verify you are human');
+            const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+            
+            if (!stillBlocked || hasContent) {
+              console.log(`   ✅ Cloudflare challenge resolved via iframe!`);
+              challengeSolved = true;
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        // Iframe method failed
+      }
+    }
+    
+    // Method 3: Wait for auto-resolution (sometimes Cloudflare auto-resolves)
+    if (!challengeSolved) {
+      console.log('   ⏳ Waiting for Cloudflare to auto-resolve (up to 15s)...');
+      for (let i = 0; i < 15; i++) {
+        await humanPause(1000, 1000);
+        const newPageText = await page.textContent('body').catch(() => null) || '';
+        const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
+                            newPageText.includes('Verify you are human') ||
+                            newPageText.includes('Just a moment');
+        const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+        
+        if (!stillBlocked || hasContent) {
+          console.log(`   ✅ Cloudflare auto-resolved after ${i + 1}s!`);
+          challengeSolved = true;
+          break;
+        }
+      }
+    }
+    
+    return challengeSolved;
+  } catch (error) {
+    console.log(`   ⚠️  Error handling Cloudflare challenge:`, error);
+    return false;
+  }
+}
+
 // Helper function to re-authenticate if needed
 async function reAuthenticate() {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
@@ -492,10 +620,29 @@ async function scrapePropertyGuruByDistrict() {
             const hasListings = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
             
             if (hasCloudflareText && !hasListings) {
-              // Real Cloudflare block - no content loaded
+              // Real Cloudflare block - try to solve it
+              console.log(`   🛡️  Cloudflare detected (attempt ${navRetryCount + 1}/${maxNavRetries}), attempting to solve...`);
+              const solved = await handleCloudflareChallenge(page);
+              
+              if (solved) {
+                // Re-check after solving
+                const newPageText = await page.textContent('body').catch(() => null) || '';
+                const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
+                                    newPageText.includes('Verify you are human') ||
+                                    newPageText.includes('Just a moment');
+                const nowHasListings = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+                
+                if (!stillBlocked || nowHasListings) {
+                  console.log(`   ✅ Cloudflare challenge solved! Continuing...`);
+                  navigationSuccess = true;
+                  break;
+                }
+              }
+              
+              // If not solved, retry
               navRetryCount++;
               if (navRetryCount < maxNavRetries) {
-                console.log(`   🛡️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), waiting ${(5 * navRetryCount)}s and retrying...`);
+                console.log(`   ⏳ Cloudflare not resolved, waiting ${(5 * navRetryCount)}s and retrying...`);
                 await humanPause(5000 * navRetryCount, 8000 * navRetryCount); // Exponential backoff
                 continue;
               } else {

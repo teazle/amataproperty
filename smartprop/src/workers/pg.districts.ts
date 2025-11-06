@@ -31,8 +31,8 @@ import { supabase } from './supa.js';
 // Helper function to detect and interact with Cloudflare challenge
 async function handleCloudflareChallenge(page: Page): Promise<boolean> {
   try {
-    // Wait a bit for Cloudflare challenge to appear
-    await humanPause(2000, 3000);
+    // Wait longer for Cloudflare challenge to appear (datacenter IPs need more time)
+    await humanPause(5000, 8000);
     
     // Check if we're on a Cloudflare challenge page
     const pageText = await page.textContent('body').catch(() => null) || '';
@@ -194,11 +194,11 @@ async function handleCloudflareChallenge(page: Page): Promise<boolean> {
       }
     }
     
-    // Method 3: Wait for auto-resolution (sometimes Cloudflare auto-resolves)
+    // Method 3: Wait for auto-resolution (datacenter IPs need longer - up to 60s)
     if (!challengeSolved) {
-      console.log('   ⏳ Waiting for Cloudflare to auto-resolve (up to 15s)...');
-      for (let i = 0; i < 15; i++) {
-        await humanPause(1000, 1000);
+      console.log('   ⏳ Waiting for Cloudflare to auto-resolve (up to 60s for datacenter IPs)...');
+      for (let i = 0; i < 60; i++) {
+        await humanPause(1000, 1500);
         const newPageText = await page.textContent('body').catch(() => null) || '';
         const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
                             newPageText.includes('Verify you are human') ||
@@ -699,8 +699,8 @@ async function scrapePropertyGuruByDistrict() {
         
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
-            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await humanPause(3000, 5000); // Give Cloudflare time to auto-resolve
+            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+            await humanPause(8000, 12000); // Give Cloudflare more time to auto-resolve (datacenter IPs need longer)
             
             // Check for Cloudflare - but also verify if content actually loaded
             const pageText = await page.textContent('body').catch(() => null) || '';

@@ -574,8 +574,9 @@ async function scrapePropertyGuruByDistrict() {
   
 
   // Launch browser once for all districts
+  // Use headless: false when running with xvfb-run (EC2) to better bypass Cloudflare
   const browser = await chromium.launch({
-    headless: true,
+    headless: false, // xvfb-run provides virtual display, so we can run non-headless
     plugins: plugins.recommended({
       humanize: {
         click: { delay: { min: 200, max: 600 } },

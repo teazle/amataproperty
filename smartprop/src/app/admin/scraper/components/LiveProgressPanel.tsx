@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { stopScraperJob } from '../actions';
+import { stopScraperJob, forceResetStuckJobs } from '../actions';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -31,6 +31,7 @@ interface LiveProgressPanelProps {
 
 export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps) {
   const [isStopping, setIsStopping] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const handleStopScraper = async () => {
     setIsStopping(true);
@@ -47,6 +48,32 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
       console.error('Error stopping scraper:', error);
     } finally {
       setIsStopping(false);
+    }
+  };
+
+  const handleForceReset = async () => {
+    if (!confirm('Are you sure you want to force reset stuck jobs? This will mark all active jobs as failed and clear lock files. Use this if the scraper appears stuck.')) {
+      return;
+    }
+    
+    setIsResetting(true);
+    try {
+      const result = await forceResetStuckJobs();
+      if (result.success) {
+        toast.success(result.message || `Reset ${result.jobsReset || 0} stuck job(s)`);
+        onJobStopped?.();
+        // Reload page after a delay to clear stale state
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } else {
+        toast.error(result.error || 'Failed to reset stuck jobs');
+      }
+    } catch (error) {
+      toast.error('Failed to reset stuck jobs');
+      console.error('Error resetting stuck jobs:', error);
+    } finally {
+      setIsResetting(false);
     }
   };
   const progress = job.listingsProcessed && job.totalPages 
@@ -74,15 +101,25 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             <span className="animate-pulse">{isReAuth ? '🔄' : '🟢'}</span>
             Live Progress - {job.platform === 'propertyguru' ? 'PropertyGuru' : 'EdgeProp'}
           </CardTitle>
-          <Button
-            onClick={handleStopScraper}
-            disabled={isStopping}
-            variant="destructive"
-            size="sm"
-            className="ml-4"
-          >
-            {isStopping ? 'Stopping...' : 'Stop Scraper'}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              onClick={handleStopScraper}
+              disabled={isStopping || isResetting}
+              variant="destructive"
+              size="sm"
+            >
+              {isStopping ? 'Stopping...' : 'Stop Scraper'}
+            </Button>
+            <Button
+              onClick={handleForceReset}
+              disabled={isStopping || isResetting}
+              variant="outline"
+              size="sm"
+              className="border-amber-500 text-amber-700 hover:bg-amber-50"
+            >
+              {isResetting ? 'Resetting...' : 'Force Reset'}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">

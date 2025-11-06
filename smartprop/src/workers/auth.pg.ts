@@ -31,12 +31,23 @@ async function authenticatePropertyGuru() {
     permissions: ['geolocation'],
     geolocation: { latitude: 1.3521, longitude: 103.8198 }, // Singapore coordinates
     colorScheme: 'light',
+    // Enhanced HTTP headers matching EdgeProp scraper (works on EC2)
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
     }
   });
 
-  // Remove automation indicators
+  // Enhanced stealth script matching EdgeProp scraper (works on EC2)
   await context.addInitScript(() => {
     // Override the navigator.webdriver property
     Object.defineProperty(navigator, 'webdriver', {
@@ -55,6 +66,26 @@ async function authenticatePropertyGuru() {
         Promise.resolve({ state: Notification.permission } as PermissionStatus) :
         originalQuery(parameters)
     );
+    
+    // Mock plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    
+    // Mock mimeTypes
+    Object.defineProperty(navigator, 'mimeTypes', {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    
+    // Override getBattery
+    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
+      (navigator as any).getBattery = () => Promise.resolve({
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: Infinity,
+        level: 1
+      });
+    }
   });
 
   const page = await context.newPage();

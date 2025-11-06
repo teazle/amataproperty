@@ -603,8 +603,19 @@ async function scrapePropertyGuruByDistrict() {
     permissions: ['geolocation'],
     geolocation: { latitude: 1.3521, longitude: 103.8198 },
     colorScheme: 'light' as const,
+    // Enhanced HTTP headers matching EdgeProp scraper (works on EC2)
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
     }
   };
 
@@ -613,19 +624,19 @@ async function scrapePropertyGuruByDistrict() {
 
   const context = await browser.newContext(contextOptions);
 
-  // Comprehensive stealth script to match auth.pg.ts (works locally)
+  // Enhanced stealth script matching EdgeProp scraper (works on EC2)
   await context.addInitScript(() => {
-    // Override the navigator.webdriver property
+    // Remove webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
     
-    // Mock chrome object (Cloudflare checks for this)
+    // Mock chrome object
     (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
       runtime: {},
     };
     
-    // Mock permissions (Cloudflare may check this)
+    // Override permissions API
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
       (parameters as PermissionDescriptor & { name: string }).name === 'notifications' ?
@@ -633,14 +644,25 @@ async function scrapePropertyGuruByDistrict() {
         originalQuery(parameters)
     );
     
-    // Hide automation indicators
+    // Mock plugins
     Object.defineProperty(navigator, 'plugins', {
       get: () => [1, 2, 3, 4, 5],
     });
     
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-SG', 'en', 'en-US'],
+    // Mock mimeTypes
+    Object.defineProperty(navigator, 'mimeTypes', {
+      get: () => [1, 2, 3, 4, 5],
     });
+    
+    // Override getBattery
+    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
+      (navigator as any).getBattery = () => Promise.resolve({
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: Infinity,
+        level: 1
+      });
+    }
   });
 
   const overallStats = {
@@ -702,52 +724,59 @@ async function scrapePropertyGuruByDistrict() {
             await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
             await humanPause(8000, 12000); // Give Cloudflare more time to auto-resolve (datacenter IPs need longer)
             
-            // Check for Cloudflare - but also verify if content actually loaded
+            // Check for Cloudflare using EdgeProp's approach: check for actual errors AND content
             const pageText = await page.textContent('body').catch(() => null) || '';
-            const hasCloudflareText = pageText.includes('Pardon Our Interruption') || 
-                                      pageText.includes('Verify you are human') ||
-                                      pageText.includes('Enable JavaScript and cookies to continue') ||
-                                      pageText.includes('Just a moment');
+            const pageTitle = await page.title().catch(() => '') || '';
             
-            // Check if we actually have listing content (not just Cloudflare page)
-            const hasListings = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+            // Check for actual Cloudflare errors (not just Cloudflare presence)
+            const hasActualError = pageText.includes('Pardon Our Interruption') || 
+                                   pageText.includes('Verify you are human') ||
+                                   pageText.includes('Enable JavaScript and cookies to continue') ||
+                                   (pageText.includes('Just a moment') && pageText.length < 500) || // Short page = challenge page
+                                   (pageTitle.includes('Just a moment') && pageText.length < 500);
             
-            if (hasCloudflareText && !hasListings) {
-              // Real Cloudflare block - try to solve it
-              console.log(`   🛡️  Cloudflare detected (attempt ${navRetryCount + 1}/${maxNavRetries}), attempting to solve...`);
-              const solved = await handleCloudflareChallenge(page);
-              
-              if (solved) {
-                // Re-check after solving
-                const newPageText = await page.textContent('body').catch(() => null) || '';
-                const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
-                                    newPageText.includes('Verify you are human') ||
-                                    newPageText.includes('Just a moment');
-                const nowHasListings = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
-                
-                if (!stillBlocked || nowHasListings) {
-                  console.log(`   ✅ Cloudflare challenge solved! Continuing...`);
-                  navigationSuccess = true;
-                  break;
-                }
-              }
-              
-              // If not solved, retry
+            // Check for actual property content (positive check) - matching EdgeProp approach
+            const hasPropertyContent = pageText.includes('Bed') || 
+                                     pageText.includes('Bath') ||
+                                     pageText.includes('sqft') ||
+                                     pageText.includes('Property Type') ||
+                                     pageText.includes('District') ||
+                                     pageText.includes('Bedrooms') ||
+                                     pageText.includes('Bathrooms') ||
+                                     pageText.length > 10000 || // Large page = likely loaded
+                                     (await page.locator('div.listing-card-v2').count().catch(() => 0) > 0);
+            
+            // If we have actual errors AND no property content, it's a real Cloudflare error
+            if (hasActualError && !hasPropertyContent) {
               navRetryCount++;
               if (navRetryCount < maxNavRetries) {
-                console.log(`   ⏳ Cloudflare not resolved, waiting ${(5 * navRetryCount)}s and retrying...`);
-                await humanPause(5000 * navRetryCount, 8000 * navRetryCount); // Exponential backoff
+                const waitTime = 5000 * navRetryCount; // Exponential backoff: 5s, 10s, 15s
+                console.log(`   ⚠️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), waiting ${waitTime/1000}s and retrying...`);
+                await humanPause(waitTime, waitTime + 2000);
                 continue;
               } else {
                 console.log(`   ❌ Cloudflare persists after ${maxNavRetries} attempts. Skipping this page.`);
                 break;
               }
-            } else if (hasCloudflareText && hasListings) {
-              // Cloudflare text present but content loaded - likely just a warning, continue
-              console.log(`   ⚠️  Cloudflare warning detected but content loaded. Continuing...`);
+            }
+            
+            // If we have property content, page loaded successfully (even if it mentions cloudflare)
+            if (hasPropertyContent) {
+              console.log(`   ✅ Page loaded successfully (found property content)`);
               navigationSuccess = true;
+            } else if (!hasActualError) {
+              // No error and no content yet - wait a bit more
+              if (navRetryCount < maxNavRetries - 1) {
+                navRetryCount++;
+                console.log(`   ⏳ Waiting for content to load (attempt ${navRetryCount}/${maxNavRetries})...`);
+                await humanPause(3000, 5000);
+                continue;
+              } else {
+                // Content didn't load but no error - assume success and continue
+                navigationSuccess = true;
+              }
             } else {
-              // No Cloudflare, page loaded successfully
+              // Has content despite error text - continue
               navigationSuccess = true;
             }
           } catch (e) {

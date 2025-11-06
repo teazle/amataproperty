@@ -382,8 +382,11 @@ async function scrapePropertyGuruByDistrict() {
   
 
   // Launch browser once for all districts
+  // Allow headless mode to be controlled via environment variable
+  // When running with xvfb-run, we can use headless: false for better stealth
+  const headlessMode = process.env.HEADLESS !== 'false';
   const browser = await chromium.launch({
-    headless: true,
+    headless: headlessMode,
     plugins: plugins.recommended({
       humanize: {
         click: { delay: { min: 200, max: 600 } },

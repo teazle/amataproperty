@@ -32,7 +32,8 @@ import { supabase } from './supa.js';
 async function reAuthenticate() {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
   try {
-    execSync('bun src/workers/auth.pg.ts', { 
+    // Use xvfb-run for headless environments (EC2)
+    execSync('xvfb-run -a bun src/workers/auth.pg.ts', { 
       cwd: process.cwd(),
       stdio: 'inherit' 
     });
@@ -340,14 +341,42 @@ async function scrapePropertyGuruByDistrict() {
     console.log('💡 Run `bun run auth:pg` first to save login state\n');
   }
 
-  // Simple approach: Re-authenticate before scraping to ensure fresh auth
-  console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
-  await reAuthenticate();
+  // Check if auth state file exists and is recent (less than 24 hours old)
+  const stateFileExists = fs.existsSync(stateFilePath);
+  let shouldReAuth = !stateFileExists;
   
-  // Verify auth state exists after re-auth
-  const updatedStateExists = fs.existsSync(stateFilePath);
-  if (!updatedStateExists) {
-    console.error('❌ Authentication state file not found after re-authentication!');
+  if (stateFileExists) {
+    const stats = fs.statSync(stateFilePath);
+    const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
+    if (ageInHours > 24) {
+      console.log(`⚠️  Auth state file is ${ageInHours.toFixed(1)} hours old, re-authenticating...`);
+      shouldReAuth = true;
+    } else {
+      console.log(`✅ Using existing auth state file (${ageInHours.toFixed(1)} hours old)`);
+    }
+  }
+  
+  // Re-authenticate only if needed
+  if (shouldReAuth) {
+    console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
+    const authSuccess = await reAuthenticate();
+    
+    if (!authSuccess) {
+      console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
+      process.exit(1);
+    }
+    
+    // Verify auth state exists after re-auth
+    const updatedStateExists = fs.existsSync(stateFilePath);
+    if (!updatedStateExists) {
+      console.error('❌ Authentication state file not found after re-authentication!');
+      process.exit(1);
+    }
+  }
+  
+  // Final check: ensure auth state file exists before proceeding
+  if (!fs.existsSync(stateFilePath)) {
+    console.error('❌ Authentication state file not found! Cannot proceed.');
     process.exit(1);
   }
   

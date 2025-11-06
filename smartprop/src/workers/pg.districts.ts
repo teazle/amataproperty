@@ -98,35 +98,59 @@ async function handleCloudflareChallenge(page: Page): Promise<boolean> {
       }
     }
     
-    // Method 2: Try interacting with iframe (Cloudflare turnstile)
+    // Method 2: Wait for Cloudflare Turnstile iframe to load (it loads dynamically)
     if (!challengeSolved) {
       try {
-        const iframe = page.frameLocator('iframe[src*="challenges.cloudflare.com"]').first();
-        const checkbox = iframe.locator('input[type="checkbox"]').first();
-        const isVisible = await checkbox.isVisible({ timeout: 5000 }).catch(() => false);
-        
-        if (isVisible) {
-          console.log('   ✅ Found Cloudflare checkbox in iframe');
-          await checkbox.click();
-          await humanPause(3000, 5000);
+        console.log('   ⏳ Waiting for Cloudflare Turnstile iframe to load...');
+        // Wait for iframe to appear (Cloudflare loads it dynamically)
+        for (let waitAttempt = 0; waitAttempt < 10; waitAttempt++) {
+          await humanPause(1000, 1500);
           
-          // Wait for resolution
-          for (let i = 0; i < 10; i++) {
-            await humanPause(1000, 1500);
-            const newPageText = await page.textContent('body').catch(() => null) || '';
-            const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
-                                newPageText.includes('Verify you are human');
-            const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+          const iframe = page.frameLocator('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]').first();
+          const iframeExists = await iframe.locator('body').count().catch(() => 0) > 0;
+          
+          if (iframeExists) {
+            console.log('   ✅ Cloudflare Turnstile iframe found!');
             
-            if (!stillBlocked || hasContent) {
-              console.log(`   ✅ Cloudflare challenge resolved via iframe!`);
-              challengeSolved = true;
-              break;
+            // Try clicking the checkbox inside the iframe
+            try {
+              const checkbox = iframe.locator('input[type="checkbox"], .cb-lb, [role="checkbox"]').first();
+              const isVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false);
+              
+              if (isVisible) {
+                console.log('   ✅ Found checkbox in Turnstile iframe, clicking...');
+                await checkbox.click();
+                await humanPause(2000, 3000);
+              } else {
+                // Sometimes Turnstile auto-solves, just wait
+                console.log('   ⏳ Turnstile iframe found but no checkbox visible, waiting for auto-resolution...');
+              }
+            } catch (e) {
+              // Checkbox not found, but iframe exists - might auto-resolve
             }
+            
+            // Wait for resolution after interacting
+            for (let i = 0; i < 15; i++) {
+              await humanPause(1000, 1500);
+              const newPageText = await page.textContent('body').catch(() => null) || '';
+              const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
+                                  newPageText.includes('Verify you are human') ||
+                                  newPageText.includes('Just a moment');
+              const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+              
+              if (!stillBlocked || hasContent) {
+                console.log(`   ✅ Cloudflare challenge resolved via Turnstile!`);
+                challengeSolved = true;
+                break;
+              }
+            }
+            
+            if (challengeSolved) break;
           }
         }
       } catch (e) {
         // Iframe method failed
+        console.log(`   ⚠️  Iframe interaction failed:`, e);
       }
     }
     

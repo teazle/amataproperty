@@ -577,13 +577,18 @@ async function scrapePropertyGuruByDistrict() {
   // Use headless: false when running with xvfb-run (EC2) to better bypass Cloudflare
   const browser = await chromium.launch({
     headless: false, // xvfb-run provides virtual display, so we can run non-headless
-    plugins: plugins.recommended({
-      humanize: {
-        click: { delay: { min: 200, max: 600 } },
-        cursor: false,
-        dialog: { delay: { min: 800, max: 2000 } }
-      }
-    }),
+    plugins: [
+      ...plugins.recommended({
+        humanize: {
+          click: { delay: { min: 200, max: 600 } },
+          cursor: false,
+          dialog: { delay: { min: 800, max: 2000 } }
+        }
+      }),
+      // Additional plugins for better Cloudflare bypass (from Context7 research)
+      plugins.utils.fingerprint(), // Randomize browser fingerprint
+      plugins.polyfill.webGL(), // Mask WebGL fingerprinting
+    ],
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',

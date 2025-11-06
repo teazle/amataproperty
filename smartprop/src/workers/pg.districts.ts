@@ -103,34 +103,74 @@ async function handleCloudflareChallenge(page: Page): Promise<boolean> {
       try {
         console.log('   ⏳ Waiting for Cloudflare Turnstile iframe to load...');
         // Wait for iframe to appear (Cloudflare loads it dynamically)
-        for (let waitAttempt = 0; waitAttempt < 10; waitAttempt++) {
+        for (let waitAttempt = 0; waitAttempt < 15; waitAttempt++) {
           await humanPause(1000, 1500);
           
-          const iframe = page.frameLocator('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]').first();
-          const iframeExists = await iframe.locator('body').count().catch(() => 0) > 0;
+          // Try to find iframe by multiple methods
+          const iframeSelectors = [
+            'iframe[src*="challenges.cloudflare.com"]',
+            'iframe[src*="turnstile"]',
+            'iframe[title*="challenge"]',
+            'iframe[title*="Cloudflare"]',
+            'iframe[id*="cf-"]',
+          ];
           
-          if (iframeExists) {
-            console.log('   ✅ Cloudflare Turnstile iframe found!');
-            
-            // Try clicking the checkbox inside the iframe
+          let iframeFound = false;
+          for (const iframeSelector of iframeSelectors) {
             try {
-              const checkbox = iframe.locator('input[type="checkbox"], .cb-lb, [role="checkbox"]').first();
-              const isVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false);
-              
-              if (isVisible) {
-                console.log('   ✅ Found checkbox in Turnstile iframe, clicking...');
-                await checkbox.click();
-                await humanPause(2000, 3000);
-              } else {
-                // Sometimes Turnstile auto-solves, just wait
-                console.log('   ⏳ Turnstile iframe found but no checkbox visible, waiting for auto-resolution...');
+              const iframeCount = await page.locator(iframeSelector).count();
+              if (iframeCount > 0) {
+                console.log(`   ✅ Found Cloudflare iframe with selector: ${iframeSelector}`);
+                iframeFound = true;
+                
+                // Get the iframe element and try to access its content
+                const iframe = page.frameLocator(iframeSelector).first();
+                
+                // Try multiple checkbox selectors inside iframe
+                const checkboxSelectors = [
+                  'input[type="checkbox"]',
+                  '[role="checkbox"]',
+                  '.cb-lb',
+                  'label',
+                  'span[class*="checkbox"]',
+                  'div[class*="checkbox"]',
+                ];
+                
+                for (const cbSelector of checkboxSelectors) {
+                  try {
+                    const checkbox = iframe.locator(cbSelector).first();
+                    const isVisible = await checkbox.isVisible({ timeout: 2000 }).catch(() => false);
+                    
+                    if (isVisible) {
+                      console.log(`   ✅ Found checkbox in iframe with selector: ${cbSelector}, clicking...`);
+                      await checkbox.click({ force: true });
+                      await humanPause(2000, 3000);
+                      break;
+                    }
+                  } catch (e) {
+                    continue;
+                  }
+                }
+                
+                // Also try clicking the iframe itself
+                try {
+                  const iframeElement = page.locator(iframeSelector).first();
+                  await iframeElement.click({ force: true });
+                  await humanPause(1000, 2000);
+                } catch (e) {
+                  // Ignore
+                }
+                
+                break;
               }
             } catch (e) {
-              // Checkbox not found, but iframe exists - might auto-resolve
+              continue;
             }
-            
+          }
+          
+          if (iframeFound) {
             // Wait for resolution after interacting
-            for (let i = 0; i < 15; i++) {
+            for (let i = 0; i < 20; i++) {
               await humanPause(1000, 1500);
               const newPageText = await page.textContent('body').catch(() => null) || '';
               const stillBlocked = newPageText.includes('Pardon Our Interruption') || 

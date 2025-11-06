@@ -641,11 +641,24 @@ async function handleNoTimeslotsReply(
   try {
     console.log(`🔍 [DEBUG] Looking for agent with phone: ${agentPhone}`);
     
-    // Find the agent
+    // Find the agent - try multiple phone formats
+    // Clean phone might be: "6591234567" or "91234567" or "+6591234567"
+    const cleanPhoneNoCountry = agentPhone.replace(/^65/, '').replace(/^\+65/, '');
+    const phoneVariations = [
+      agentPhone,                    // "6591234567"
+      `65${agentPhone}`,            // "656591234567" (if missing country code)
+      cleanPhoneNoCountry,           // "91234567" (without country code)
+      `65${cleanPhoneNoCountry}`,    // "6591234567" (with country code)
+      agentPhone.replace(/^\+/, ''), // Remove + if present
+    ].filter((p, i, arr) => arr.indexOf(p) === i); // Remove duplicates
+    
+    console.log(`🔍 [DEBUG] Searching with phone variations:`, phoneVariations);
+    
+    const phoneConditions = phoneVariations.map(p => `phone.eq.${p}`).join(',');
     const { data: agents } = await supabase
       .from('agents')
       .select('id')
-      .or(`phone.eq.${agentPhone},phone.eq.65${agentPhone}`);
+      .or(phoneConditions);
 
     console.log(`🔍 [DEBUG] Found agents:`, agents);
 

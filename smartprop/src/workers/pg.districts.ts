@@ -28,6 +28,50 @@ import { upsertAgentAndListing } from './upsert.js';
 import { execSync, exec } from 'child_process';
 import { supabase } from './supa.js';
 
+// Flaresolverr API endpoint (running on EC2)
+const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1';
+
+// Helper function to solve Cloudflare challenge using Flaresolverr
+async function solveCloudflareWithFlaresolverr(url: string): Promise<{ cookies: any[], userAgent: string } | null> {
+  try {
+    console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
+    
+    const response = await fetch(FLARESOLVERR_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        cmd: 'request.get',
+        url: url,
+        maxTimeout: 120000,
+        returnOnlyCookies: false,
+      }),
+    });
+
+    if (!response.ok) {
+      console.log(`   ⚠️  Flaresolverr request failed: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    if (data.status === 'ok' && data.solution) {
+      const cookies = data.solution.cookies || [];
+      const userAgent = data.solution.userAgent || CHROME_UA;
+      
+      console.log(`   ✅ Flaresolverr solved Cloudflare! Got ${cookies.length} cookies`);
+      return { cookies, userAgent };
+    } else {
+      console.log(`   ⚠️  Flaresolverr response error: ${data.message || 'Unknown error'}`);
+      return null;
+    }
+  } catch (error) {
+    console.log(`   ⚠️  Flaresolverr error:`, error);
+    return null;
+  }
+}
+
 // Helper function to detect and interact with Cloudflare challenge
 async function handleCloudflareChallenge(page: Page): Promise<boolean> {
   try {
@@ -727,8 +771,30 @@ async function scrapePropertyGuruByDistrict() {
         
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
+            // Try Flaresolverr first if this is the first attempt
+            if (navRetryCount === 0) {
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl);
+              
+              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                // Apply cookies from Flaresolverr to the page context
+                const cookies = flaresolverrResult.cookies.map((cookie: any) => ({
+                  name: cookie.name,
+                  value: cookie.value,
+                  domain: cookie.domain || '.propertyguru.com.sg',
+                  path: cookie.path || '/',
+                  expires: cookie.expires ? cookie.expires : undefined,
+                  httpOnly: cookie.httpOnly || false,
+                  secure: cookie.secure || true,
+                  sameSite: cookie.sameSite || 'Lax' as const,
+                }));
+                
+                await context.addCookies(cookies);
+                console.log(`   ✅ Applied ${cookies.length} cookies from Flaresolverr`);
+              }
+            }
+            
             await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await humanPause(3000, 5000); // Normal wait - Flaresolverr handles Cloudflare if needed
+            await humanPause(3000, 5000); // Normal wait
             
             // Check for Cloudflare using EdgeProp's approach: check for actual errors AND content
             const pageText = await page.textContent('body').catch(() => null) || '';

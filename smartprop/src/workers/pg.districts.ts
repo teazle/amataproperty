@@ -574,9 +574,12 @@ async function scrapePropertyGuruByDistrict() {
   
 
   // Launch browser once for all districts
-  // Use headless: false when running with xvfb-run (EC2) to better bypass Cloudflare
+  // Use Flaresolverr proxy to bypass Cloudflare (runs on EC2 port 8191)
   const browser = await chromium.launch({
     headless: false, // xvfb-run provides virtual display, so we can run non-headless
+    proxy: {
+      server: 'http://localhost:8191', // Flaresolverr proxy
+    },
     plugins: [
       ...plugins.recommended({
         humanize: {

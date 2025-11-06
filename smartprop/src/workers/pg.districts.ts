@@ -819,7 +819,7 @@ async function scrapePropertyGuruByDistrict() {
           try {
             // Try Flaresolverr first if this is the first attempt
             if (navRetryCount === 0) {
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl);
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies from Flaresolverr to the page context
@@ -830,11 +830,25 @@ async function scrapePropertyGuruByDistrict() {
                   path: cookie.path || '/',
                   expires: cookie.expires ? cookie.expires : undefined,
                   httpOnly: cookie.httpOnly || false,
-                  secure: cookie.secure || true,
-                  sameSite: cookie.sameSite || 'Lax' as const,
+                  secure: cookie.secure !== false, // Default to true for HTTPS sites
+                  sameSite: (cookie.sameSite === 'None' || cookie.sameSite === 'Lax' || cookie.sameSite === 'Strict') 
+                    ? cookie.sameSite as 'None' | 'Lax' | 'Strict'
+                    : 'Lax' as const,
                 }));
                 
+                // Clear existing cookies for the domain first
+                await context.clearCookies();
+                
+                // Add cookies from Flaresolverr
                 await context.addCookies(cookies);
+                
+                // Also update user-agent if provided
+                if (flaresolverrResult.userAgent && flaresolverrResult.userAgent !== CHROME_UA) {
+                  await context.setExtraHTTPHeaders({
+                    'User-Agent': flaresolverrResult.userAgent,
+                  });
+                }
+                
                 console.log(`   ✅ Applied ${cookies.length} cookies from Flaresolverr`);
               }
             }

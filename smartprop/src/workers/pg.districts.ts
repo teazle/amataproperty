@@ -382,11 +382,8 @@ async function scrapePropertyGuruByDistrict() {
   
 
   // Launch browser once for all districts
-  // Allow headless mode to be controlled via environment variable
-  // When running with xvfb-run, we can use headless: false for better stealth
-  const headlessMode = process.env.HEADLESS !== 'false';
   const browser = await chromium.launch({
-    headless: headlessMode,
+    headless: true,
     plugins: plugins.recommended({
       humanize: {
         click: { delay: { min: 200, max: 600 } },
@@ -474,30 +471,60 @@ async function scrapePropertyGuruByDistrict() {
         console.log(`\n📖 District ${district} - Page ${pageNum}/${maxPagesPerDistrict}...`);
         console.log(`🔗 URL: ${searchUrl}`);
 
-        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await humanPause(2000, 3000);
-
-        // Check for Cloudflare
-        const pageText = await page.textContent('body').catch(() => null);
-        if (pageText && (pageText.includes('Pardon Our Interruption') || 
-            pageText.includes('Verify you are human') ||
-            pageText.includes('Enable JavaScript and cookies to continue'))) {
-          if (!headlessMode) {
-            console.log(`   🛡️  Cloudflare detected! Waiting for manual resolution (30 seconds)...`);
-            await page.waitForTimeout(30000); // Wait 30 seconds for manual resolution
-            // Check again after waiting
-            const newPageText = await page.textContent('body').catch(() => null);
-            if (newPageText && !newPageText.includes('Pardon Our Interruption') && 
-                !newPageText.includes('Verify you are human') &&
-                !newPageText.includes('Enable JavaScript and cookies to continue')) {
-              console.log(`   ✅ Cloudflare challenge resolved! Continuing...`);
+        // Navigate with retry logic for Cloudflare (similar to EP scraper)
+        let navigationSuccess = false;
+        let navRetryCount = 0;
+        const maxNavRetries = 3;
+        
+        while (!navigationSuccess && navRetryCount < maxNavRetries) {
+          try {
+            await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await humanPause(3000, 5000); // Give Cloudflare time to auto-resolve
+            
+            // Check for Cloudflare - but also verify if content actually loaded
+            const pageText = await page.textContent('body').catch(() => null) || '';
+            const hasCloudflareText = pageText.includes('Pardon Our Interruption') || 
+                                      pageText.includes('Verify you are human') ||
+                                      pageText.includes('Enable JavaScript and cookies to continue') ||
+                                      pageText.includes('Just a moment');
+            
+            // Check if we actually have listing content (not just Cloudflare page)
+            const hasListings = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
+            
+            if (hasCloudflareText && !hasListings) {
+              // Real Cloudflare block - no content loaded
+              navRetryCount++;
+              if (navRetryCount < maxNavRetries) {
+                console.log(`   🛡️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), waiting ${(5 * navRetryCount)}s and retrying...`);
+                await humanPause(5000 * navRetryCount, 8000 * navRetryCount); // Exponential backoff
+                continue;
+              } else {
+                console.log(`   ❌ Cloudflare persists after ${maxNavRetries} attempts. Skipping this page.`);
+                break;
+              }
+            } else if (hasCloudflareText && hasListings) {
+              // Cloudflare text present but content loaded - likely just a warning, continue
+              console.log(`   ⚠️  Cloudflare warning detected but content loaded. Continuing...`);
+              navigationSuccess = true;
             } else {
-              console.log(`   ⚠️  Cloudflare challenge not resolved. Continuing anyway...`);
+              // No Cloudflare, page loaded successfully
+              navigationSuccess = true;
             }
-          } else {
-            console.log(`   🛡️  Cloudflare detected! Skipping page (run with HEADLESS=false to resolve manually).`);
-            break;
+          } catch (e) {
+            navRetryCount++;
+            if (navRetryCount < maxNavRetries) {
+              console.log(`   ⚠️  Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
+              await humanPause(3000, 5000);
+            } else {
+              console.log(`   ❌ Navigation failed after ${maxNavRetries} attempts:`, e);
+              break;
+            }
           }
+        }
+        
+        if (!navigationSuccess) {
+          console.log(`   ⚠️  Skipping page ${pageNum} due to navigation/Cloudflare issues`);
+          break;
         }
 
         // Get organic listing cards - use broader selector to catch all variations

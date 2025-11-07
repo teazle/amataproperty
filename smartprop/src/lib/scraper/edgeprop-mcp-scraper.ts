@@ -586,15 +586,21 @@ export async function scrapeEdgePropMCP(
           });
           
           // Create a new page for each article (like PropertyGuru does) to avoid page closure issues
+          // Check if context is still open before creating new page
+          if (context.browser()?.isConnected() === false) {
+            console.log(`⚠️ Browser context closed, stopping scraper`);
+            break;
+          }
+          
           const articlePage = await context.newPage();
           
-          // Add timeout wrapper for entire article processing (60 seconds max)
+          // Add timeout wrapper for entire article processing (200 seconds max - longer than Flaresolverr's 180s)
           let articleTimedOut = false;
           const articleTimeout = setTimeout(() => {
-            console.log(`   ⏱️  Article timeout (60s) - forcing close...`);
+            console.log(`   ⏱️  Article timeout (200s) - forcing close...`);
             articleTimedOut = true;
             articlePage.close().catch(() => {});
-          }, 60000);
+          }, 200000); // 200 seconds to allow Flaresolverr to complete
           
           try {
             // Navigate to article page with enhanced Cloudflare handling
@@ -604,16 +610,19 @@ export async function scrapeEdgePropMCP(
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
             // Use Flaresolverr to solve Cloudflare before navigating to article page (with session)
-            try {
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
-              
-              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-                // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
-                await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                await articlePage.waitForTimeout(500, 1000);
+            // Don't wait for Flaresolverr if we've already timed out
+            if (!articleTimedOut) {
+              try {
+                const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                
+                if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                  // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
+                  await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                  await articlePage.waitForTimeout(500, 1000);
+                }
+              } catch (flareError) {
+                console.log(`   ⚠️  Flaresolverr failed for article page, continuing anyway...`);
               }
-            } catch (flareError) {
-              console.log(`   ⚠️  Flaresolverr failed for article page, continuing anyway...`);
             }
             
             // Check if timed out before navigation

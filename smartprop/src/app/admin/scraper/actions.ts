@@ -106,7 +106,7 @@ export async function startScrapeJob(config: ScraperConfig) {
       const district = config.district!.replace('D', '');
       // Use spawn with absolute path to bun for better control
       const logFile = `/tmp/pg-scraper-${job.id}.log`;
-      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      const logFd = fs.openSync(logFile, 'a');
       
       const env = {
         ...process.env,
@@ -121,16 +121,18 @@ export async function startScrapeJob(config: ScraperConfig) {
         cwd,
         env,
         detached: true,
-        stdio: ['ignore', logStream, logStream],
+        stdio: ['ignore', logFd, logFd],
       });
       
+      // Close the file descriptor in the parent process
+      fs.closeSync(logFd);
       child.unref(); // Allow parent process to exit independently
       
       console.log(`Started PG scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);
     } else {
       // EdgeProp scraper
       const logFile = `/tmp/ep-scraper-${job.id}.log`;
-      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      const logFd = fs.openSync(logFile, 'a');
       
       const env = {
         ...process.env,
@@ -144,9 +146,11 @@ export async function startScrapeJob(config: ScraperConfig) {
         cwd,
         env,
         detached: true,
-        stdio: ['ignore', logStream, logStream],
+        stdio: ['ignore', logFd, logFd],
       });
       
+      // Close the file descriptor in the parent process
+      fs.closeSync(logFd);
       child.unref(); // Allow parent process to exit independently
       
       console.log(`Started EP scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);

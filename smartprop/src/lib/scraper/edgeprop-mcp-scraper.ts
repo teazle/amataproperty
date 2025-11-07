@@ -334,255 +334,35 @@ export async function scrapeEdgePropMCP(
         });
       console.log(`✅ Navigation completed for page ${pageNum}`);
       
-      // Enhanced Cloudflare detection and bypass - comprehensive approach
-      let cloudflareResolved = false;
-      for (let cfAttempt = 0; cfAttempt < 10 && !cloudflareResolved; cfAttempt++) {
-        await page.waitForTimeout(Math.min(2000 + (cfAttempt * 1000), 8000)); // Progressive delay up to 8s
+      // Simple content verification (Flaresolverr handles Cloudflare on page 1, cookies persist)
+      await page.waitForTimeout(2000); // Brief wait for content to load
+      
+      const hasContent = await page.evaluate(() => {
+        const contentIndicators = [
+          document.querySelector('.jsx-4217446631.article-detail.left-section'),
+          document.querySelector('.jsx-2128998887.detail-content'),
+          document.querySelector('main article'),
+          document.querySelector('[class*="article"]'),
+          document.querySelector('[class*="content"]'),
+          document.querySelector('h1'),
+          document.querySelector('p')
+        ];
         
-        const pageContent = await page.content().catch(() => '');
-        const pageTitle = await page.title().catch(() => '');
+        const hasValidContent = contentIndicators.some(el => el && el.textContent && el.textContent.trim().length > 50);
+        const bodyText = document.body?.textContent || '';
+        const hasSubstantialText = bodyText.length > 500;
         
-        // Enhanced Cloudflare detection patterns - more specific to avoid false positives
-        const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('Just a moment')) ||
-          (pageContent.includes('checking-your-browser') && pageContent.includes('Cloudflare')) ||
-          (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
-          pageContent.includes('cf-challenge-running') ||
-          pageContent.includes('Verifying you are human') ||
-          (pageContent.includes('Please enable JavaScript') && pageContent.includes('Cloudflare')) ||
-          page.url().includes('challenge-platform.cloudflare.com');
-
-        if (!isCloudflare) {
-          // Verify actual EdgeProp content is loaded
-          const hasContent = await page.evaluate(() => {
-            const contentIndicators = [
-              document.querySelector('.jsx-4217446631.article-detail.left-section'),
-              document.querySelector('.jsx-2128998887.detail-content'),
-              document.querySelector('main article'),
-              document.querySelector('[class*="article"]'),
-              document.querySelector('[class*="content"]'),
-              document.querySelector('h1'),
-              document.querySelector('p')
-            ];
-            
-            const hasValidContent = contentIndicators.some(el => el && el.textContent && el.textContent.trim().length > 50);
-            const bodyText = document.body?.textContent || '';
-            const hasSubstantialText = bodyText.length > 500;
-            
-            return hasValidContent && hasSubstantialText;
-          });
-          
-          if (hasContent) {
-            cloudflareResolved = true;
-            console.log(`✅ Cloudflare resolved, content loaded (attempt ${cfAttempt + 1})`);
-            break;
-          }
-        }
-
-        if (isCloudflare) {
-          console.log(`⚠️ Cloudflare detected (attempt ${cfAttempt + 1}/10), implementing comprehensive bypass...`);
-          
-          // Wait for Cloudflare challenge iframe to load (they load dynamically)
-          await page.waitForTimeout(3000);
-          
-          try {
-            // COMPREHENSIVE CLOUDFLARE BYPASS STRATEGY
-            
-            // Strategy 1: Handle Cloudflare iframes with enhanced detection
-            const iframes = await page.$$('iframe');
-            console.log(`   🔍 Checking ${iframes.length} iframe(s) for Cloudflare checkbox...`);
-            
-            let iframeSuccess = false;
-            for (const iframe of iframes) {
-              const src = await iframe.getAttribute('src').catch(() => '');
-              const id = await iframe.getAttribute('id').catch(() => '');
-              const className = await iframe.getAttribute('class').catch(() => '');
-              
-              // Enhanced Cloudflare iframe detection
-              const isCloudflareIframe = src && (
-                src.includes('challenges.cloudflare.com') ||
-                src.includes('cf-challenge') ||
-                src.includes('cloudflare')
-              ) || (id && (
-                id.includes('cf-chl') || 
-                id.includes('cf-challenge') ||
-                id.includes('challenge')
-              )) || (className && (
-                className.includes('cf-challenge') || 
-                className.includes('cf-chl') ||
-                className.includes('challenge')
-              ));
-
-              if (isCloudflareIframe || iframes.length === 1) { // If only one iframe, assume it's Cloudflare
-                console.log(`   🎯 Processing potential Cloudflare iframe: ${src.substring(0, 50)}...`);
-                
-                try {
-                  const frame = await iframe.contentFrame();
-                  if (frame) {
-                    // Wait for Cloudflare content to fully load
-                    console.log(`   ⏳ Waiting for Cloudflare challenge content to load...`);
-                    await page.waitForTimeout(4000);
-                    
-                    // Check frame content
-                    const frameContent = await frame.evaluate(() => {
-                      const text = document.body?.textContent || '';
-                      const html = document.body?.innerHTML || '';
-                      return {
-                        text: text.substring(0, 200),
-                        html: html.substring(0, 500),
-                        checkboxes: Array.from(document.querySelectorAll('input[type="checkbox"]')).length,
-                        labels: Array.from(document.querySelectorAll('label')).length,
-                        buttons: Array.from(document.querySelectorAll('button')).length,
-                        hasChallenge: text.toLowerCase().includes('verify') || text.toLowerCase().includes('human') || text.toLowerCase().includes('challenge')
-                      };
-                    });
-                    
-                    console.log(`   📊 Frame elements: ${frameContent.checkboxes} checkboxes, ${frameContent.labels} labels, ${frameContent.buttons} buttons`);
-                    
-                    // Enhanced checkbox detection and clicking
-                    const checkboxSelectors = [
-                      'input[type="checkbox"]',
-                      'input[type="checkbox"]#challenge-form',
-                      'input[id*="challenge"]',
-                      'input[name*="challenge"]',
-                      'input[class*="checkbox"]',
-                      '#cf-challenge-checkbox',
-                      '.cb-lb input[type="checkbox"]',
-                      'label[for*="challenge"] input',
-                      'label[for*="challenge"]',
-                      '[role="checkbox"]',
-                      '.checkbox',
-                      '.challenge-checkbox'
-                    ];
-
-                    for (const selector of checkboxSelectors) {
-                      try {
-                        await frame.waitForSelector(selector, { timeout: 2000 });
-                        const checkbox = await frame.$(selector);
-                        if (checkbox) {
-                          const isVisible = await checkbox.isVisible().catch(() => false);
-                          const isEnabled = await checkbox.isEnabled().catch(() => true);
-                          const boundingBox = await checkbox.boundingBox().catch(() => null);
-                          
-                          console.log(`   🎯 Found element: ${selector}, visible: ${isVisible}, enabled: ${isEnabled}, box: ${!!boundingBox}`);
-                          
-                          if (isVisible && isEnabled && boundingBox) {
-                            // Scroll into view and wait
-                            await checkbox.scrollIntoViewIfNeeded().catch(() => null);
-                            await page.waitForTimeout(1000);
-                            
-                            console.log(`   ✅ Found checkbox in iframe with selector: ${selector}`);
-                            await checkbox.click({ timeout: 5000, force: false });
-                            await page.waitForTimeout(2000);
-                            console.log(`   ✅ Clicked checkbox in iframe`);
-                            iframeSuccess = true;
-                            break;
-                          }
-                        }
-                      } catch (selectorError: unknown) {
-                        // Continue to next selector
-                      }
-                    }
-                    
-                    if (iframeSuccess) break;
-                    
-                    // Strategy 2: Try clicking any interactive element in the iframe
-                    console.log(`   🔄 Trying alternative iframe interaction methods...`);
-                    const clickables = await frame.$$('label, button, [role="button"], [onclick], .cf-button, [class*="challenge"], [class*="checkbox"]').catch(() => []);
-                    
-                    for (const clickable of clickables.slice(0, 3)) { // Limit to first 3
-                      try {
-                        const isVisible = await clickable.isVisible().catch(() => false);
-                        if (isVisible) {
-                          await clickable.scrollIntoViewIfNeeded().catch(() => null);
-                          await clickable.click({ timeout: 3000 });
-                          console.log(`   ✅ Clicked interactive element in iframe`);
-                          await page.waitForTimeout(2000);
-                          iframeSuccess = true;
-                          break;
-                        }
-                      } catch (clickError: unknown) {
-                        // Continue to next element
-                      }
-                    }
-                    
-                    if (iframeSuccess) break;
-                  }
-                } catch (frameError: unknown) {
-                  console.log(`   ⚠️ Error accessing iframe: ${frameError instanceof Error ? frameError.message : 'Unknown error'}`);
-                }
-              }
-            }
-            
-            // Strategy 3: Direct page Cloudflare elements (if iframe approach failed)
-            if (!iframeSuccess) {
-              console.log(`   🔄 Trying direct page Cloudflare elements...`);
-              const cloudflareSelectors = [
-                'input[type="checkbox"]',
-                'label[for*="challenge"]',
-                'button[id*="challenge"]',
-                '#challenge-form input[type="checkbox"]',
-                '.cf-turnstile input[type="checkbox"]',
-                '.ctp-checkbox-label',
-                'button[class*="challenge"]',
-                'label[class*="checkbox"]',
-                '[data-callback*="challenge"]',
-                '.challenge-form input',
-                '.cloudflare-challenge input'
-              ];
-
-              for (const selector of cloudflareSelectors) {
-                try {
-                  const element = await page.$(selector);
-                  if (element) {
-                    const isVisible = await element.isVisible().catch(() => false);
-                    if (isVisible) {
-                      console.log(`   ✅ Found Cloudflare element: ${selector}`);
-                      await element.scrollIntoViewIfNeeded().catch(() => null);
-                      await element.click({ timeout: 3000 });
-                      console.log(`   ✅ Clicked Cloudflare verification`);
-                      await page.waitForTimeout(3000);
-                      break;
-                    }
-                  }
-                } catch (directError: unknown) {
-                  // Continue to next selector
-                }
-              }
-            }
-            
-            // Strategy 4: Human-like behavior simulation
-            console.log(`   🤖 Simulating human-like behavior...`);
-            
-            // Random mouse movements
-            await page.mouse.move(Math.random() * 800 + 100, Math.random() * 600 + 100);
-            await page.waitForTimeout(500);
-            await page.mouse.move(Math.random() * 800 + 100, Math.random() * 600 + 100);
-            
-            // Random scrolling
-            await page.evaluate(() => {
-              window.scrollTo(0, Math.random() * 500);
-            });
-            await page.waitForTimeout(1000);
-            
-            // Try pressing space or enter (sometimes works for challenges)
-            await page.keyboard.press('Space').catch(() => null);
-            await page.waitForTimeout(500);
-            await page.keyboard.press('Tab').catch(() => null);
-            await page.waitForTimeout(500);
-            await page.keyboard.press('Enter').catch(() => null);
-            
-          } catch (clickError: unknown) {
-            console.log(`   ⚠️ Error in Cloudflare bypass: ${clickError instanceof Error ? clickError.message : 'Unknown error'}`);
-          }
-        }
+        return hasValidContent && hasSubstantialText;
+      }).catch(() => false);
+      
+      if (!hasContent) {
+        console.log('⚠️ Content not loaded on search page, but continuing...');
+      } else {
+        console.log(`✅ Content loaded successfully`);
       }
       
-      if (!cloudflareResolved) {
-        console.log('⚠️ Cloudflare challenge may persist after 10 attempts, but continuing...');
-      }
-      
-        // Wait for content to load properly - longer wait for Cloudflare
-        await page.waitForTimeout(4000 + Math.random() * 3000); // 4-7 seconds
+      // Wait for content to load properly
+      await page.waitForTimeout(2000);
         
         // Human-like scrolling behavior to trigger lazy loading
         const scrollSteps = [0, 300, 600, 900, 1200];
@@ -877,297 +657,34 @@ export async function scrapeEdgePropMCP(
               await page.waitForTimeout(5000);
             }
             
-            // Enhanced Cloudflare detection and wait - multiple attempts with progressive delays
-            let cloudflareResolved = false;
-            for (let cfAttempt = 0; cfAttempt < 8; cfAttempt++) {
-              const pageContent = await page.content().catch(() => '');
-              const pageTitle = await page.title().catch(() => '');
-              const pageText = await page.textContent('body').catch(() => '') || '';
-              
-              // More specific Cloudflare detection for article pages
-              const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('cloudflare')) || 
-                                  (pageContent.includes('checking-your-browser') && pageContent.includes('cloudflare')) ||
-                                  (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
-                                  pageContent.includes('cf-challenge-running') ||
-                                  page.url().includes('challenge-platform.cloudflare.com');
-              
-              if (!isCloudflare) {
-                // Verify actual content is loaded with better selectors
-                const hasArticle = await page.evaluate(() => {
-                  // Try more specific selectors first
-                  const selectors = [
-                    'article .content',
-                    '.article-content', 
-                    '.post-content',
-                    '.entry-content',
-                    'article',
-                    'main',
-                    '.content-body',
-                    '.article-body'
-                  ];
-                  
-                  for (const selector of selectors) {
-                    const el = document.querySelector(selector);
-                    if (el && (el.textContent?.length || 0) > 500) {
-                      return true;
-                    }
-                  }
-                  
-                  // Fallback: check if page has substantial text content
-                  const bodyText = document.body?.textContent || '';
-                  return bodyText.length > 2000;
-                }).catch(() => false);
-                
-                if (hasArticle) {
-                  cloudflareResolved = true;
-                  console.log(`✅ Content loaded successfully (attempt ${cfAttempt + 1})`);
-                  break;
-                }
-              }
-              
-              // Only try to click Cloudflare if we actually detected it
-              if (isCloudflare && cfAttempt < 7) {
-                console.log(`⚠️ Cloudflare detected (attempt ${cfAttempt + 1}/8), trying to click verify button...`);
-                
-                // Wait longer for Cloudflare challenge iframe to load (they load dynamically)
-                await page.waitForTimeout(5000);
-                
-                // Debug: log all iframes on the page
-                const allIframes = await page.evaluate(() => {
-                  const iframes = Array.from(document.querySelectorAll('iframe'));
-                  return iframes.map(iframe => ({
-                    src: iframe.getAttribute('src') || '',
-                    id: iframe.id || '',
-                    className: iframe.className || '',
-                    width: iframe.width || '',
-                    height: iframe.height || ''
-                  }));
-                });
-                if (allIframes.length > 0) {
-                  console.log(`   🔍 Found ${allIframes.length} iframe(s)`);
-                  allIframes.forEach((iframe: any, idx: number) => {
-                    console.log(`      ${idx + 1}. src="${iframe.src?.substring(0, 100) || 'no-src'}", id="${iframe.id}", class="${iframe.className}"`);
-                  });
-                }
-                
-                // Try to find and click the Cloudflare checkbox/verify button
-                let clicked = false;
-                try {
-                  // First, check for iframe (most common Cloudflare challenge)
-                  const iframes = await page.$$('iframe');
-                  console.log(`   🔍 Checking ${iframes.length} iframe(s) for Cloudflare checkbox...`);
-                  
-                  for (const iframe of iframes) {
-                    try {
-                      const src = await iframe.getAttribute('src').catch(() => '');
-                      // Cloudflare iframes often don't have src or have empty src initially
-                      const id = await iframe.getAttribute('id').catch(() => '');
-                      const className = await iframe.getAttribute('class').catch(() => '');
-                      
-                      // Only check iframes that are actually Cloudflare-related
-                      const isCloudflareIframe = src && (src.includes('challenges.cloudflare.com') || 
-                                                          src.includes('cf-chl-bypass') ||
-                                                          src.includes('cf-challenge')) ||
-                                                  (id && (id.includes('cf-chl') || id.includes('cf-challenge'))) ||
-                                                  (className && (className.includes('cf-challenge') || className.includes('cf-chl')));
-                      
-                      if (isCloudflareIframe) {
-                        console.log(`   ✅ Checking iframe: src="${src}", id="${id}"`);
-                        const frame = await iframe.contentFrame();
-                        if (frame) {
-                          // Wait longer for Cloudflare content to fully load
-                          console.log(`   ⏳ Waiting for Cloudflare challenge content to load...`);
-                          await frame.waitForTimeout(5000);
-                          
-                          // Check what's in the frame
-                          const frameContent = await frame.evaluate(() => {
-                            const body = document.body;
-                            return {
-                              html: body.innerHTML.substring(0, 500),
-                              text: body.textContent?.substring(0, 200) || '',
-                              checkboxes: Array.from(document.querySelectorAll('input[type="checkbox"]')).length,
-                              labels: Array.from(document.querySelectorAll('label')).length,
-                              buttons: Array.from(document.querySelectorAll('button')).length
-                            };
-                          }).catch(() => null);
-                          
-                          if (frameContent) {
-                            console.log(`   📄 Frame content preview: ${frameContent.text}`);
-                            console.log(`   📊 Frame elements: ${frameContent.checkboxes} checkboxes, ${frameContent.labels} labels, ${frameContent.buttons} buttons`);
-                          }
-                          
-                          // Try multiple approaches to find and click checkbox - wait longer for each
-                          const checkboxSelectors = [
-                            'input[type="checkbox"]',
-                            'input[type="checkbox"]#challenge-form',
-                            'input[id*="challenge"]',
-                            'input[name*="challenge"]',
-                            'input[class*="checkbox"]',
-                            '#cf-challenge-checkbox',
-                            '.cb-lb input',
-                            '.cb-lb',
-                            'label[for*="challenge"] input',
-                            'label[for*="challenge"]'
-                          ];
-                          
-                          for (const selector of checkboxSelectors) {
-                            try {
-                              console.log(`   🔍 Trying selector: ${selector}`);
-                              await frame.waitForSelector(selector, { timeout: 5000, state: 'visible' }).catch(() => null);
-                              const checkbox = await frame.$(selector);
-                              if (checkbox) {
-                                const isVisible = await checkbox.isVisible().catch(() => false);
-                                const isEnabled = await checkbox.isEnabled().catch(() => true);
-                                const boundingBox = await checkbox.boundingBox().catch(() => null);
-                                console.log(`   📍 Element found: visible=${isVisible}, enabled=${isEnabled}, hasBox=${!!boundingBox}`);
-                                
-                                if ((isVisible || boundingBox) && isEnabled) {
-                                  // Scroll into view first
-                                  await checkbox.scrollIntoViewIfNeeded().catch(() => null);
-                                  await frame.waitForTimeout(1000);
-                                  
-                                  console.log(`   ✅ Found checkbox in iframe with selector: ${selector}`);
-                                  await checkbox.click({ timeout: 5000, force: false });
-                                  clicked = true;
-                                  console.log(`   ✅ Clicked checkbox in iframe`);
-                                  await page.waitForTimeout(10000); // Wait longer for verification
-                                  break;
-                                }
-                              }
-              } catch (e: unknown) {
-                              console.log(`   ⚠️ Selector ${selector} failed: ${e}`);
-                              // Try next selector
-                            }
-                          }
-                          
-                          // If checkbox not found, try clicking any clickable/interactive element in iframe
-                          if (!clicked) {
-                            try {
-                              console.log(`   🔍 Trying to find any clickable element...`);
-                              const clickables = await frame.$$('label, button, [role="button"], [onclick], .cf-button, [class*="challenge"]').catch(() => []);
-                              for (const clickable of clickables) {
-                                try {
-                                  const isVisible = await clickable.isVisible().catch(() => false);
-                                  const tagName = await clickable.evaluate((el: any) => el.tagName).catch(() => '');
-                                  if (isVisible) {
-                                    console.log(`   ✅ Trying to click ${tagName} element...`);
-                                    await clickable.scrollIntoViewIfNeeded().catch(() => null);
-                                    await frame.waitForTimeout(500);
-                                    await clickable.click({ timeout: 3000, force: false });
-                                    clicked = true;
-                                    console.log(`   ✅ Clicked element in iframe`);
-                                    await page.waitForTimeout(10000);
-                                    break;
-                                  }
-            } catch (e: unknown) {
-                                  // Try next element
-                                }
-                              }
-                            } catch (e: unknown) {
-              console.log(`   ⚠️ Could not click any element: ${e}`);
-                            }
-                          }
-                          
-                          if (clicked) break;
-                        }
-                      }
-                    } catch (e: unknown) {
-                      console.log(`   ⚠️ Error checking iframe: ${e}`);
-                      // Continue to next iframe
-                    }
-                  }
-                  
-                  // If no iframe checkbox found, try direct page elements
-                  if (!clicked) {
-                    const cloudflareSelectors = [
-                      'input[type="checkbox"]',
-                      'label[for*="challenge"]',
-                      '.cb-lb',
-                      '#challenge-form input[type="checkbox"]',
-                      'label[for*="cf-"]',
-                      '.ctp-checkbox-label',
-                      '[data-ray]',
-                      'label[class*="checkbox"]'
-                    ];
-                    
-                    for (const selector of cloudflareSelectors) {
-                      try {
-                        await page.waitForSelector(selector, { timeout: 2000 }).catch(() => null);
-                        const element = await page.$(selector);
-                        if (element) {
-                          const isVisible = await element.isVisible().catch(() => false);
-                          if (isVisible) {
-                            console.log(`   ✅ Found Cloudflare element: ${selector}`);
-                            await element.click({ timeout: 3000 });
-                            clicked = true;
-                            console.log(`   ✅ Clicked Cloudflare verification`);
-                            await page.waitForTimeout(5000); // Wait for verification to process
-                            break;
-                          }
-                        }
-                      } catch (e: unknown) {
-                        // Try next selector
-                      }
-                    }
-                  }
-                  
-                  // If we clicked, wait longer for verification to complete
-                  if (clicked) {
-                    await page.waitForTimeout(8000);
-                  } else {
-                    console.log(`   ⚠️ Could not find Cloudflare checkbox, using fallback...`);
-                    // Human-like behavior: random scrolling
-                    await page.evaluate(() => {
-                      const scrollAmount = Math.random() * 1000 + 200;
-                      window.scrollTo({ top: scrollAmount, behavior: 'smooth' });
-                    });
-                    
-                    // Progressive wait times: 5s, 7s, 9s, 11s, 13s, 15s, 17s
-                    const waitTime = 5000 + (cfAttempt * 2000);
-                    await page.waitForTimeout(waitTime);
-                    
-                    // Scroll back to top
-                    await page.evaluate(() => {
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    });
-                    await page.waitForTimeout(1000);
-                  }
-                  
-                  // Try reloading on later attempts if not clicked
-                  if (!clicked && cfAttempt >= 3) {
-                    console.log(`   🔄 Reloading page...`);
-                    try {
-                      await page.reload({ waitUntil: 'networkidle', timeout: 30000 });
-                      await page.waitForTimeout(2000);
-            } catch (e: any) {
-                      // Ignore reload errors
-                    }
-                  }
-                } catch (clickError: any) {
-                  console.log(`   ⚠️ Error clicking Cloudflare element: ${clickError}`);
-                  await page.waitForTimeout(5000 + (cfAttempt * 2000));
-                }
-              } else if (cfAttempt >= 7) {
-                // Max attempts reached - give up
-                console.log(`❌ Max Cloudflare attempts reached, skipping article`);
-                articlesFailed++;
-                onProgress({
-                  currentPage: pageNum,
-                  totalPages: maxPages,
-                  currentArticle: i + 1,
-                  articlesDiscovered: articles.length,
-                  articlesScraped: allArticles.length,
-                  articlesFailed: articlesFailed,
-                  status: 'running',
-                  message: `Max Cloudflare attempts: ${article.title}`
-                });
-                continue; // Skip this article - exit the try block
-              }
-            }
+            // Simple content verification (Flaresolverr handles Cloudflare before navigation)
+            await page.waitForTimeout(2000); // Brief wait for content to load
             
-            if (!cloudflareResolved) {
-              // This shouldn't happen due to continue above, but just in case
-              console.log(`⚠️ Could not resolve content loading, skipping article`);
+            const hasArticle = await page.evaluate(() => {
+              const selectors = [
+                'article .content',
+                '.article-content', 
+                '.post-content',
+                '.entry-content',
+                'article',
+                'main',
+                '.content-body',
+                '.article-body'
+              ];
+              
+              for (const selector of selectors) {
+                const el = document.querySelector(selector);
+                if (el && (el.textContent?.length || 0) > 500) {
+                  return true;
+                }
+              }
+              
+              const bodyText = document.body?.textContent || '';
+              return bodyText.length > 2000;
+            }).catch(() => false);
+            
+            if (!hasArticle) {
+              console.log(`⚠️ Content not loaded, skipping article`);
               articlesFailed++;
               onProgress({
                 currentPage: pageNum,
@@ -1177,13 +694,15 @@ export async function scrapeEdgePropMCP(
                 articlesScraped: allArticles.length,
                 articlesFailed: articlesFailed,
                 status: 'running',
-                message: `Content unresolved: ${article.title}`
+                message: `Content not loaded: ${article.title}`
               });
               continue;
             }
             
+            console.log(`✅ Content loaded successfully`);
+            
             // Final wait for content to stabilize
-            await page.waitForTimeout(3000);
+            await page.waitForTimeout(2000);
             
             // Extract metadata AND content together
             console.log(`📊 Extracting content from: ${article.title}`);
@@ -2486,87 +2005,40 @@ export async function scrapeSingleArticleMCP(
       timeout: 60000
     });
     
-    // Enhanced Cloudflare detection and wait
-    let cloudflareResolved = false;
-    for (let cfAttempt = 0; cfAttempt < 8 && !cloudflareResolved; cfAttempt++) {
-      await page.waitForTimeout(2000);
+    // Simple content verification (Flaresolverr should be used before calling this function)
+    await page.waitForTimeout(2000); // Brief wait for content to load
+    
+    const hasArticle = await page.evaluate(() => {
+      const selectors = [
+        'article .content',
+        '.article-content', 
+        '.post-content',
+        '.entry-content',
+        'article',
+        'main',
+        '.content-body',
+        '.article-body'
+      ];
       
-      const pageContent = await page.content().catch(() => '');
-      const pageTitle = await page.title().catch(() => '');
-      const isCloudflare = (pageContent.includes('cf-browser-verification') && pageContent.includes('cloudflare')) || 
-                          (pageContent.includes('checking-your-browser') && pageContent.includes('cloudflare')) ||
-                          (pageTitle.includes('Just a moment') && pageTitle.includes('Cloudflare')) ||
-                          pageContent.includes('cf-challenge-running') ||
-                          page.url().includes('challenge-platform.cloudflare.com');
-      
-      if (!isCloudflare) {
-        const hasArticle = await page.evaluate(() => {
-          const selectors = [
-            'article .content',
-            '.article-content', 
-            '.post-content',
-            '.entry-content',
-            'article',
-            'main',
-            '.content-body',
-            '.article-body'
-          ];
-          
-          for (const selector of selectors) {
-            const el = document.querySelector(selector);
-            if (el && (el.textContent?.length || 0) > 500) {
-              return true;
-            }
-          }
-          
-          const bodyText = document.body?.textContent || '';
-          return bodyText.length > 2000;
-        }).catch(() => false);
-        
-        if (hasArticle) {
-          cloudflareResolved = true;
-          console.log(`✅ Content loaded successfully (attempt ${cfAttempt + 1})`);
-          break;
+      for (const selector of selectors) {
+        const el = document.querySelector(selector);
+        if (el && (el.textContent?.length || 0) > 500) {
+          return true;
         }
       }
       
-      // Only try to click Cloudflare if we actually detected it
-      if (isCloudflare && cfAttempt < 7) {
-        console.log(`⚠️ Cloudflare detected (attempt ${cfAttempt + 1}/8), trying to click verify button...`);
-        await page.waitForTimeout(5000);
-        
-        // Try to find and click the Cloudflare checkbox
-        try {
-          const iframes = await page.$$('iframe');
-          for (const iframe of iframes) {
-            try {
-              const src = await iframe.getAttribute('src').catch(() => '');
-              const isCloudflareIframe = src && (src.includes('challenges.cloudflare.com'));
-              
-              if (isCloudflareIframe) {
-                const frame = await iframe.contentFrame();
-                if (frame) {
-                  await frame.waitForTimeout(5000); // Reduced from 5000 to 5000 (kept same)
-                  const checkbox = await frame.$('input[type="checkbox"]');
-                  if (checkbox) {
-                    await checkbox.click({ timeout: 5000 });
-                    await page.waitForTimeout(5000); // Reduced from 10000 to 5000
-                    break;
-                  }
-                }
-              }
-            } catch (e: any) {
-              // Continue to next iframe
-            }
-          }
-        } catch (clickError: any) {
-          console.log(`⚠️ Error clicking Cloudflare element: ${clickError}`);
-        }
-      }
+      const bodyText = document.body?.textContent || '';
+      return bodyText.length > 2000;
+    }).catch(() => false);
+    
+    if (!hasArticle) {
+      console.log(`⚠️ Content not loaded`);
+    } else {
+      console.log(`✅ Content loaded successfully`);
     }
     
     // Wait for content to stabilize
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2000);
     
     // Extract the article
     onProgress?.({

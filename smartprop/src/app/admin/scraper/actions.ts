@@ -98,20 +98,41 @@ export async function startScrapeJob(config: ScraperConfig) {
 
     // Trigger the scraper in background
     const cwd = path.join(process.cwd());
+    // Find bun path - try common locations or use PATH
+    const homeDir = process.env.HOME || '/home/ec2-user';
+    const bunPath = process.env.BUN_PATH || `${homeDir}/.bun/bin/bun`;
     
     if (config.platform === 'propertyguru') {
       const district = config.district!.replace('D', '');
-      const cmd = `cd ${cwd} && PG_DISTRICTS="${district}" PG_MAX_PAGES=${config.pages} PG_JOB_ID="${job.id}" bun src/workers/pg.districts.ts > /tmp/pg-scraper-${job.id}.log 2>&1 &`;
+      // Use nohup to run in background and ensure PATH includes bun
+      const cmd = `cd ${cwd} && export PATH="${homeDir}/.bun/bin:$PATH" && nohup ${bunPath} src/workers/pg.districts.ts > /tmp/pg-scraper-${job.id}.log 2>&1 &`;
+      const env = {
+        ...process.env,
+        PATH: `${homeDir}/.bun/bin:${process.env.PATH || ''}`,
+        PG_DISTRICTS: district,
+        PG_MAX_PAGES: config.pages.toString(),
+        PG_JOB_ID: job.id,
+      };
       
-      execAsync(cmd).catch(err => {
-        console.error('Error starting PG scraper:', err);
+      exec(cmd, { env, cwd }, (error) => {
+        if (error) {
+          console.error('Error starting PG scraper:', error);
+        }
       });
     } else {
       // EdgeProp scraper
-      const cmd = `cd ${cwd} && EP_MAX_PAGES=${config.pages} EP_JOB_ID="${job.id}" bun src/workers/ep.live.ts > /tmp/ep-scraper-${job.id}.log 2>&1 &`;
+      const cmd = `cd ${cwd} && export PATH="${homeDir}/.bun/bin:$PATH" && nohup ${bunPath} src/workers/ep.live.ts > /tmp/ep-scraper-${job.id}.log 2>&1 &`;
+      const env = {
+        ...process.env,
+        PATH: `${homeDir}/.bun/bin:${process.env.PATH || ''}`,
+        EP_MAX_PAGES: config.pages.toString(),
+        EP_JOB_ID: job.id,
+      };
       
-      execAsync(cmd).catch(err => {
-        console.error('Error starting EP scraper:', err);
+      exec(cmd, { env, cwd }, (error) => {
+        if (error) {
+          console.error('Error starting EP scraper:', error);
+        }
       });
     }
 

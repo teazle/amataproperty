@@ -2188,8 +2188,8 @@ export async function scrapeEdgePropMCP(
             });
           }
           
-          // Increased delay between articles to avoid Cloudflare detection
-          await new Promise(resolve => setTimeout(resolve, 5000 + Math.random() * 3000)); // 5-8 seconds
+          // Reduced delay between articles (optimized for speed while avoiding rate limits)
+          await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000)); // 2-4 seconds
         }
         
         // Reduced delay between pages (optimized for speed)

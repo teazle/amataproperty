@@ -779,17 +779,26 @@ function isSimpleAcknowledgment(message: string): boolean {
   const lowerMessage = message.toLowerCase().trim();
   
   // Simple acknowledgments that indicate conversation can end
-  return lowerMessage === 'ok' || 
-         lowerMessage === 'okay' || 
-         lowerMessage === 'thanks' ||
-         lowerMessage === 'thank you' ||
-         lowerMessage === 'got it' ||
-         lowerMessage === 'understood' ||
-         lowerMessage === 'sure' ||
-         lowerMessage === 'alright' ||
-         lowerMessage === 'good' ||
-         lowerMessage === 'testing' ||
-         lowerMessage === 'test';
+  // Check for exact matches AND combinations
+  const exactMatches = [
+    'ok', 'okay', 'thanks', 'thank you', 'got it', 'understood', 
+    'sure', 'alright', 'good', 'testing', 'test'
+  ];
+  
+  // Check exact match first
+  if (exactMatches.includes(lowerMessage)) {
+    return true;
+  }
+  
+  // Check for combinations like "ok thank you", "ok thanks", etc.
+  const acknowledgmentPatterns = [
+    /^(ok|okay|sure|alright|got it|understood)\s+(thank you|thanks|thank)/i,
+    /^(thank you|thanks|thank)\s+(ok|okay|sure|alright|got it|understood)/i,
+    /^(ok|okay|sure|alright|got it|understood)$/i,
+    /^(thank you|thanks|thank)$/i,
+  ];
+  
+  return acknowledgmentPatterns.some(pattern => pattern.test(lowerMessage));
 }
 
 /**
@@ -1125,10 +1134,16 @@ Return the message text directly without extra quotes or JSON encoding.`;
         replyMessage = replyMessage.trim();
         
         // If still wrapped in quotes after all cleaning, force remove them one more time
-        if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
-            (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
+        // Also handle cases where quotes might be at different positions
+        while ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
+               (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
+          const before = replyMessage;
           replyMessage = replyMessage.slice(1, -1).trim();
+          if (replyMessage === before) break; // Prevent infinite loop
         }
+        
+        // One more aggressive pass: remove any leading/trailing quote characters
+        replyMessage = replyMessage.replace(/^["']+|["']+$/g, '').trim();
         
         // Log if we actually cleaned something
         if (originalMessage !== replyMessage) {

@@ -131,16 +131,47 @@ export async function solveCloudflareWithFlaresolverr(
 
 /**
  * Apply Flaresolverr cookies and user-agent to Playwright context
+ * Preserves login cookies while replacing Cloudflare cookies
  */
 export async function applyFlaresolverrToContext(
   context: any,
   flaresolverrResult: FlaresolverrResult
 ): Promise<void> {
-  // Clear existing cookies for the domain first
+  // Get existing cookies to preserve login session
+  const existingCookies = await context.cookies();
+  
+  // Identify Cloudflare cookie names that should be replaced
+  const cloudflareCookieNames = ['__cf_bm', 'cf_clearance', '__cfduid', '__cf_ob_info', '__cf_ob_equ'];
+  
+  // Identify login/session cookie names that should be preserved
+  const loginCookiePatterns = ['session', 'auth', 'token', 'user', 'login', 'access', 'refresh', 'jwt'];
+  
+  // Filter out Cloudflare cookies but keep login cookies
+  const preservedCookies = existingCookies.filter((cookie: any) => {
+    const cookieName = cookie.name.toLowerCase();
+    // Remove Cloudflare cookies
+    if (cloudflareCookieNames.some(cfName => cookieName.includes(cfName.toLowerCase()))) {
+      return false;
+    }
+    // Keep login/session cookies
+    if (loginCookiePatterns.some(pattern => cookieName.includes(pattern))) {
+      return true;
+    }
+    // Keep all other cookies (they might be important)
+    return true;
+  });
+  
+  // Clear all cookies first
   await context.clearCookies();
   
-  // Apply cookies from Flaresolverr
-  const cookies = flaresolverrResult.cookies.map((cookie: any) => ({
+  // Restore preserved cookies (login session)
+  if (preservedCookies.length > 0) {
+    await context.addCookies(preservedCookies);
+    console.log(`   🔐 Preserved ${preservedCookies.length} login/session cookies`);
+  }
+  
+  // Apply cookies from Flaresolverr (these will overwrite Cloudflare cookies)
+  const flaresolverrCookies = flaresolverrResult.cookies.map((cookie: any) => ({
     name: cookie.name,
     value: cookie.value,
     domain: cookie.domain || '.propertyguru.com.sg',
@@ -153,14 +184,14 @@ export async function applyFlaresolverrToContext(
       : 'Lax' as const,
   }));
   
-  await context.addCookies(cookies);
+  await context.addCookies(flaresolverrCookies);
   
   // Update user-agent to match Flaresolverr's browser exactly
   await context.setExtraHTTPHeaders({
     'User-Agent': flaresolverrResult.userAgent || FLARESOLVERR_UA,
   });
   
-  console.log(`   ✅ Applied ${cookies.length} cookies from Flaresolverr`);
+  console.log(`   ✅ Applied ${flaresolverrCookies.length} cookies from Flaresolverr`);
   console.log(`   ✅ User-Agent matched to Flaresolverr's browser`);
 }
 

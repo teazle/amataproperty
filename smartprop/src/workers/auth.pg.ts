@@ -92,14 +92,26 @@ async function authenticatePropertyGuru() {
 
   const page = await context.newPage();
 
+  const loginUrl = 'https://www.propertyguru.com.sg/login';
+  
+  try {
+    // Use Flaresolverr to solve Cloudflare before navigating
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(loginUrl, true);
+    
+    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+      await applyFlaresolverrToContext(context, flaresolverrResult);
+      await humanPause(500, 1000);
+    }
+  } catch (error) {
+    console.log('   ⚠️  Flaresolverr failed, continuing without it...');
+  }
+
   // Navigate to PropertyGuru login page
-  await page.goto('https://www.propertyguru.com.sg/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
   console.log('📄 Navigated to PropertyGuru login page');
   
   // Wait for Cloudflare to auto-resolve (datacenter IPs need more time)
-  await page.waitForTimeout(8000);
-  
-  // Check if page loaded successfully (check for login form OR property content)
+  await humanPause(3000, 5000);
   const pageText = await page.textContent('body').catch(() => '') || '';
   const hasLoginForm = await page.locator('input[type="email"], input[name="email"]').count().catch(() => 0) > 0;
   const hasPropertyContent = pageText.length > 10000 || pageText.includes('Login') || pageText.includes('Sign in');

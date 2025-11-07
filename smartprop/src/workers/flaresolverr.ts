@@ -88,7 +88,7 @@ export async function solveCloudflareWithFlaresolverr(
     const requestBody: any = {
       cmd: 'request.get',
       url: url,
-      maxTimeout: 120000,
+      maxTimeout: 180000, // Increased to 180 seconds (3 minutes) for aggressive Cloudflare
       returnOnlyCookies: false,
     };
     
@@ -97,30 +97,60 @@ export async function solveCloudflareWithFlaresolverr(
       requestBody.session = session;
     }
     
-    const response = await fetch(FLARESOLVERR_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.log(`   ⚠️  Flaresolverr request failed: ${response.status} - ${errorText.substring(0, 200)}`);
-      return null;
-    }
-
-    const data = await response.json();
+    // Add timeout to fetch request (slightly longer than Flaresolverr timeout)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 190000); // 190 seconds
     
-    if (data.status === 'ok' && data.solution) {
-      const cookies = data.solution.cookies || [];
-      const userAgent = data.solution.userAgent || FLARESOLVERR_UA;
+    try {
+      const response = await fetch(FLARESOLVERR_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
       
-      console.log(`   ✅ Flaresolverr solved Cloudflare! Got ${cookies.length} cookies`);
-      return { cookies, userAgent };
-    } else {
-      console.log(`   ⚠️  Flaresolverr response error: ${data.message || 'Unknown error'}`);
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        let errorJson: any = null;
+        try {
+          errorJson = JSON.parse(errorText);
+        } catch {
+          // Not JSON, ignore
+        }
+        
+        // If timeout error, log but don't fail completely
+        if (errorJson?.message?.includes('Timeout') || errorJson?.message?.includes('timeout')) {
+          console.log(`   ⚠️  Flaresolverr timed out (Cloudflare challenge too aggressive). Continuing without Flaresolverr...`);
+          return null; // Return null so scraper continues without Flaresolverr
+        }
+        
+        console.log(`   ⚠️  Flaresolverr request failed: ${response.status} - ${errorText.substring(0, 200)}`);
+        return null;
+      }
+
+      const data = await response.json();
+      
+      if (data.status === 'ok' && data.solution) {
+        const cookies = data.solution.cookies || [];
+        const userAgent = data.solution.userAgent || FLARESOLVERR_UA;
+        
+        console.log(`   ✅ Flaresolverr solved Cloudflare! Got ${cookies.length} cookies`);
+        return { cookies, userAgent };
+      } else {
+        console.log(`   ⚠️  Flaresolverr response error: ${data.message || 'Unknown error'}`);
+        return null;
+      }
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        console.log(`   ⚠️  Flaresolverr request timed out. Continuing without Flaresolverr...`);
+      } else {
+        console.log(`   ⚠️  Flaresolverr fetch error: ${fetchError.message}`);
+      }
       return null;
     }
   } catch (error) {

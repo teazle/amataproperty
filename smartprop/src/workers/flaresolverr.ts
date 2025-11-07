@@ -68,15 +68,16 @@ export async function createFlaresolverrSession(): Promise<string | null> {
  */
 export async function solveCloudflareWithFlaresolverr(
   url: string, 
-  useSession: boolean = true
+  useSession: boolean = false // Default to false - Flaresolverr works better without sessions
 ): Promise<FlaresolverrResult | null> {
   try {
     console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
     
-    // Use existing session or create new one (or skip session if creation fails)
-    let session = flaresolverrSession;
-    if (!session && useSession) {
-      session = await createFlaresolverrSession();
+    // Skip session creation by default - Flaresolverr creates temporary sessions automatically
+    // Sessions can cause Chrome connection issues
+    let session = null;
+    if (useSession) {
+      session = flaresolverrSession || await createFlaresolverrSession();
       if (session) {
         flaresolverrSession = session;
       } else {
@@ -98,8 +99,12 @@ export async function solveCloudflareWithFlaresolverr(
     }
     
     // Add timeout to fetch request (slightly longer than Flaresolverr timeout)
+    // Use a more aggressive timeout to prevent hanging
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 190000); // 190 seconds
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.log(`   ⚠️  Flaresolverr request timed out after 120s. Continuing without Flaresolverr...`);
+    }, 120000); // 120 seconds - more aggressive timeout
     
     try {
       const response = await fetch(FLARESOLVERR_URL, {
@@ -123,7 +128,10 @@ export async function solveCloudflareWithFlaresolverr(
         }
         
         // If timeout error, log but don't fail completely
-        if (errorJson?.message?.includes('Timeout') || errorJson?.message?.includes('timeout')) {
+        if (errorJson?.message?.includes('Timeout') || 
+            errorJson?.message?.includes('timeout') ||
+            errorText.includes('timeout') ||
+            response.status === 408) {
           console.log(`   ⚠️  Flaresolverr timed out (Cloudflare challenge too aggressive). Continuing without Flaresolverr...`);
           return null; // Return null so scraper continues without Flaresolverr
         }

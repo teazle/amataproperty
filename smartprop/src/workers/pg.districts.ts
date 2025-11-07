@@ -72,12 +72,15 @@ async function solveCloudflareWithFlaresolverr(url: string, useSession: boolean 
   try {
     console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
     
-    // Use existing session or create new one
+    // Use existing session or create new one (or skip session if creation fails)
     let session = flaresolverrSession;
     if (!session && useSession) {
       session = await createFlaresolverrSession();
       if (session) {
         flaresolverrSession = session;
+      } else {
+        // If session creation fails, continue without session (Flaresolverr will create temporary session)
+        console.log(`   ℹ️  Continuing without persistent session (Flaresolverr will use temporary session)`);
       }
     }
     
@@ -88,6 +91,7 @@ async function solveCloudflareWithFlaresolverr(url: string, useSession: boolean 
       returnOnlyCookies: false,
     };
     
+    // Only add session if we have one
     if (session) {
       requestBody.session = session;
     }
@@ -101,7 +105,8 @@ async function solveCloudflareWithFlaresolverr(url: string, useSession: boolean 
     });
 
     if (!response.ok) {
-      console.log(`   ⚠️  Flaresolverr request failed: ${response.status}`);
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.log(`   ⚠️  Flaresolverr request failed: ${response.status} - ${errorText.substring(0, 200)}`);
       return null;
     }
 
@@ -109,7 +114,7 @@ async function solveCloudflareWithFlaresolverr(url: string, useSession: boolean 
     
     if (data.status === 'ok' && data.solution) {
       const cookies = data.solution.cookies || [];
-      const userAgent = data.solution.userAgent || CHROME_UA;
+      const userAgent = data.solution.userAgent || FLARESOLVERR_UA;
       
       console.log(`   ✅ Flaresolverr solved Cloudflare! Got ${cookies.length} cookies`);
       return { cookies, userAgent };

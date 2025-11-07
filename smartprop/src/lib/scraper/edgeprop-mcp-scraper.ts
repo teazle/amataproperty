@@ -129,8 +129,8 @@ export async function scrapeEdgePropMCP(
   await context.addInitScript(() => {
     // Override the navigator.webdriver property (configurable so it can be redefined)
     try {
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined,
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
         configurable: true, // Allow redefinition
       });
     } catch (e) {
@@ -312,10 +312,10 @@ export async function scrapeEdgePropMCP(
               // Page 1: Use Flaresolverr immediately (no cookies yet)
               console.log(`   🔧 Using Flaresolverr for first page (no cookies yet)...`);
               try {
-                const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
-                
-                if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-                  await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+        
+        if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+          await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
                   await page.waitForTimeout(1500); // Random delay between 1-2s
                 }
               } catch (flareError) {
@@ -326,8 +326,8 @@ export async function scrapeEdgePropMCP(
               console.log(`   🚀 Attempting navigation with existing cookies...`);
             }
             
-            await page.goto(url, { 
-              waitUntil: 'domcontentloaded', 
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded', 
               timeout: 60000 
             });
           } else {
@@ -362,7 +362,7 @@ export async function scrapeEdgePropMCP(
           }
           
           // Brief wait for content to load
-          await page.waitForTimeout(2000);
+                            await page.waitForTimeout(2000);
           
           // Verify content loaded
           const pageText = await page.textContent('body').catch(() => '') || '';
@@ -527,19 +527,27 @@ export async function scrapeEdgePropMCP(
             const isAbsoluteUrl = href.includes('edgeprop.sg/property-news/');
             const pathSegments = href.split('/').length;
             
+            // Exclude category pages and non-article links
+            const isCategoryPage = href.includes('/property-news-search') ||
+                                   href.includes('/property-news/latest') ||
+                                   href.includes('/property-news/news') ||
+                                   href.includes('/property-news/in-depth') ||
+                                   href.includes('/property-news/showcase') ||
+                                   href.includes('/property-news/deal-watch') ||
+                                   href.includes('/property-news/international') ||
+                                   href.includes('/property-news/personality') ||
+                                   href.includes('/property-news/mandarin') ||
+                                   href.includes('/property-news/special-feature') ||
+                                   href === '/property-news' ||
+                                   href.endsWith('/property-news');
+            
+            // Category pages typically have only 2 path segments (e.g., /property-news/special-feature)
+            // Real articles have 3+ segments (e.g., /property-news/article-title-here)
+            const isArticlePath = (isRelativeUrl && pathSegments >= 3) || (isAbsoluteUrl && pathSegments >= 5);
+            
             return (isRelativeUrl || isAbsoluteUrl) && 
-                   !href.includes('/property-news-search') &&
-                   !href.includes('/property-news/latest') &&
-                   !href.includes('/property-news/news') &&
-                   !href.includes('/property-news/in-depth') &&
-                   !href.includes('/property-news/showcase') &&
-                   !href.includes('/property-news/deal-watch') &&
-                   !href.includes('/property-news/international') &&
-                   !href.includes('/property-news/personality') &&
-                   !href.includes('/property-news/mandarin') &&
-                   // For relative URLs: ['', 'property-news', 'article-slug'] = 3 segments minimum
-                   // For absolute URLs: ['https:', '', 'www.edgeprop.sg', 'property-news', 'article-slug'] = 5 segments minimum
-                   ((isRelativeUrl && pathSegments >= 3) || (isAbsoluteUrl && pathSegments >= 5));
+                   !isCategoryPage &&
+                   isArticlePath;
           });
           
           // Find the article href (prefer links with longer text content - those are usually the title links)
@@ -607,7 +615,32 @@ export async function scrapeEdgePropMCP(
             }
           }
           
-          if (normalizedHref && normalizedHref.includes('/property-news/') && !uniqueHrefs.has(normalizedHref)) {
+          // Final validation: exclude category pages and invalid articles
+          const isCategoryPage = normalizedHref.includes('/property-news/special-feature') ||
+                                 normalizedHref.includes('/property-news/latest') ||
+                                 normalizedHref.includes('/property-news/showcase') ||
+                                 normalizedHref.includes('/property-news/deal-watch') ||
+                                 normalizedHref.includes('/property-news/international') ||
+                                 normalizedHref.includes('/property-news/personality') ||
+                                 normalizedHref === '/property-news' ||
+                                 normalizedHref.endsWith('/property-news');
+          
+          // Skip if title is a category name (not a real article title)
+          const isCategoryTitle = !title || 
+                                  title.length < 10 ||
+                                  title === 'Special Feature' ||
+                                  title === 'SPECIAL FEATURE' ||
+                                  title === 'PROPERTY NEWS' ||
+                                  title === 'DEAL WATCH' ||
+                                  title === 'PERSONALITY' ||
+                                  title === 'NEWS / IN DEPTH' ||
+                                  title === 'NEWS / INTERNATIONAL';
+          
+          if (normalizedHref && 
+              normalizedHref.includes('/property-news/') && 
+              !isCategoryPage &&
+              !isCategoryTitle &&
+              !uniqueHrefs.has(normalizedHref)) {
             uniqueHrefs.set(normalizedHref, {
               href: normalizedHref,
               title: title,
@@ -731,8 +764,8 @@ export async function scrapeEdgePropMCP(
                   console.log(`   🚀 Attempting navigation with existing cookies...`);
                   await articlePage.goto(articleUrl, { 
                     waitUntil: 'domcontentloaded',
-                    timeout: 60000
-                  });
+                timeout: 60000
+              });
                 } else {
                   // Retry: use Flaresolverr if first attempt failed
                   console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
@@ -845,15 +878,15 @@ export async function scrapeEdgePropMCP(
             
             if (!hasArticle) {
               console.log(`⚠️ Content not loaded, skipping article`);
-              articlesFailed++;
-              onProgress({
-                currentPage: pageNum,
-                totalPages: maxPages,
-                currentArticle: i + 1,
-                articlesDiscovered: articles.length,
-                articlesScraped: allArticles.length,
-                articlesFailed: articlesFailed,
-                status: 'running',
+                articlesFailed++;
+                onProgress({
+                  currentPage: pageNum,
+                  totalPages: maxPages,
+                  currentArticle: i + 1,
+                  articlesDiscovered: articles.length,
+                  articlesScraped: allArticles.length,
+                  articlesFailed: articlesFailed,
+                  status: 'running',
                 message: `Content not loaded: ${article.title}`
               });
               clearTimeout(articleTimeout);
@@ -2110,7 +2143,7 @@ export async function scrapeEdgePropMCP(
     browserClosed = true; // Mark as closed to prevent double cleanup
     try {
       if (browser && browser.isConnected()) {
-        await browser.close();
+    await browser.close();
       }
     } catch (e) {
       console.error('Error closing browser:', e);
@@ -2176,29 +2209,29 @@ export async function scrapeSingleArticleMCP(
     // Simple content verification (Flaresolverr should be used before calling this function)
     await page.waitForTimeout(2000); // Brief wait for content to load
     
-    const hasArticle = await page.evaluate(() => {
-      const selectors = [
-        'article .content',
-        '.article-content', 
-        '.post-content',
-        '.entry-content',
-        'article',
-        'main',
-        '.content-body',
-        '.article-body'
-      ];
-      
-      for (const selector of selectors) {
-        const el = document.querySelector(selector);
-        if (el && (el.textContent?.length || 0) > 500) {
-          return true;
-        }
-      }
-      
-      const bodyText = document.body?.textContent || '';
-      return bodyText.length > 2000;
-    }).catch(() => false);
-    
+        const hasArticle = await page.evaluate(() => {
+          const selectors = [
+            'article .content',
+            '.article-content', 
+            '.post-content',
+            '.entry-content',
+            'article',
+            'main',
+            '.content-body',
+            '.article-body'
+          ];
+          
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el && (el.textContent?.length || 0) > 500) {
+              return true;
+            }
+          }
+          
+          const bodyText = document.body?.textContent || '';
+          return bodyText.length > 2000;
+        }).catch(() => false);
+        
     if (!hasArticle) {
       console.log(`⚠️ Content not loaded`);
     } else {

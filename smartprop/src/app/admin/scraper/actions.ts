@@ -104,34 +104,40 @@ export async function startScrapeJob(config: ScraperConfig) {
     
     if (config.platform === 'propertyguru') {
       const district = config.district!.replace('D', '');
-      // Use nohup to run in background and ensure PATH includes bun
-      const cmd = `cd ${cwd} && export PATH="${homeDir}/.bun/bin:$PATH" && nohup ${bunPath} src/workers/pg.districts.ts > /tmp/pg-scraper-${job.id}.log 2>&1 &`;
+      // Use absolute path to bun and set environment variables explicitly
+      const cmd = `cd ${cwd} && nohup ${bunPath} src/workers/pg.districts.ts > /tmp/pg-scraper-${job.id}.log 2>&1 &`;
       const env = {
         ...process.env,
-        PATH: `${homeDir}/.bun/bin:${process.env.PATH || ''}`,
+        PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
         PG_DISTRICTS: district,
         PG_MAX_PAGES: config.pages.toString(),
         PG_JOB_ID: job.id,
+        HOME: homeDir,
       };
       
       exec(cmd, { env, cwd }, (error) => {
         if (error) {
           console.error('Error starting PG scraper:', error);
+        } else {
+          console.log(`Started PG scraper with job ID: ${job.id}, bun path: ${bunPath}`);
         }
       });
     } else {
       // EdgeProp scraper
-      const cmd = `cd ${cwd} && export PATH="${homeDir}/.bun/bin:$PATH" && nohup ${bunPath} src/workers/ep.live.ts > /tmp/ep-scraper-${job.id}.log 2>&1 &`;
+      const cmd = `cd ${cwd} && nohup ${bunPath} src/workers/ep.live.ts > /tmp/ep-scraper-${job.id}.log 2>&1 &`;
       const env = {
         ...process.env,
-        PATH: `${homeDir}/.bun/bin:${process.env.PATH || ''}`,
+        PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
         EP_MAX_PAGES: config.pages.toString(),
         EP_JOB_ID: job.id,
+        HOME: homeDir,
       };
       
       exec(cmd, { env, cwd }, (error) => {
         if (error) {
           console.error('Error starting EP scraper:', error);
+        } else {
+          console.log(`Started EP scraper with job ID: ${job.id}, bun path: ${bunPath}`);
         }
       });
     }

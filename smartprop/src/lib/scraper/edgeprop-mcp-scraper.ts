@@ -293,6 +293,12 @@ export async function scrapeEdgePropMCP(
           } else {
             // Retry: use Flaresolverr if first attempt failed
             console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
+            
+            // Check if page is still open before using Flaresolverr
+            if (page.isClosed()) {
+              throw new Error('Page was closed before Flaresolverr retry');
+            }
+            
             try {
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
               
@@ -302,6 +308,11 @@ export async function scrapeEdgePropMCP(
               }
             } catch (flareError) {
               console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);
+            }
+            
+            // Check again if page is still open before navigation
+            if (page.isClosed()) {
+              throw new Error('Page was closed after Flaresolverr attempt');
             }
             
             await page.goto(url, { 
@@ -685,6 +696,12 @@ export async function scrapeEdgePropMCP(
                 } else {
                   // Retry: use Flaresolverr if first attempt failed
                   console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
+                  
+                  // Check if page is still open before using Flaresolverr
+                  if (articlePage.isClosed()) {
+                    throw new Error('Article page was closed before Flaresolverr retry');
+                  }
+                  
                   try {
                     const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
                     
@@ -694,6 +711,11 @@ export async function scrapeEdgePropMCP(
                     }
                   } catch (flareError) {
                     console.log(`   ⚠️  Flaresolverr failed, continuing anyway...`);
+                  }
+                  
+                  // Check again if page is still open before navigation
+                  if (articlePage.isClosed()) {
+                    throw new Error('Article page was closed after Flaresolverr attempt');
                   }
                   
                   await articlePage.goto(articleUrl, { 

@@ -845,14 +845,17 @@ async function scrapePropertyGuruByDistrict() {
                 // Add cookies from Flaresolverr
                 await context.addCookies(cookies);
                 
-                // Also update user-agent if provided
-                if (flaresolverrResult.userAgent && flaresolverrResult.userAgent !== CHROME_UA) {
-                  await context.setExtraHTTPHeaders({
-                    'User-Agent': flaresolverrResult.userAgent,
-                  });
-                }
+                // Update user-agent to match Flaresolverr's browser exactly
+                // This is critical for cookie compatibility
+                await context.setExtraHTTPHeaders({
+                  'User-Agent': flaresolverrResult.userAgent || FLARESOLVERR_UA,
+                });
+                
+                // Small delay to ensure cookies are set before navigation
+                await humanPause(500, 1000);
                 
                 console.log(`   ✅ Applied ${cookies.length} cookies from Flaresolverr`);
+                console.log(`   ✅ User-Agent matched to Flaresolverr's browser`);
               }
             }
             

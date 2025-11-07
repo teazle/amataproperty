@@ -274,26 +274,83 @@ export async function scrapeEdgePropMCP(
         : `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum}&page_size=20&sort_by=posted_desc&category=`;
       console.log(`Navigating to: ${url}`);
       
-      // Use Flaresolverr to solve Cloudflare before navigating (for all pages)
-      try {
-        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
-        
-        if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-          await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-          await page.waitForTimeout(1000); // Wait a bit longer after applying cookies
+      // Try navigating FIRST with existing cookies (much faster!)
+      // Only use Flaresolverr if we detect Cloudflare after navigation
+      let navigationSuccess = false;
+      let navRetryCount = 0;
+      const maxNavRetries = 2;
+      
+      while (!navigationSuccess && navRetryCount < maxNavRetries) {
+        try {
+          // First attempt: try without Flaresolverr (reuse cookies from previous page or initial load)
+          if (navRetryCount === 0) {
+            console.log(`   🚀 Attempting navigation with existing cookies...`);
+            await page.goto(url, { 
+              waitUntil: 'domcontentloaded', 
+              timeout: 60000 
+            });
+          } else {
+            // Retry: use Flaresolverr if first attempt failed
+            console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
+            try {
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+              
+              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                await page.waitForTimeout(1000, 2000);
+              }
+            } catch (flareError) {
+              console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);
+            }
+            
+            await page.goto(url, { 
+              waitUntil: 'domcontentloaded', 
+              timeout: 60000 
+            });
+          }
+          
+          // Brief wait for content to load
+          await page.waitForTimeout(2000);
+          
+          // Verify content loaded
+          const pageText = await page.textContent('body').catch(() => '') || '';
+          const hasCloudflareText = pageText.includes('Verifying you are human') || 
+                                   pageText.includes('challenge-platform') ||
+                                   pageText.includes('Just a moment');
+          const hasContent = pageText.length > 1000 && !hasCloudflareText;
+          
+          if (hasContent) {
+            navigationSuccess = true;
+            console.log(`✅ Navigation completed for page ${pageNum}`);
+          } else if (hasCloudflareText && navRetryCount < maxNavRetries - 1) {
+            // Cloudflare detected, retry with Flaresolverr
+            navRetryCount++;
+            console.log(`   ⚠️ Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), retrying with Flaresolverr...`);
+            await page.waitForTimeout(2000, 3000);
+            continue;
+          } else {
+            // No content and no retries left
+            navRetryCount++;
+            if (navRetryCount >= maxNavRetries) {
+              throw new Error('Navigation failed: No content loaded');
+            }
+          }
+        } catch (navError: any) {
+          navRetryCount++;
+          if (navRetryCount < maxNavRetries) {
+            console.log(`   ⚠️ Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
+            await page.waitForTimeout(2000, 3000);
+          } else {
+            throw navError;
+          }
         }
-      } catch (flareError) {
-        console.log(`   ⚠️ Flaresolverr failed for page ${pageNum}, continuing anyway...`);
       }
       
-      try {
-        await page.goto(url, { 
-          waitUntil: 'domcontentloaded', 
-          timeout: 45000 
-        });
-      console.log(`✅ Navigation completed for page ${pageNum}`);
+      if (!navigationSuccess) {
+        throw new Error(`Navigation failed for page ${pageNum} after ${maxNavRetries} attempts`);
+      }
       
-      // Simple content verification (Flaresolverr handles Cloudflare on page 1, cookies persist)
+      // Simple content verification
       await page.waitForTimeout(2000); // Brief wait for content to load
       
       const hasContent = await page.evaluate(() => {
@@ -594,13 +651,13 @@ export async function scrapeEdgePropMCP(
           
           const articlePage = await context.newPage();
           
-          // Add timeout wrapper for entire article processing (200 seconds max - longer than Flaresolverr's 180s)
+          // Add timeout wrapper for entire article processing (90 seconds max - should be fast with cookie reuse)
           let articleTimedOut = false;
           const articleTimeout = setTimeout(() => {
-            console.log(`   ⏱️  Article timeout (200s) - forcing close...`);
+            console.log(`   ⏱️  Article timeout (90s) - forcing close...`);
             articleTimedOut = true;
             articlePage.close().catch(() => {});
-          }, 200000); // 200 seconds to allow Flaresolverr to complete
+          }, 90000); // 90 seconds - should be enough since we try cookies first
           
           try {
             // Navigate to article page with enhanced Cloudflare handling
@@ -609,38 +666,40 @@ export async function scrapeEdgePropMCP(
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
-            // Use Flaresolverr to solve Cloudflare before navigating to article page (with session)
-            // Don't wait for Flaresolverr if we've already timed out
-            if (!articleTimedOut) {
-              try {
-                const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
-                
-                if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-                  // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
-                  await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                  await articlePage.waitForTimeout(500, 1000);
-                }
-              } catch (flareError) {
-                console.log(`   ⚠️  Flaresolverr failed for article page, continuing anyway...`);
-              }
-            }
-            
-            // Check if timed out before navigation
-            if (articleTimedOut) {
-              throw new Error('Article navigation timed out');
-            }
-            
-            // Navigate with retry logic (like PropertyGuru)
+            // Try navigating FIRST with existing cookies (much faster!)
+            // Only use Flaresolverr if we detect Cloudflare after navigation
             let navigationSuccess = false;
             let navRetryCount = 0;
             const maxNavRetries = 2;
             
             while (!navigationSuccess && navRetryCount < maxNavRetries && !articleTimedOut) {
               try {
-                await articlePage.goto(articleUrl, { 
-                  waitUntil: 'domcontentloaded',
-                  timeout: 60000
-                });
+                // First attempt: try without Flaresolverr (reuse cookies from search page)
+                if (navRetryCount === 0) {
+                  console.log(`   🚀 Attempting navigation with existing cookies...`);
+                  await articlePage.goto(articleUrl, { 
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                  });
+                } else {
+                  // Retry: use Flaresolverr if first attempt failed
+                  console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
+                  try {
+                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                    
+                    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                      await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                      await articlePage.waitForTimeout(1000, 2000);
+                    }
+                  } catch (flareError) {
+                    console.log(`   ⚠️  Flaresolverr failed, continuing anyway...`);
+                  }
+                  
+                  await articlePage.goto(articleUrl, { 
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                  });
+                }
                 
                 // Check if timed out during navigation
                 if (articleTimedOut) {
@@ -661,22 +720,10 @@ export async function scrapeEdgePropMCP(
                   navigationSuccess = true;
                   console.log(`✅ Successfully navigated to: ${article.title}`);
                 } else if (hasCloudflareText && navRetryCount < maxNavRetries - 1) {
-                  // Cloudflare detected, retry with Flaresolverr again
+                  // Cloudflare detected, retry with Flaresolverr
                   navRetryCount++;
                   console.log(`   ⚠️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), retrying with Flaresolverr...`);
-                  
-                  // Retry Flaresolverr
-                  try {
-                    const retryResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
-                    if (retryResult && retryResult.cookies.length > 0) {
-                      await applyFlaresolverrToContext(context, retryResult, '.edgeprop.sg');
-                      await articlePage.waitForTimeout(2000, 3000);
-                    }
-                  } catch (retryError) {
-                    console.log(`   ⚠️  Flaresolverr retry failed`);
-                  }
-                  
-                  await articlePage.waitForTimeout(3000, 5000);
+                  await articlePage.waitForTimeout(2000, 3000);
                   continue;
                 } else {
                   // No content and no retries left
@@ -689,7 +736,7 @@ export async function scrapeEdgePropMCP(
                 navRetryCount++;
                 if (navRetryCount < maxNavRetries && !articleTimedOut) {
                   console.log(`   ⚠️  Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
-                  await articlePage.waitForTimeout(3000, 5000);
+                  await articlePage.waitForTimeout(2000, 3000);
                 } else {
                   throw navError;
                 }

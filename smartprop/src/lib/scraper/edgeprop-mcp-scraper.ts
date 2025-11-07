@@ -585,6 +585,17 @@ export async function scrapeEdgePropMCP(
             message: `Scraping article ${i + 1}/${articlesToScrape.length}: ${article.title.substring(0, 50)}...`
           });
           
+          // Create a new page for each article (like PropertyGuru does) to avoid page closure issues
+          const articlePage = await context.newPage();
+          
+          // Add timeout wrapper for entire article processing (60 seconds max)
+          let articleTimedOut = false;
+          const articleTimeout = setTimeout(() => {
+            console.log(`   ⏱️  Article timeout (60s) - forcing close...`);
+            articleTimedOut = true;
+            articlePage.close().catch(() => {});
+          }, 60000);
+          
           try {
             // Navigate to article page with enhanced Cloudflare handling
             // Fix URL construction - ensure no double slashes
@@ -592,77 +603,105 @@ export async function scrapeEdgePropMCP(
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
-            // Use Flaresolverr to solve Cloudflare before navigating to article page
+            // Use Flaresolverr to solve Cloudflare before navigating to article page (with session)
             try {
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
                 await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                await page.waitForTimeout(500, 1000);
+                await articlePage.waitForTimeout(500, 1000);
               }
             } catch (flareError) {
               console.log(`   ⚠️  Flaresolverr failed for article page, continuing anyway...`);
             }
             
-            try {
-              await page.goto(articleUrl, { 
-                waitUntil: 'domcontentloaded', // Use domcontentloaded instead of networkidle for faster navigation
-                timeout: 60000
-              });
-            console.log(`✅ Successfully navigated to: ${article.title}`);
-            } catch (navError: unknown) {
-              console.log(`⚠️ Navigation timeout (may be Cloudflare), waiting and retrying...`);
-              // Check if page is still open before waiting
-              if (!page.isClosed()) {
-                await page.waitForTimeout(5000).catch(() => {
-                  console.log(`⚠️ Page closed during wait, skipping article`);
+            // Check if timed out before navigation
+            if (articleTimedOut) {
+              throw new Error('Article navigation timed out');
+            }
+            
+            // Navigate with retry logic (like PropertyGuru)
+            let navigationSuccess = false;
+            let navRetryCount = 0;
+            const maxNavRetries = 2;
+            
+            while (!navigationSuccess && navRetryCount < maxNavRetries && !articleTimedOut) {
+              try {
+                await articlePage.goto(articleUrl, { 
+                  waitUntil: 'domcontentloaded',
+                  timeout: 60000
                 });
-              } else {
-                console.log(`⚠️ Page was closed, skipping article`);
+                
+                // Check if timed out during navigation
+                if (articleTimedOut) {
+                  throw new Error('Article navigation timed out');
+                }
+                
+                // Brief wait for content to load
+                await articlePage.waitForTimeout(2000);
+                
+                // Verify content loaded
+                const pageText = await articlePage.textContent('body').catch(() => '') || '';
+                const hasCloudflareText = pageText.includes('Verifying you are human') || 
+                                         pageText.includes('challenge-platform') ||
+                                         pageText.includes('Just a moment');
+                const hasArticleContent = pageText.length > 1000 && !hasCloudflareText;
+                
+                if (hasArticleContent) {
+                  navigationSuccess = true;
+                  console.log(`✅ Successfully navigated to: ${article.title}`);
+                } else if (hasCloudflareText && navRetryCount < maxNavRetries - 1) {
+                  // Cloudflare detected, retry with Flaresolverr again
+                  navRetryCount++;
+                  console.log(`   ⚠️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), retrying with Flaresolverr...`);
+                  
+                  // Retry Flaresolverr
+                  try {
+                    const retryResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                    if (retryResult && retryResult.cookies.length > 0) {
+                      await applyFlaresolverrToContext(context, retryResult, '.edgeprop.sg');
+                      await articlePage.waitForTimeout(2000, 3000);
+                    }
+                  } catch (retryError) {
+                    console.log(`   ⚠️  Flaresolverr retry failed`);
+                  }
+                  
+                  await articlePage.waitForTimeout(3000, 5000);
+                  continue;
+                } else {
+                  // No content and no retries left
+                  navRetryCount++;
+                  if (navRetryCount >= maxNavRetries) {
+                    throw new Error('Navigation failed: No content loaded');
+                  }
+                }
+              } catch (navError: any) {
+                navRetryCount++;
+                if (navRetryCount < maxNavRetries && !articleTimedOut) {
+                  console.log(`   ⚠️  Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
+                  await articlePage.waitForTimeout(3000, 5000);
+                } else {
+                  throw navError;
+                }
               }
             }
             
-            // Simple content verification (Flaresolverr handles Cloudflare before navigation)
+            // Check if timed out after navigation
+            if (articleTimedOut) {
+              throw new Error('Article processing timed out');
+            }
+            
+            if (!navigationSuccess) {
+              throw new Error('Navigation failed after retries');
+            }
+            
             // Check if page is still open before proceeding
-            if (page.isClosed()) {
-              console.log(`⚠️ Page was closed, skipping article`);
-              articlesFailed++;
-              onProgress({
-                currentPage: pageNum,
-                totalPages: maxPages,
-                currentArticle: i + 1,
-                articlesDiscovered: articles.length,
-                articlesScraped: allArticles.length,
-                articlesFailed: articlesFailed,
-                status: 'running',
-                message: `Page closed: ${article.title}`
-              });
-              continue;
+            if (articlePage.isClosed()) {
+              throw new Error('Page was closed unexpectedly');
             }
             
-            await page.waitForTimeout(2000).catch(() => {
-              console.log(`⚠️ Page closed during wait, skipping article`);
-            });
-            
-            // Check again after wait
-            if (page.isClosed()) {
-              console.log(`⚠️ Page closed after wait, skipping article`);
-              articlesFailed++;
-              onProgress({
-                currentPage: pageNum,
-                totalPages: maxPages,
-                currentArticle: i + 1,
-                articlesDiscovered: articles.length,
-                articlesScraped: allArticles.length,
-                articlesFailed: articlesFailed,
-                status: 'running',
-                message: `Page closed: ${article.title}`
-              });
-              continue;
-            }
-            
-            const hasArticle = await page.evaluate(() => {
+            const hasArticle = await articlePage.evaluate(() => {
               const selectors = [
                 'article .content',
                 '.article-content', 
@@ -698,18 +737,20 @@ export async function scrapeEdgePropMCP(
                 status: 'running',
                 message: `Content not loaded: ${article.title}`
               });
+              clearTimeout(articleTimeout);
+              await articlePage.close();
               continue;
             }
             
             console.log(`✅ Content loaded successfully`);
             
             // Final wait for content to stabilize
-            await page.waitForTimeout(2000).catch(() => {
+            await articlePage.waitForTimeout(2000).catch(() => {
               console.log(`⚠️ Page closed during final wait, skipping article`);
             });
             
             // Check if page is still open before extraction
-            if (page.isClosed()) {
+            if (articlePage.isClosed() || articleTimedOut) {
               console.log(`⚠️ Page closed before extraction, skipping article`);
               articlesFailed++;
               onProgress({
@@ -722,6 +763,8 @@ export async function scrapeEdgePropMCP(
                 status: 'running',
                 message: `Page closed: ${article.title}`
               });
+              clearTimeout(articleTimeout);
+              await articlePage.close().catch(() => {});
               continue;
             }
             
@@ -731,26 +774,31 @@ export async function scrapeEdgePropMCP(
             
             // Wait for content container to exist before extracting
             try {
-              await page.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
+              await articlePage.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
               console.log(`✅ Content container found`);
               
               // Wait a bit more for images to load (lazy loading)
-              await page.waitForTimeout(2000);
+              await articlePage.waitForTimeout(2000);
               
               // Scroll to trigger lazy-loaded images
-              await page.evaluate(() => {
+              await articlePage.evaluate(() => {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               });
-              await page.waitForTimeout(1000);
-              await page.evaluate(() => {
+              await articlePage.waitForTimeout(1000);
+              await articlePage.evaluate(() => {
                 window.scrollTo({ top: 500, behavior: 'smooth' });
               });
-              await page.waitForTimeout(1000);
+              await articlePage.waitForTimeout(1000);
             } catch (e: unknown) {
               console.log(`⚠️ Content container not found, proceeding anyway...`);
             }
             
-            const articleData = await page.evaluate((articleTitle: string) => {
+            // Check if timed out before extraction
+            if (articleTimedOut || articlePage.isClosed()) {
+              throw new Error('Page closed or timed out before extraction');
+            }
+            
+            const articleData = await articlePage.evaluate((articleTitle: string) => {
               // FIRST: EdgeProp's JavaScript tries to call __name() as a function, so provide a no-op function
               try {
                 if (typeof (window as any).__name === 'undefined') {
@@ -1895,6 +1943,12 @@ export async function scrapeEdgePropMCP(
           } catch (error: any) {
             articlesFailed++;
             console.error(`Failed to scrape article ${article.title}:`, error);
+          } finally {
+            // Always close the article page and clear timeout (like PropertyGuru)
+            clearTimeout(articleTimeout);
+            await articlePage.close().catch(() => {
+              console.log(`   ⚠️  Error closing article page (may already be closed)`);
+            });
           }
           
           // Increased delay between articles to avoid Cloudflare detection

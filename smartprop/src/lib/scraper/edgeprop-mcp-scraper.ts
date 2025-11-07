@@ -61,74 +61,20 @@ export async function scrapeEdgePropMCP(
 ): Promise<MCPArticle[]> {
   console.log('Starting EdgeProp scraper using MCP approach...');
   
-  // Try to use playwright-ghost for better Cloudflare bypass
-  // If not available, fall back to regular playwright
-  let chromium: any;
-  let useGhost = false;
-  try {
-    const playwrightGhost = await import('playwright-ghost');
-    chromium = playwrightGhost.chromium;
-    useGhost = true;
-    console.log('✅ Using playwright-ghost for enhanced Cloudflare bypass');
-  } catch (e: unknown) {
-    // Fall back to regular playwright
-    const playwright = await import('playwright');
-    chromium = playwright.chromium;
-    console.log('⚠️ playwright-ghost not available, using regular playwright');
-  }
+  // Use regular playwright (Flaresolverr handles Cloudflare bypass)
+  const { chromium } = await import('playwright');
   
-  // Use new Chromium headless mode (channel: 'chromium') for better Cloudflare bypass
-  // This uses the real Chrome browser instead of headless shell, making it harder to detect
   const launchOptions = { 
-    headless: false, // Make browser visible for debugging
+    headless: false, // xvfb-run provides virtual display
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      // Remove automation flags that Cloudflare detects
-      '--exclude-switches=enable-automation',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-extensions',
-      '--disable-plugins',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--disable-translate',
-      '--hide-scrollbars',
-      '--mute-audio',
-      '--no-default-browser-check',
-      '--disable-ipc-flooding-protection',
-      '--disable-hang-monitor',
-      '--disable-prompt-on-repost',
-      '--disable-domain-reliability',
-      '--disable-component-extensions-with-background-pages',
-      '--disable-background-networking',
-      '--disable-breakpad'
     ]
   };
   
-  // Try to use chromium channel if available (better Cloudflare bypass)
-  // If it fails, fall back to default browser
-  let browser;
-  try {
-    browser = await chromium.launch({ 
-      ...launchOptions,
-      channel: 'chromium' // Use new Chromium headless mode - more authentic, harder to detect
-    });
-    console.log('✅ Using Chromium channel for better Cloudflare bypass');
-  } catch (e: unknown) {
-    console.log('⚠️ Chromium channel not available, using default browser:', e);
-    browser = await chromium.launch(launchOptions);
-  }
+  const browser = await chromium.launch(launchOptions);
   
   // Create context with stealth configuration (same as EP live scraper)
   const context = await browser.newContext({
@@ -158,10 +104,24 @@ export async function scrapeEdgePropMCP(
   
   // Remove automation indicators (crucial for bypassing Cloudflare)
   await context.addInitScript(() => {
-    // Override the navigator.webdriver property
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-    });
+    // Override the navigator.webdriver property (configurable so it can be redefined)
+    try {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+        configurable: true, // Allow redefinition
+      });
+    } catch (e) {
+      // Property already defined, try to delete and redefine
+      try {
+        delete (navigator as any).webdriver;
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined,
+          configurable: true,
+        });
+      } catch {
+        // Ignore if we can't redefine
+      }
+    }
     
     // Mock chrome object
     (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
@@ -222,10 +182,7 @@ export async function scrapeEdgePropMCP(
     delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
     delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
     
-    // Additional Cloudflare bypass: hide webdriver
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => false,
-    });
+    // webdriver is already defined above, skip duplicate definition
     
     // Mock plugins
     Object.defineProperty(navigator, 'plugins', {
@@ -1917,19 +1874,8 @@ export async function scrapeSingleArticleMCP(
 ): Promise<MCPArticle | null> {
   console.log('Starting single article scrape for:', url);
   
-  // Try to use playwright-ghost for better Cloudflare bypass
-  let chromium: any;
-  let useGhost = false;
-  try {
-    const playwrightGhost = await import('playwright-ghost');
-    chromium = playwrightGhost.chromium;
-    useGhost = true;
-    console.log('✅ Using playwright-ghost for enhanced Cloudflare bypass');
-  } catch (e: unknown) {
-    const playwright = await import('playwright');
-    chromium = playwright.chromium;
-    console.log('⚠️ playwright-ghost not available, using regular playwright');
-  }
+  // Use regular playwright (Flaresolverr handles Cloudflare bypass)
+  const { chromium } = await import('playwright');
   
   const launchOptions = { 
     headless: false,
@@ -1938,50 +1884,6 @@ export async function scrapeSingleArticleMCP(
       '--disable-dev-shm-usage',
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--exclude-switches=enable-automation',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-extensions',
-      '--disable-plugins',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--disable-translate',
-      '--disable-component-update',
-      '--disable-domain-reliability',
-      '--disable-features=TranslateUI',
-      '--disable-ipc-flooding-protection',
-      '--disable-notifications',
-      '--disable-popup-blocking',
-      '--disable-prompt-on-repost',
-      '--disable-hang-monitor',
-      '--disable-client-side-phishing-detection',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--autoplay-policy=user-gesture-required',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-breakpad',
-      '--disable-component-extensions-with-background-pages',
-      '--disable-extensions',
-      '--disable-features=TranslateUI',
-      '--disable-ipc-flooding-protection',
-      '--disable-renderer-backgrounding',
-      '--disable-sync',
-      '--metrics-recording-only',
-      '--mute-audio',
-      '--no-default-browser-check',
-      '--enable-automation',
-      '--password-store=basic',
-      '--use-mock-keychain'
     ]
   };
   

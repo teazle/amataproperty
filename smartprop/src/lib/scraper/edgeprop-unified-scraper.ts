@@ -7,6 +7,7 @@
 import { chromium, Browser, Page } from 'playwright';
 import { type ArticleContent as _ArticleContent } from './edgeprop-content-scraper';
 import { cleanArticleParagraphs, sanitizeHtmlContent, extractCleanTextContent } from '@/lib/utils/content-parser';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from '@/workers/flaresolverr';
 
 export interface UnifiedArticle {
   // Metadata (from API)
@@ -119,7 +120,7 @@ export async function scrapeEdgePropUnified(
     });
     // Create context with realistic user agent and settings
     const context = await currentBrowser.newContext({
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
       viewport: { width: 1280, height: 720 },
       extraHTTPHeaders: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -143,6 +144,15 @@ export async function scrapeEdgePropUnified(
       status: 'running',
       message: 'Browser launched, navigating to EdgeProp...'
     });
+    
+    // Use Flaresolverr to solve Cloudflare before initial navigation
+    const initialUrl = 'https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=1&page_size=20&sort_by=posted_desc&category=';
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, true);
+    
+    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+      await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+      await currentPage.waitForTimeout(500);
+    }
     
     // Set up request interception to catch API calls
     await currentPage.route('**/*', async (route) => {
@@ -271,8 +281,17 @@ export async function scrapeEdgePropUnified(
     });
     
     try {
+      // Use Flaresolverr to solve Cloudflare before initial navigation
+      const initialUrl = 'https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=1&page_size=20&sort_by=posted_desc&category=';
+      const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, true);
+      
+      if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+        await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+        await currentPage.waitForTimeout(500);
+      }
+
       await currentPage.goto(
-        'https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=1&page_size=20&sort_by=posted_desc&category=',
+        initialUrl,
         { 
           waitUntil: 'domcontentloaded',
           timeout: 30000 // 30 second timeout

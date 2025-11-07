@@ -142,14 +142,14 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             >
               {showLogs ? 'Hide Logs' : 'View Logs'}
             </Button>
-            <Button
-              onClick={handleStopScraper}
+          <Button
+            onClick={handleStopScraper}
               disabled={isStopping || isResetting}
-              variant="destructive"
-              size="sm"
-            >
-              {isStopping ? 'Stopping...' : 'Stop Scraper'}
-            </Button>
+            variant="destructive"
+            size="sm"
+          >
+            {isStopping ? 'Stopping...' : 'Stop Scraper'}
+          </Button>
             <Button
               onClick={handleForceReset}
               disabled={isStopping || isResetting}

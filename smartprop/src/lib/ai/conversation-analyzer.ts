@@ -899,8 +899,8 @@ async function generateNaturalResponse(
   if (bothObjectivesMet) {
     // Double-check: if it's an acknowledgment, definitely don't respond
     if (isAcknowledgment) {
-      console.log('🛑 SAFETY CHECK: Both objectives met + acknowledgment - stopping before AI generation');
-      return '';
+    console.log('🛑 SAFETY CHECK: Both objectives met + acknowledgment - stopping before AI generation');
+    return '';
     }
     
     // Also check if we just sent a completion message
@@ -1100,9 +1100,9 @@ Return the message text directly without extra quotes or JSON encoding.`;
           // Remove outer quotes if they match
           if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
               (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
-            replyMessage = replyMessage.slice(1, -1).trim();
-          }
-          
+          replyMessage = replyMessage.slice(1, -1).trim();
+        }
+        
           // If no change, break
           if (replyMessage === before) {
             break;

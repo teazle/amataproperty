@@ -10,6 +10,7 @@ import { execSync } from 'child_process';
 import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr';
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate(): Promise<boolean> {
@@ -244,12 +245,12 @@ async function scrapeEdgePropFinal() {
   });
 
   const contextOptions: BrowserContextOptions = {
-    userAgent: CHROME_UA,
+    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
     storageState: stateFilePath, // Always use the fresh auth state
-    // Add stealth headers
+    // Enhanced HTTP headers matching Flaresolverr's browser
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -384,6 +385,16 @@ async function scrapeEdgePropFinal() {
       
       while (!navigationSuccess && navRetryCount < maxNavRetries) {
         try {
+          // Use Flaresolverr to solve Cloudflare before navigating (first attempt only)
+          if (navRetryCount === 0) {
+            const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true);
+            
+            if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+              await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+              await humanPause(500, 1000);
+            }
+          }
+
           await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
           
           // Check for Cloudflare on the search page

@@ -8,6 +8,7 @@ config({ path: path.resolve(process.cwd(), '.env.local') });
 import { chromium } from 'playwright';
 import fs from 'fs';
 import { CHROME_UA, humanPause } from './stealth';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr';
 
 async function authenticateEdgeProp() {
   // Get credentials from environment variables
@@ -31,7 +32,7 @@ async function authenticateEdgeProp() {
   });
 
   const context = await browser.newContext({
-    userAgent: CHROME_UA,
+    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -40,6 +41,16 @@ async function authenticateEdgeProp() {
     colorScheme: 'light',
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
     }
   });
 
@@ -67,9 +78,18 @@ async function authenticateEdgeProp() {
   const page = await context.newPage();
 
   try {
+    // Use Flaresolverr to solve Cloudflare before navigating
+    const homepageUrl = 'https://www.edgeprop.sg/';
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(homepageUrl, true);
+    
+    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+      await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+      await humanPause(500, 1000);
+    }
+
     // Navigate to EdgeProp homepage
     console.log('📄 Navigating to EdgeProp homepage...');
-    await page.goto('https://www.edgeprop.sg/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await humanPause(3000, 5000);
 
     // Check if already logged in

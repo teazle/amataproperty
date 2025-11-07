@@ -966,16 +966,16 @@ export async function forceFixStuckJob(jobId: string) {
     // Get PID from lock file (pid column doesn't exist in database)
     let pid: number | null | undefined = null;
     
-    try {
-      const lockFile = path.join(process.cwd(), 'storage', 
-        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-      
-      if (fs.existsSync(lockFile)) {
-        const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-        pid = lockData.pid || null;
-      }
-    } catch (error) {
-      // Ignore
+      try {
+        const lockFile = path.join(process.cwd(), 'storage', 
+          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+        
+        if (fs.existsSync(lockFile)) {
+          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+          pid = lockData.pid || null;
+        }
+      } catch (error) {
+        // Ignore
     }
 
     if (pid && typeof pid === 'number' && pid > 0) {

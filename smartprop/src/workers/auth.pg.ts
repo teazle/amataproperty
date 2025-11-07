@@ -1,6 +1,8 @@
 import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr.js';
+import { humanPause } from './stealth.js';
 
 async function authenticatePropertyGuru() {
   const email = process.env.PG_EMAIL;
@@ -24,14 +26,14 @@ async function authenticatePropertyGuru() {
   });
 
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
     permissions: ['geolocation'],
     geolocation: { latitude: 1.3521, longitude: 103.8198 }, // Singapore coordinates
     colorScheme: 'light',
-    // Enhanced HTTP headers matching EdgeProp scraper (works on EC2)
+    // Enhanced HTTP headers matching Flaresolverr's browser
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',

@@ -5,6 +5,7 @@
 
 import * as db from '@/lib/db/articles';
 import { upsertArticleContent } from '@/lib/db/article-content';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from '@/workers/flaresolverr';
 // Removed browser-incompatible imports
 // import { cleanArticleParagraphs, sanitizeHtmlContent, extractCleanTextContent } from '@/lib/utils/content-parser';
 
@@ -133,7 +134,7 @@ export async function scrapeEdgePropMCP(
   const context = await browser.newContext({
     // Add init script to prevent __name errors
     javaScriptEnabled: true,
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -315,6 +316,16 @@ export async function scrapeEdgePropMCP(
         ? `https://www.edgeprop.sg/property-news/latest`
         : `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum}&page_size=20&sort_by=posted_desc&category=`;
       console.log(`Navigating to: ${url}`);
+      
+      // Use Flaresolverr to solve Cloudflare before navigating (first page only)
+      if (pageNum === 1) {
+        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+        
+        if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+          await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+          await page.waitForTimeout(500);
+        }
+      }
       
       try {
         await page.goto(url, { 

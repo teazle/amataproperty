@@ -241,18 +241,18 @@ export function ScraperDashboard({
   return (
     <div className="space-y-6">
       {/* Force Reset Button and Stuck Job Info - Always visible */}
-      <div className="space-y-4">
-        <div className="flex justify-end">
-          <Button
-            onClick={handleForceReset}
-            disabled={isResetting}
-            variant="outline"
-            size="sm"
-            className="border-amber-500 text-amber-700 hover:bg-amber-50"
-          >
-            {isResetting ? 'Resetting...' : 'Force Reset Stuck Jobs'}
-          </Button>
-        </div>
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button
+              onClick={handleForceReset}
+              disabled={isResetting}
+              variant="outline"
+              size="sm"
+              className="border-amber-500 text-amber-700 hover:bg-amber-50"
+            >
+              {isResetting ? 'Resetting...' : 'Force Reset Stuck Jobs'}
+            </Button>
+          </div>
           
           {/* Show stuck job details if any */}
           {stuckJobInfo && stuckJobInfo.length > 0 && (

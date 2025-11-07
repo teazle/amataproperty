@@ -75,11 +75,29 @@ export async function scrapeEdgePropMCP(
       '--disable-gpu', // Disable GPU for headless mode
       '--disable-software-rasterizer', // Reduce memory usage
       '--disable-extensions', // Disable extensions
-      '--single-process', // Run in single process mode (saves memory)
+      '--max-old-space-size=512', // Limit memory per process
     ]
   };
   
   const browser = await chromium.launch(launchOptions);
+  
+  // Ensure browser is closed on process exit (prevents memory leaks)
+  let browserClosed = false;
+  const cleanup = async () => {
+    if (browserClosed) return;
+    try {
+      if (browser && browser.isConnected()) {
+        await browser.close();
+        browserClosed = true;
+      }
+    } catch (e) {
+      // Ignore errors during cleanup
+    }
+  };
+  process.on('exit', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.on('uncaughtException', cleanup);
   
   // Create context with stealth configuration (same as EP live scraper)
   const context = await browser.newContext({
@@ -298,7 +316,7 @@ export async function scrapeEdgePropMCP(
                 
                 if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                   await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                  await page.waitForTimeout(1000, 2000);
+                  await page.waitForTimeout(1500); // Random delay between 1-2s
                 }
               } catch (flareError) {
                 console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);
@@ -360,7 +378,7 @@ export async function scrapeEdgePropMCP(
             // Cloudflare detected, retry with Flaresolverr
             navRetryCount++;
             console.log(`   ⚠️ Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), retrying with Flaresolverr...`);
-            await page.waitForTimeout(2000, 3000);
+            await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000)); // Random 2-3s delay
             continue;
           } else {
             // No content and no retries left
@@ -373,7 +391,7 @@ export async function scrapeEdgePropMCP(
           navRetryCount++;
           if (navRetryCount < maxNavRetries) {
             console.log(`   ⚠️ Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
-            await page.waitForTimeout(2000, 3000);
+            await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000)); // Random 2-3s delay
           } else {
             throw navError;
           }
@@ -729,7 +747,7 @@ export async function scrapeEdgePropMCP(
                     
                     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                      await articlePage.waitForTimeout(1000, 2000);
+                      await articlePage.waitForTimeout(1500); // Random delay between 1-2s
                     }
                   } catch (flareError) {
                     console.log(`   ⚠️  Flaresolverr failed, continuing anyway...`);
@@ -768,7 +786,7 @@ export async function scrapeEdgePropMCP(
                   // Cloudflare detected, retry with Flaresolverr
                   navRetryCount++;
                   console.log(`   ⚠️  Cloudflare detected (attempt ${navRetryCount}/${maxNavRetries}), retrying with Flaresolverr...`);
-                  await articlePage.waitForTimeout(2000, 3000);
+                  await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000)); // Random 2-3s delay
                   continue;
                 } else {
                   // No content and no retries left
@@ -781,7 +799,7 @@ export async function scrapeEdgePropMCP(
                 navRetryCount++;
                 if (navRetryCount < maxNavRetries && !articleTimedOut) {
                   console.log(`   ⚠️  Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
-                  await articlePage.waitForTimeout(2000, 3000);
+                  await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000)); // Random 2-3s delay
                 } else {
                   throw navError;
                 }
@@ -2075,8 +2093,37 @@ export async function scrapeEdgePropMCP(
     
     return allArticles;
     
+  } catch (error: any) {
+    console.error('❌ Scraper error:', error);
+    onProgress({
+      currentPage: 0,
+      totalPages: maxPages,
+      currentArticle: 0,
+      articlesDiscovered: seenIds.size,
+      articlesScraped: allArticles.length,
+      articlesFailed,
+      status: 'error',
+      message: `Scraper failed: ${error.message}`
+    });
+    throw error;
   } finally {
-    await browser.close();
+    browserClosed = true; // Mark as closed to prevent double cleanup
+    try {
+      if (browser && browser.isConnected()) {
+        await browser.close();
+      }
+    } catch (e) {
+      console.error('Error closing browser:', e);
+    }
+    // Remove cleanup handlers
+    try {
+      process.removeListener('exit', cleanup);
+      process.removeListener('SIGINT', cleanup);
+      process.removeListener('SIGTERM', cleanup);
+      process.removeListener('uncaughtException', cleanup);
+    } catch (e) {
+      // Ignore errors removing listeners
+    }
   }
 }
 

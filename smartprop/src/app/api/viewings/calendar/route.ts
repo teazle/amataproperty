@@ -53,8 +53,8 @@ export async function GET() {
         
         // Parse the timeslot
         if (date) {
-          // Has specific date
-          startDate = new Date(date as string);
+          // Has specific date - parse in Singapore timezone to avoid UTC conversion issues
+          startDate = parseDateInSingaporeTimezone(date as string);
         } else if (day) {
           // Has day of week - find next occurrence
           startDate = getNextDayOfWeek(day as string);
@@ -67,26 +67,81 @@ export async function GET() {
         if (time) {
           const timeInfo = parseTimeString(time as string);
           if (timeInfo.start) {
-            startDate.setHours(timeInfo.start.hour, timeInfo.start.minute);
-            endDate = new Date(startDate);
+            // Extract date components from the date string to avoid timezone conversion issues
+            let year: number, month: number, day: number;
+            
+            if (date) {
+              // Parse from the original date string
+              const dateMatch = (date as string).match(/^(\d{4})-(\d{2})-(\d{2})/);
+              if (dateMatch) {
+                year = parseInt(dateMatch[1]);
+                month = parseInt(dateMatch[2]) - 1; // JavaScript months are 0-indexed
+                day = parseInt(dateMatch[3]);
+              } else {
+                // Fallback to date object methods
+                year = startDate.getFullYear();
+                month = startDate.getMonth();
+                day = startDate.getDate();
+              }
+            } else {
+              // Fallback to date object methods if no date string
+              year = startDate.getFullYear();
+              month = startDate.getMonth();
+              day = startDate.getDate();
+            }
+            
+            // Create new date objects with explicit Singapore timezone for the times
+            const startTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(timeInfo.start.hour).padStart(2, '0')}:${String(timeInfo.start.minute).padStart(2, '0')}:00+08:00`;
+            startDate = new Date(startTimeStr);
             
             if (timeInfo.end) {
-              endDate.setHours(timeInfo.end.hour, timeInfo.end.minute);
+              const endTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(timeInfo.end.hour).padStart(2, '0')}:${String(timeInfo.end.minute).padStart(2, '0')}:00+08:00`;
+              endDate = new Date(endTimeStr);
             } else {
               // Default 1 hour slot
-              endDate.setHours(startDate.getHours() + 1);
+              const endHour = timeInfo.start.hour + 1;
+              const endTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(endHour).padStart(2, '0')}:${String(timeInfo.start.minute).padStart(2, '0')}:00+08:00`;
+              endDate = new Date(endTimeStr);
             }
           } else {
-            // Default time if can't parse
-            startDate.setHours(14, 0); // 2pm default
-            endDate = new Date(startDate);
-            endDate.setHours(15, 0); // 3pm default
+            // Default time if can't parse - use Singapore timezone
+            const dateMatch = (date as string)?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            let year: number, month: number, day: number;
+            
+            if (dateMatch) {
+              year = parseInt(dateMatch[1]);
+              month = parseInt(dateMatch[2]) - 1;
+              day = parseInt(dateMatch[3]);
+            } else {
+              year = startDate.getFullYear();
+              month = startDate.getMonth();
+              day = startDate.getDate();
+            }
+            
+            const startTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T14:00:00+08:00`;
+            const endTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T15:00:00+08:00`;
+            startDate = new Date(startTimeStr);
+            endDate = new Date(endTimeStr);
           }
         } else {
-          // No time specified - default to 2-3pm
-          startDate.setHours(14, 0);
-          endDate = new Date(startDate);
-          endDate.setHours(15, 0);
+          // No time specified - default to 2-3pm in Singapore timezone
+          const dateMatch = (date as string)?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+          let year: number, month: number, day: number;
+          
+          if (dateMatch) {
+            year = parseInt(dateMatch[1]);
+            month = parseInt(dateMatch[2]) - 1;
+            day = parseInt(dateMatch[3]);
+          } else {
+            year = startDate.getFullYear();
+            month = startDate.getMonth();
+            day = startDate.getDate();
+          }
+          
+          const startTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T14:00:00+08:00`;
+          const endTimeStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T15:00:00+08:00`;
+          startDate = new Date(startTimeStr);
+          endDate = new Date(endTimeStr);
         }
 
         events.push({
@@ -113,6 +168,27 @@ export async function GET() {
       { status: 500 }
     );
   }
+}
+
+// Helper: Parse ISO date string (YYYY-MM-DD) in Singapore timezone
+// This avoids timezone conversion issues when parsing date-only strings
+function parseDateInSingaporeTimezone(dateStr: string): Date {
+  // Parse ISO date string (YYYY-MM-DD)
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) {
+    // Fallback to standard Date parsing if format doesn't match
+    return new Date(dateStr);
+  }
+  
+  const [, year, month, day] = match;
+  
+  // Create date string with explicit Singapore timezone (UTC+8)
+  // Format: YYYY-MM-DDTHH:mm:ss+08:00
+  // We use midnight Singapore time to avoid any timezone conversion issues
+  const singaporeDateStr = `${year}-${month}-${day}T00:00:00+08:00`;
+  const date = new Date(singaporeDateStr);
+  
+  return date;
 }
 
 // Helper: Get next occurrence of day of week

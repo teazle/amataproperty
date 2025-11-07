@@ -379,7 +379,8 @@ export async function scrapeEdgePropMCP(
       
       // Wait for content to load properly
       await page.waitForTimeout(2000);
-        
+      
+      try {
         // Human-like scrolling behavior to trigger lazy loading
         const scrollSteps = [0, 300, 600, 900, 1200];
         for (const scrollPos of scrollSteps) {
@@ -397,9 +398,8 @@ export async function scrapeEdgePropMCP(
         
         console.log(`Fast loading completed for page ${pageNum}`);
       } catch (error: unknown) {
-        console.error(`Navigation failed for page ${pageNum}:`, error);
-        articlesFailed++;
-        continue;
+        console.error(`Scrolling failed for page ${pageNum}:`, error);
+        // Continue anyway - scrolling is not critical
       }
       
       // Extract articles from the page

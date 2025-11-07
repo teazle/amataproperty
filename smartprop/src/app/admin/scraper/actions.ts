@@ -2,7 +2,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -104,8 +104,10 @@ export async function startScrapeJob(config: ScraperConfig) {
     
     if (config.platform === 'propertyguru') {
       const district = config.district!.replace('D', '');
-      // Use absolute path to bun and set environment variables explicitly
-      const cmd = `cd ${cwd} && nohup ${bunPath} src/workers/pg.districts.ts > /tmp/pg-scraper-${job.id}.log 2>&1 &`;
+      // Use spawn with absolute path to bun for better control
+      const logFile = `/tmp/pg-scraper-${job.id}.log`;
+      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      
       const env = {
         ...process.env,
         PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
@@ -115,16 +117,21 @@ export async function startScrapeJob(config: ScraperConfig) {
         HOME: homeDir,
       };
       
-      exec(cmd, { env, cwd }, (error) => {
-        if (error) {
-          console.error('Error starting PG scraper:', error);
-        } else {
-          console.log(`Started PG scraper with job ID: ${job.id}, bun path: ${bunPath}`);
-        }
+      const child = spawn(bunPath, ['src/workers/pg.districts.ts'], {
+        cwd,
+        env,
+        detached: true,
+        stdio: ['ignore', logStream, logStream],
       });
+      
+      child.unref(); // Allow parent process to exit independently
+      
+      console.log(`Started PG scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);
     } else {
       // EdgeProp scraper
-      const cmd = `cd ${cwd} && nohup ${bunPath} src/workers/ep.live.ts > /tmp/ep-scraper-${job.id}.log 2>&1 &`;
+      const logFile = `/tmp/ep-scraper-${job.id}.log`;
+      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      
       const env = {
         ...process.env,
         PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
@@ -133,13 +140,16 @@ export async function startScrapeJob(config: ScraperConfig) {
         HOME: homeDir,
       };
       
-      exec(cmd, { env, cwd }, (error) => {
-        if (error) {
-          console.error('Error starting EP scraper:', error);
-        } else {
-          console.log(`Started EP scraper with job ID: ${job.id}, bun path: ${bunPath}`);
-        }
+      const child = spawn(bunPath, ['src/workers/ep.live.ts'], {
+        cwd,
+        env,
+        detached: true,
+        stdio: ['ignore', logStream, logStream],
       });
+      
+      child.unref(); // Allow parent process to exit independently
+      
+      console.log(`Started EP scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);
     }
 
     // Update job status to running

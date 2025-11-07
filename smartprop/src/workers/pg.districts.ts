@@ -580,8 +580,9 @@ async function scrapePropertyGuruByDistrict() {
 
   // Launch browser once for all districts
   // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
+  const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
   const browser = await chromium.launch({
-    headless: false, // xvfb-run provides virtual display, so we can run non-headless
+    headless: isHeadless, // Use headless mode on EC2/server environments
     plugins: [
       ...plugins.recommended({
         humanize: {

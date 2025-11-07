@@ -64,7 +64,7 @@ export async function scrapeEdgePropMCP(
   // Use regular playwright (Flaresolverr handles Cloudflare bypass)
   const { chromium } = await import('playwright');
   
-  // Use headless mode - works better on EC2 even with xvfb-run
+  // Use headless mode with additional args for EC2 stability
   const launchOptions = { 
     headless: true, // Use headless mode for better reliability on EC2
     args: [
@@ -72,6 +72,10 @@ export async function scrapeEdgePropMCP(
       '--disable-dev-shm-usage',
       '--no-sandbox',
       '--disable-setuid-sandbox',
+      '--disable-gpu', // Disable GPU for headless mode
+      '--disable-software-rasterizer', // Reduce memory usage
+      '--disable-extensions', // Disable extensions
+      '--single-process', // Run in single process mode (saves memory)
     ]
   };
   

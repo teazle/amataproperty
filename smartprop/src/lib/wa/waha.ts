@@ -47,6 +47,26 @@ export async function sendWhatsAppMessage(
     };
   }
 
+  // Check session status before attempting to send
+  try {
+    const statusResponse = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`);
+    if (statusResponse.ok) {
+      const sessionData = await statusResponse.json();
+      const sessionStatus = sessionData?.status;
+      
+      if (sessionStatus !== 'WORKING') {
+        console.error(`WAHA session status is "${sessionStatus}", expected "WORKING"`);
+        return {
+          success: false,
+          error: `WAHA session is not ready (status: ${sessionStatus}). Please authenticate via QR code at ${WAHA_URL} or wait for session to initialize.`,
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('Could not check WAHA session status:', error);
+    // Continue anyway - let the send attempt fail if session is not ready
+  }
+
   // Format phone number for WhatsApp (must end with @c.us)
   const chatId = to.includes('@') ? to : `${to}@c.us`;
 
@@ -70,6 +90,15 @@ export async function sendWhatsAppMessage(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error('WAHA API error:', errorData);
+      
+      // Provide helpful error message for session status issues
+      if (errorData.error?.includes('Session status') || errorData.status === 422) {
+        return {
+          success: false,
+          error: `WAHA session is not ready. Please authenticate via QR code at ${WAHA_URL} or check session status.`,
+        };
+      }
+      
       return {
         success: false,
         error: errorData.error || `WAHA API request failed: ${response.status}`,

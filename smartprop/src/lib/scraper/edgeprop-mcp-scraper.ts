@@ -275,17 +275,35 @@ export async function scrapeEdgePropMCP(
         : `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum}&page_size=20&sort_by=posted_desc&category=`;
       console.log(`Navigating to: ${url}`);
       
-      // Try navigating FIRST with existing cookies (much faster!)
-      // Only use Flaresolverr if we detect Cloudflare after navigation
+      // For page 1, use Flaresolverr immediately (no cookies yet)
+      // For subsequent pages, try cookies first, then Flaresolverr if needed
       let navigationSuccess = false;
       let navRetryCount = 0;
       const maxNavRetries = 2;
+      const isFirstPage = pageNum === 1;
       
       while (!navigationSuccess && navRetryCount < maxNavRetries) {
         try {
-          // First attempt: try without Flaresolverr (reuse cookies from previous page or initial load)
+          // First attempt: use Flaresolverr for page 1, try cookies for subsequent pages
           if (navRetryCount === 0) {
-            console.log(`   🚀 Attempting navigation with existing cookies...`);
+            if (isFirstPage) {
+              // Page 1: Use Flaresolverr immediately (no cookies yet)
+              console.log(`   🔧 Using Flaresolverr for first page (no cookies yet)...`);
+              try {
+                const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+                
+                if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                  await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                  await page.waitForTimeout(1000, 2000);
+                }
+              } catch (flareError) {
+                console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);
+              }
+            } else {
+              // Subsequent pages: try with existing cookies first
+              console.log(`   🚀 Attempting navigation with existing cookies...`);
+            }
+            
             await page.goto(url, { 
               waitUntil: 'domcontentloaded', 
               timeout: 60000 

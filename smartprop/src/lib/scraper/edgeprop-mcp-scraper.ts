@@ -64,8 +64,9 @@ export async function scrapeEdgePropMCP(
   // Use regular playwright (Flaresolverr handles Cloudflare bypass)
   const { chromium } = await import('playwright');
   
+  // Use headless mode - works better on EC2 even with xvfb-run
   const launchOptions = { 
-    headless: false, // xvfb-run provides virtual display
+    headless: true, // Use headless mode for better reliability on EC2
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',

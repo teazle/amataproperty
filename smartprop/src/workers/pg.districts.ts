@@ -46,7 +46,8 @@ async function createFlaresolverrSession(): Promise<string | null> {
     });
 
     if (!response.ok) {
-      console.log(`   ⚠️  Failed to create Flaresolverr session: ${response.status}`);
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.log(`   ⚠️  Failed to create Flaresolverr session: ${response.status} - ${errorText.substring(0, 200)}`);
       return null;
     }
 
@@ -54,6 +55,10 @@ async function createFlaresolverrSession(): Promise<string | null> {
     if (data.status === 'ok' && data.session) {
       console.log(`   ✅ Created Flaresolverr session: ${data.session}`);
       return data.session;
+    } else if (data.status === 'ok' && !data.session) {
+      // Session might be auto-generated, check if sessions.list works
+      console.log(`   ℹ️  Session creation response: ${JSON.stringify(data)}`);
+      return null; // Will create session on-demand in solveCloudflareWithFlaresolverr
     }
     return null;
   } catch (error) {

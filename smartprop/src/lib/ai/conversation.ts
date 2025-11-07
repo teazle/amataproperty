@@ -884,24 +884,28 @@ export async function sendAutoReply(
       const result = await sendMessageWithTyping(agentPhone, replyMessage, delay);
       
       if (!result.success) {
-        console.error(`❌ Failed to send auto-reply: ${result.error}`);
-      return false;
-    }
+        console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
+        console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
+        return false;
+      }
 
-      console.log(`✅ Auto-reply sent with typing indicator (reply #${currentAutoReplyCount + 1})`);
+      console.log(`✅ Auto-reply sent with typing indicator (reply #${currentAutoReplyCount + 1}) to ${agentPhone}`);
+      console.log(`   Message ID: ${result.messageId || 'N/A'}`);
       return true;
     } else {
       // Typing simulation disabled - send immediately
       const { sendWhatsAppMessage } = await import('../wa/waha');
-    const result = await sendWhatsAppMessage(agentPhone, replyMessage);
+      const result = await sendWhatsAppMessage(agentPhone, replyMessage);
 
-    if (!result.success) {
-      console.error(`❌ Failed to send auto-reply: ${result.error}`);
-      return false;
-    }
+      if (!result.success) {
+        console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
+        console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
+        return false;
+      }
 
-      console.log(`✅ Auto-reply sent successfully (reply #${currentAutoReplyCount + 1})`);
-    return true;
+      console.log(`✅ Auto-reply sent successfully (reply #${currentAutoReplyCount + 1}) to ${agentPhone}`);
+      console.log(`   Message ID: ${result.messageId || 'N/A'}`);
+      return true;
     }
   } catch (error: unknown) {
     console.error('❌ Error sending auto-reply:', error);

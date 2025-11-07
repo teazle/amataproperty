@@ -55,15 +55,20 @@ export async function sendWhatsAppMessage(
       const sessionStatus = sessionData?.status;
       
       if (sessionStatus !== 'WORKING') {
-        console.error(`WAHA session status is "${sessionStatus}", expected "WORKING"`);
+        console.error(`❌ WAHA session status is "${sessionStatus}", expected "WORKING"`);
+        console.error(`   Session details:`, JSON.stringify(sessionData, null, 2));
         return {
           success: false,
           error: `WAHA session is not ready (status: ${sessionStatus}). Please authenticate via QR code at ${WAHA_URL} or wait for session to initialize.`,
         };
       }
+      console.log(`✅ WAHA session status check passed: ${sessionStatus}`);
+    } else {
+      console.warn(`⚠️  WAHA session status check failed: ${statusResponse.status}`);
+      // Continue anyway - let the send attempt fail if session is not ready
     }
   } catch (error) {
-    console.warn('Could not check WAHA session status:', error);
+    console.error('❌ Error checking WAHA session status:', error);
     // Continue anyway - let the send attempt fail if session is not ready
   }
 

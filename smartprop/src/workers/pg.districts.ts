@@ -907,6 +907,15 @@ async function scrapePropertyGuruByDistrict() {
           }, 60000);
 
           try {
+            // Use Flaresolverr to solve Cloudflare before navigating to listing page
+            const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, true);
+            
+            if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+              // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
+              await applyFlaresolverrToContext(context, flaresolverrResult);
+              await humanPause(500, 1000);
+            }
+
             await listingPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
             
             // Check if timed out during navigation

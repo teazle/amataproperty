@@ -2065,7 +2065,43 @@ export async function scrapeEdgePropMCP(
             console.log(`   - main_image_url: ${articleData?.main_image_url ? articleData.main_image_url.substring(0, 80) + '...' : 'Not found'}`);
             console.log(`   - tags count: ${articleData?.tags?.length || 0}`);
             
-            if (articleData && articleData.extractionSuccess && articleData.text_content && articleData.text_content.length > 0) {
+            // Enhanced validation: check for Cloudflare blocks
+            const hasCloudflareBlock = articleData?.text_content && (
+              articleData.text_content.toLowerCase().includes('verify you are a human') ||
+              articleData.text_content.toLowerCase().includes('just a moment') ||
+              articleData.text_content.toLowerCase().includes('checking your browser') ||
+              articleData.text_content.toLowerCase().includes('ddos protection') ||
+              articleData.text_content.toLowerCase().includes('cloudflare')
+            );
+            
+            // Validate content quality before saving
+            const hasValidContent = articleData && 
+                                  articleData.extractionSuccess && 
+                                  articleData.text_content && 
+                                  articleData.text_content.length > 500 && // Minimum content length
+                                  articleData.paragraphs && 
+                                  articleData.paragraphs.length > 0 &&
+                                  !hasCloudflareBlock;
+            
+            if (hasCloudflareBlock) {
+              console.log(`❌ Cloudflare block detected in content, skipping: ${article.title}`);
+              articlesFailed++;
+              onProgress({
+                currentPage: pageNum,
+                totalPages: maxPages,
+                currentArticle: i + 1,
+                articlesDiscovered: articles.length,
+                articlesScraped: allArticles.length,
+                articlesFailed: articlesFailed,
+                status: 'running',
+                message: `Cloudflare block detected: ${article.title}`
+              });
+              clearTimeout(articleTimeout);
+              await articlePage.close();
+              continue;
+            }
+            
+            if (hasValidContent) {
               console.log(`✅ Extraction successful! Creating fullArticle object...`);
               const fullArticle: MCPArticle = {
                 ...article,

@@ -921,7 +921,33 @@ async function handleNoTimeslotsReply(
       ? (outreach.deflection_count || 0) + 1 
       : outreach.deflection_count || 0;
 
-    // Handle based on decision
+    // CRITICAL: Don't send reply if shouldReply is false, even if replyMessage exists
+    // This prevents sending replies to acknowledgments like "ok thank you"
+    if (!decision.shouldReply) {
+      console.log(`🚫 Not sending reply - shouldReply is false. Reason: ${decision.reason}`);
+      console.log(`   Message would have been: "${decision.replyMessage || 'N/A'}"`);
+      
+      // Still update conversation history with agent's message
+      conversationHistory.push({
+        role: 'assistant',
+        message: messageText,
+        timestamp: new Date().toISOString()
+      });
+
+      await supabase
+        .from('outreach')
+        .update({
+          conversation_history: conversationHistory,
+          last_message_at: new Date().toISOString(),
+          conversation_phase: decision.newPhase,
+          conversation_state: decision.gracefulExit ? 'completed' : 'awaiting_timeslots'
+        })
+        .eq('id', outreach.id);
+
+      return NextResponse.json({ success: true });
+    }
+
+    // Handle based on decision - only reach here if shouldReply is true
     if (decision.shouldReply && decision.replyMessage) {
       console.log(`✅ Sending reply: ${decision.reason}`);
       

@@ -154,11 +154,20 @@ export async function solveCloudflareWithFlaresolverr(
       }
     } catch (fetchError: any) {
       clearTimeout(timeoutId);
-      if (fetchError.name === 'AbortError') {
-        console.log(`   ⚠️  Flaresolverr request timed out. Continuing without Flaresolverr...`);
-      } else {
-        console.log(`   ⚠️  Flaresolverr fetch error: ${fetchError.message}`);
+      
+      // Handle AbortError (timeout)
+      if (fetchError?.name === 'AbortError' || fetchError?.message?.includes('aborted')) {
+        console.log(`   ⚠️  Flaresolverr request aborted (timeout). Continuing without Flaresolverr...`);
+        return null;
       }
+      
+      // Handle network errors
+      if (fetchError?.code === 'ECONNREFUSED' || fetchError?.code === 'ETIMEDOUT') {
+        console.log(`   ⚠️  Flaresolverr connection error: ${fetchError.message}. Continuing without Flaresolverr...`);
+        return null;
+      }
+      
+      console.log(`   ⚠️  Flaresolverr fetch error: ${fetchError?.message || fetchError}`);
       return null;
     }
   } catch (error) {

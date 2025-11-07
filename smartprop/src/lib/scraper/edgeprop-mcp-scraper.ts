@@ -751,26 +751,50 @@ export async function scrapeEdgePropMCP(
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
-            // Try navigating FIRST with existing cookies (much faster!)
-            // Only use Flaresolverr if we detect Cloudflare after navigation
+            // Use Flaresolverr proactively on article pages (like PropertyGuru does)
+            // This ensures we have fresh cookies for each article
             let navigationSuccess = false;
             let navRetryCount = 0;
             const maxNavRetries = 2;
             
             while (!navigationSuccess && navRetryCount < maxNavRetries && !articleTimedOut) {
               try {
-                // First attempt: try without Flaresolverr (reuse cookies from search page)
+                // Use Flaresolverr BEFORE navigation (more reliable than retrying)
                 if (navRetryCount === 0) {
-                  console.log(`   🚀 Attempting navigation with existing cookies...`);
+                  console.log(`   🔧 Using Flaresolverr to get fresh cookies for article page...`);
+                  
+                  if (articlePage.isClosed()) {
+                    throw new Error('Article page was closed before Flaresolverr');
+                  }
+                  
+                  try {
+                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                    
+                    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                      await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                      await articlePage.waitForTimeout(1000);
+                      console.log(`   ✅ Applied Flaresolverr cookies`);
+                    } else {
+                      console.log(`   ⚠️  Flaresolverr returned no cookies, continuing anyway...`);
+                    }
+                  } catch (flareError) {
+                    console.log(`   ⚠️  Flaresolverr failed, continuing anyway...`);
+                  }
+                  
+                  // Navigate with fresh cookies
+                  if (articlePage.isClosed()) {
+                    throw new Error('Article page was closed after Flaresolverr');
+                  }
+                  
+                  console.log(`   🚀 Navigating to article page...`);
                   await articlePage.goto(articleUrl, { 
                     waitUntil: 'domcontentloaded',
-                timeout: 60000
-              });
+                    timeout: 60000
+                  });
                 } else {
-                  // Retry: use Flaresolverr if first attempt failed
-                  console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
+                  // Retry: use Flaresolverr again if first attempt failed
+                  console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr again...`);
                   
-                  // Check if page is still open before using Flaresolverr
                   if (articlePage.isClosed()) {
                     throw new Error('Article page was closed before Flaresolverr retry');
                   }
@@ -780,13 +804,12 @@ export async function scrapeEdgePropMCP(
                     
                     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                      await articlePage.waitForTimeout(1500); // Random delay between 1-2s
+                      await articlePage.waitForTimeout(1500);
                     }
                   } catch (flareError) {
                     console.log(`   ⚠️  Flaresolverr failed, continuing anyway...`);
                   }
                   
-                  // Check again if page is still open before navigation
                   if (articlePage.isClosed()) {
                     throw new Error('Article page was closed after Flaresolverr attempt');
                   }
@@ -853,55 +876,74 @@ export async function scrapeEdgePropMCP(
               throw new Error('Page was closed unexpectedly');
             }
             
-            // Check for Cloudflare blocks FIRST before checking content
+            // Check for Cloudflare blocks - but be less aggressive (only actual challenge pages)
             const cloudflareCheck = await articlePage.evaluate(() => {
               const bodyText = (document.body?.textContent || '').toLowerCase();
               const pageTitle = (document.title || '').toLowerCase();
               
-              // Check for Cloudflare challenge indicators
-              const cloudflareIndicators = [
+              // Only check for actual Cloudflare challenge pages (not just mentions)
+              // These are strong indicators of a challenge page
+              const strongIndicators = [
                 'just a moment',
-                'checking your browser',
+                'checking your browser before accessing',
                 'verify you are a human',
-                'please wait',
-                'ddos protection',
-                'cloudflare',
-                'ray id',
+                'ddos protection by cloudflare',
                 'cf-ray',
-                'checking your browser before accessing'
+                'ray id'
               ];
               
-              for (const indicator of cloudflareIndicators) {
+              // Check if it's a challenge page (has challenge indicators AND no article content)
+              let hasChallengeIndicator = false;
+              for (const indicator of strongIndicators) {
                 if (bodyText.includes(indicator) || pageTitle.includes(indicator)) {
-                  return true;
+                  hasChallengeIndicator = true;
+                  break;
                 }
               }
               
-              // Check for Cloudflare-specific elements
-              const cfElements = document.querySelectorAll('[id*="cf"], [class*="cf-"], [id*="challenge"], [class*="challenge"]');
-              if (cfElements.length > 0 && bodyText.length < 1000) {
-                return true;
+              // Only flag as Cloudflare if we have challenge indicators AND no article content
+              if (hasChallengeIndicator) {
+                // Check if there's actual article content
+                const hasArticleContent = document.querySelector('article') || 
+                                         document.querySelector('[class*="article"]') ||
+                                         document.querySelector('[class*="content"]') ||
+                                         bodyText.length > 3000; // Real articles have substantial content
+                
+                // If we have challenge indicators but no article content, it's a Cloudflare block
+                return !hasArticleContent;
               }
               
               return false;
             }).catch(() => false);
             
             if (cloudflareCheck) {
-              console.log(`⚠️ Cloudflare block detected on article page, skipping: ${article.title}`);
-              articlesFailed++;
-              onProgress({
-                currentPage: pageNum,
-                totalPages: maxPages,
-                currentArticle: i + 1,
-                articlesDiscovered: articles.length,
-                articlesScraped: allArticles.length,
-                articlesFailed: articlesFailed,
-                status: 'running',
-                message: `Cloudflare block detected: ${article.title}`
-              });
-              clearTimeout(articleTimeout);
-              await articlePage.close();
-              continue;
+              console.log(`⚠️ Cloudflare challenge page detected, using Flaresolverr...`);
+              // Don't skip immediately - try Flaresolverr first
+              try {
+                const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                  await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                  await articlePage.waitForTimeout(1500);
+                  // Retry navigation with fresh cookies
+                  await articlePage.goto(articleUrl, { 
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                  });
+                  console.log(`✅ Retried navigation with Flaresolverr cookies`);
+                } else {
+                  console.log(`⚠️ Flaresolverr returned no cookies, skipping article`);
+                  articlesFailed++;
+                  clearTimeout(articleTimeout);
+                  await articlePage.close();
+                  continue;
+                }
+              } catch (flareError) {
+                console.log(`⚠️ Flaresolverr failed, skipping article: ${flareError}`);
+                articlesFailed++;
+                clearTimeout(articleTimeout);
+                await articlePage.close();
+                continue;
+              }
             }
             
             // Now check for actual article content

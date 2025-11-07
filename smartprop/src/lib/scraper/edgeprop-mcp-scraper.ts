@@ -317,14 +317,16 @@ export async function scrapeEdgePropMCP(
         : `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum}&page_size=20&sort_by=posted_desc&category=`;
       console.log(`Navigating to: ${url}`);
       
-      // Use Flaresolverr to solve Cloudflare before navigating (first page only)
-      if (pageNum === 1) {
+      // Use Flaresolverr to solve Cloudflare before navigating (for all pages)
+      try {
         const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
         
         if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
           await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-          await page.waitForTimeout(500);
+          await page.waitForTimeout(1000); // Wait a bit longer after applying cookies
         }
+      } catch (flareError) {
+        console.log(`   ⚠️ Flaresolverr failed for page ${pageNum}, continuing anyway...`);
       }
       
       try {

@@ -613,11 +613,54 @@ export async function scrapeEdgePropMCP(
             console.log(`✅ Successfully navigated to: ${article.title}`);
             } catch (navError: unknown) {
               console.log(`⚠️ Navigation timeout (may be Cloudflare), waiting and retrying...`);
-              await page.waitForTimeout(5000);
+              // Check if page is still open before waiting
+              if (!page.isClosed()) {
+                await page.waitForTimeout(5000).catch(() => {
+                  console.log(`⚠️ Page closed during wait, skipping article`);
+                });
+              } else {
+                console.log(`⚠️ Page was closed, skipping article`);
+              }
             }
             
             // Simple content verification (Flaresolverr handles Cloudflare before navigation)
-            await page.waitForTimeout(2000); // Brief wait for content to load
+            // Check if page is still open before proceeding
+            if (page.isClosed()) {
+              console.log(`⚠️ Page was closed, skipping article`);
+              articlesFailed++;
+              onProgress({
+                currentPage: pageNum,
+                totalPages: maxPages,
+                currentArticle: i + 1,
+                articlesDiscovered: articles.length,
+                articlesScraped: allArticles.length,
+                articlesFailed: articlesFailed,
+                status: 'running',
+                message: `Page closed: ${article.title}`
+              });
+              continue;
+            }
+            
+            await page.waitForTimeout(2000).catch(() => {
+              console.log(`⚠️ Page closed during wait, skipping article`);
+            });
+            
+            // Check again after wait
+            if (page.isClosed()) {
+              console.log(`⚠️ Page closed after wait, skipping article`);
+              articlesFailed++;
+              onProgress({
+                currentPage: pageNum,
+                totalPages: maxPages,
+                currentArticle: i + 1,
+                articlesDiscovered: articles.length,
+                articlesScraped: allArticles.length,
+                articlesFailed: articlesFailed,
+                status: 'running',
+                message: `Page closed: ${article.title}`
+              });
+              continue;
+            }
             
             const hasArticle = await page.evaluate(() => {
               const selectors = [
@@ -661,7 +704,26 @@ export async function scrapeEdgePropMCP(
             console.log(`✅ Content loaded successfully`);
             
             // Final wait for content to stabilize
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(2000).catch(() => {
+              console.log(`⚠️ Page closed during final wait, skipping article`);
+            });
+            
+            // Check if page is still open before extraction
+            if (page.isClosed()) {
+              console.log(`⚠️ Page closed before extraction, skipping article`);
+              articlesFailed++;
+              onProgress({
+                currentPage: pageNum,
+                totalPages: maxPages,
+                currentArticle: i + 1,
+                articlesDiscovered: articles.length,
+                articlesScraped: allArticles.length,
+                articlesFailed: articlesFailed,
+                status: 'running',
+                message: `Page closed: ${article.title}`
+              });
+              continue;
+            }
             
             // Extract metadata AND content together
             console.log(`📊 Extracting content from: ${article.title}`);

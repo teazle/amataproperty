@@ -344,7 +344,7 @@ export async function scrapeEdgePropMCP(
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-                await page.waitForTimeout(1000, 2000);
+                await page.waitForTimeout(1500); // Random delay between 1-2s
               }
             } catch (flareError) {
               console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);

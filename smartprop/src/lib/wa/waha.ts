@@ -47,9 +47,17 @@ export async function sendWhatsAppMessage(
     };
   }
 
-  // Check session status before attempting to send
+  // Check session status before attempting to send (with timeout)
   try {
-    const statusResponse = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+    
+    const statusResponse = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`, {
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
     if (statusResponse.ok) {
       const sessionData = await statusResponse.json();
       const sessionStatus = sessionData?.status;
@@ -64,11 +72,15 @@ export async function sendWhatsAppMessage(
       }
       console.log(`✅ WAHA session status check passed: ${sessionStatus}`);
     } else {
-      console.warn(`⚠️  WAHA session status check failed: ${statusResponse.status}`);
+      console.warn(`⚠️  WAHA session status check failed: ${statusResponse.status} - continuing anyway`);
       // Continue anyway - let the send attempt fail if session is not ready
     }
-  } catch (error) {
-    console.error('❌ Error checking WAHA session status:', error);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.warn(`⚠️  WAHA session status check timed out - continuing anyway`);
+    } else {
+      console.warn(`⚠️  Error checking WAHA session status:`, error);
+    }
     // Continue anyway - let the send attempt fail if session is not ready
   }
 

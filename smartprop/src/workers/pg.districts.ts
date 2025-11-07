@@ -664,8 +664,7 @@ async function scrapePropertyGuruByDistrict() {
   
 
   // Launch browser once for all districts
-  // Enhanced stealth plugins (fingerprint + webGL) should help bypass Cloudflare
-  // Note: Flaresolverr is an API service, not a proxy - removed proxy config
+  // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
   const browser = await chromium.launch({
     headless: false, // xvfb-run provides virtual display, so we can run non-headless
     plugins: [
@@ -691,8 +690,12 @@ async function scrapePropertyGuruByDistrict() {
     ]
   });
 
+  // Match Flaresolverr's user-agent exactly for cookie compatibility
+  // Flaresolverr uses: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36
+  const FLARESOLVERR_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
+  
   const contextOptions: BrowserContextOptions = {
-    userAgent: CHROME_UA,
+    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',

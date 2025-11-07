@@ -853,6 +853,58 @@ export async function scrapeEdgePropMCP(
               throw new Error('Page was closed unexpectedly');
             }
             
+            // Check for Cloudflare blocks FIRST before checking content
+            const cloudflareCheck = await articlePage.evaluate(() => {
+              const bodyText = (document.body?.textContent || '').toLowerCase();
+              const pageTitle = (document.title || '').toLowerCase();
+              
+              // Check for Cloudflare challenge indicators
+              const cloudflareIndicators = [
+                'just a moment',
+                'checking your browser',
+                'verify you are a human',
+                'please wait',
+                'ddos protection',
+                'cloudflare',
+                'ray id',
+                'cf-ray',
+                'checking your browser before accessing'
+              ];
+              
+              for (const indicator of cloudflareIndicators) {
+                if (bodyText.includes(indicator) || pageTitle.includes(indicator)) {
+                  return true;
+                }
+              }
+              
+              // Check for Cloudflare-specific elements
+              const cfElements = document.querySelectorAll('[id*="cf"], [class*="cf-"], [id*="challenge"], [class*="challenge"]');
+              if (cfElements.length > 0 && bodyText.length < 1000) {
+                return true;
+              }
+              
+              return false;
+            }).catch(() => false);
+            
+            if (cloudflareCheck) {
+              console.log(`⚠️ Cloudflare block detected on article page, skipping: ${article.title}`);
+              articlesFailed++;
+              onProgress({
+                currentPage: pageNum,
+                totalPages: maxPages,
+                currentArticle: i + 1,
+                articlesDiscovered: articles.length,
+                articlesScraped: allArticles.length,
+                articlesFailed: articlesFailed,
+                status: 'running',
+                message: `Cloudflare block detected: ${article.title}`
+              });
+              clearTimeout(articleTimeout);
+              await articlePage.close();
+              continue;
+            }
+            
+            // Now check for actual article content
             const hasArticle = await articlePage.evaluate(() => {
               const selectors = [
                 'article .content',
@@ -873,6 +925,7 @@ export async function scrapeEdgePropMCP(
               }
               
               const bodyText = document.body?.textContent || '';
+              // Require more content to ensure it's not just navigation/header
               return bodyText.length > 2000;
             }).catch(() => false);
             
@@ -896,9 +949,9 @@ export async function scrapeEdgePropMCP(
             
             console.log(`✅ Content loaded successfully`);
             
-            // Final wait for content to stabilize
-            await articlePage.waitForTimeout(2000).catch(() => {
-              console.log(`⚠️ Page closed during final wait, skipping article`);
+            // Reduced wait time - content is already loaded
+            await articlePage.waitForTimeout(500).catch(() => {
+              console.log(`⚠️ Page closed during wait, skipping article`);
             });
             
             // Check if page is still open before extraction
@@ -924,23 +977,19 @@ export async function scrapeEdgePropMCP(
             console.log(`📊 Extracting content from: ${article.title}`);
             console.log(`🔍 About to run page.evaluate() for extraction...`);
             
-            // Wait for content container to exist before extracting
+            // Wait for content container to exist before extracting (reduced timeout)
             try {
-              await articlePage.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
+              await articlePage.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 3000 });
               console.log(`✅ Content container found`);
               
-              // Wait a bit more for images to load (lazy loading)
-              await articlePage.waitForTimeout(2000);
+              // Minimal wait for lazy-loaded images (reduced from 2000ms)
+              await articlePage.waitForTimeout(500);
               
-              // Scroll to trigger lazy-loaded images
+              // Quick scroll to trigger lazy-loaded images (reduced delays)
               await articlePage.evaluate(() => {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                window.scrollTo({ top: 500, behavior: 'auto' });
               });
-              await articlePage.waitForTimeout(1000);
-              await articlePage.evaluate(() => {
-                window.scrollTo({ top: 500, behavior: 'smooth' });
-              });
-              await articlePage.waitForTimeout(1000);
+              await articlePage.waitForTimeout(300);
             } catch (e: unknown) {
               console.log(`⚠️ Content container not found, proceeding anyway...`);
             }
@@ -2107,9 +2156,9 @@ export async function scrapeEdgePropMCP(
           await new Promise(resolve => setTimeout(resolve, 5000 + Math.random() * 3000)); // 5-8 seconds
         }
         
-        // Increased delay between pages to avoid rate limiting
+        // Reduced delay between pages (optimized for speed)
         if (pageNum < maxPages) {
-          await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 4000)); // 3-7 seconds
+          await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)); // 1-3 seconds
         }
     }
     
@@ -2926,8 +2975,17 @@ export async function scrapeSingleArticleMCP(
       };
     });
     
-    if (!articleData.extractionSuccess || !articleData.paragraphs || articleData.paragraphs.length === 0) {
-      console.log('❌ Failed to extract article content');
+    // Enhanced validation: check for Cloudflare blocks in extracted content
+    const hasCloudflareBlock = articleData.text_content && (
+      articleData.text_content.toLowerCase().includes('verify you are a human') ||
+      articleData.text_content.toLowerCase().includes('just a moment') ||
+      articleData.text_content.toLowerCase().includes('checking your browser') ||
+      articleData.text_content.toLowerCase().includes('ddos protection') ||
+      articleData.text_content.toLowerCase().includes('cloudflare')
+    );
+    
+    if (hasCloudflareBlock) {
+      console.log('❌ Cloudflare block detected in extracted content');
       onProgress?.({
         currentPage: 1,
         totalPages: 1,
@@ -2936,7 +2994,33 @@ export async function scrapeSingleArticleMCP(
         articlesScraped: 0,
         articlesFailed: 1,
         status: 'error',
-        message: 'Failed to extract article content'
+        message: 'Cloudflare block detected in content'
+      });
+      return null;
+    }
+    
+    // Validate content quality before saving
+    const hasValidContent = articleData.extractionSuccess && 
+                            articleData.paragraphs && 
+                            articleData.paragraphs.length > 0 &&
+                            articleData.text_content &&
+                            articleData.text_content.length > 500 && // Minimum content length
+                            !hasCloudflareBlock;
+    
+    if (!hasValidContent) {
+      console.log('❌ Failed to extract valid article content');
+      console.log(`   - extractionSuccess: ${articleData.extractionSuccess}`);
+      console.log(`   - paragraphs: ${articleData.paragraphs?.length || 0}`);
+      console.log(`   - text_content length: ${articleData.text_content?.length || 0}`);
+      onProgress?.({
+        currentPage: 1,
+        totalPages: 1,
+        currentArticle: 1,
+        articlesDiscovered: 1,
+        articlesScraped: 0,
+        articlesFailed: 1,
+        status: 'error',
+        message: 'Failed to extract valid article content'
       });
       return null;
     }

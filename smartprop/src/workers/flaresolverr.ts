@@ -165,7 +165,8 @@ export async function solveCloudflareWithFlaresolverr(
  */
 export async function applyFlaresolverrToContext(
   context: any,
-  flaresolverrResult: FlaresolverrResult
+  flaresolverrResult: FlaresolverrResult,
+  defaultDomain?: string // Optional: default domain for cookies (e.g., '.propertyguru.com.sg' or '.edgeprop.sg')
 ): Promise<void> {
   // Get existing cookies to preserve login session
   const existingCookies = await context.cookies();
@@ -204,7 +205,7 @@ export async function applyFlaresolverrToContext(
   const flaresolverrCookies = flaresolverrResult.cookies.map((cookie: any) => ({
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain || '.propertyguru.com.sg',
+    domain: cookie.domain || defaultDomain || '.propertyguru.com.sg',
     path: cookie.path || '/',
     expires: cookie.expires ? cookie.expires : undefined,
     httpOnly: cookie.httpOnly || false,

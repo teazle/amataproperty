@@ -853,6 +853,19 @@ export async function scrapeEdgePropMCP(
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
             
+            // Use Flaresolverr to solve Cloudflare before navigating to article page
+            try {
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+              
+              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
+                await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+                await page.waitForTimeout(500, 1000);
+              }
+            } catch (flareError) {
+              console.log(`   ⚠️  Flaresolverr failed for article page, continuing anyway...`);
+            }
+            
             try {
               await page.goto(articleUrl, { 
                 waitUntil: 'domcontentloaded', // Use domcontentloaded instead of networkidle for faster navigation

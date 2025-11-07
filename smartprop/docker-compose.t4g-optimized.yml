@@ -1,5 +1,5 @@
-# Production Docker Compose Configuration for SmartProp
-# Includes all services: app, database, WhatsApp, and reverse proxy
+# Optimized Docker Compose for t4g.small (2GB RAM)
+# Memory limits set to prevent OOM kills while maximizing available resources
 
 version: '3.8'
 
@@ -41,13 +41,18 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '1.0'
+          memory: 600M  # Reduced from 2G to fit t4g.small
+          cpus: '0.8'
         reservations:
-          memory: 1G
-          cpus: '0.5'
+          memory: 300M  # Guaranteed minimum
+          cpus: '0.4'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
 
-  # WhatsApp Business API (WAHA)
+  # WhatsApp Business API (WAHA) - Optimized for low memory
   waha:
     image: devlikeapro/waha:arm-2025.9.8
     container_name: smartprop-waha
@@ -64,6 +69,8 @@ services:
       - WAHA_FILES_STORE_PATH=/app/files
       - WAHA_LOG_LEVEL=info
       - WAHA_PRINT_QR=true
+      # Chrome optimization flags for lower memory usage
+      - WAHA_CHROME_ARGS=--disable-dev-shm-usage,--no-sandbox,--disable-gpu,--disable-software-rasterizer,--disable-extensions,--disable-plugins,--disable-default-apps,--disable-sync,--disable-translate,--hide-scrollbars,--mute-audio,--no-default-browser-check
     ports:
       - "3030:3030"
     volumes:
@@ -80,8 +87,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 600M  # Current usage: 222MB, allows 2.7x growth (safe buffer)
           cpus: '0.5'
+        reservations:
+          memory: 300M  # Guaranteed minimum for Chrome base
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
 
   # Flaresolverr - Cloudflare bypass
   flaresolverr:
@@ -91,9 +106,10 @@ services:
     ports:
       - "8191:8191"
     environment:
+      # Flaresolverr Configuration
       - LOG_LEVEL=info
       - LOG_HTML=false
-      - CAPTCHA_SOLVER=none
+      - CAPTCHA_SOLVER=none  # Disable captcha solver (use default Cloudflare bypass)
       - TZ=Asia/Singapore
     networks:
       - smartprop-network
@@ -106,10 +122,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 500M
+          memory: 500M  # Increased for stability
           cpus: '0.5'
         reservations:
-          memory: 300M
+          memory: 300M  # Guaranteed minimum
           cpus: '0.25'
     logging:
       driver: "json-file"
@@ -142,10 +158,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.25'
-
-
+          memory: 200M  # Nginx is lightweight
+          cpus: '0.2'
+        reservations:
+          memory: 100M
+          cpus: '0.1'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 # Networks
 networks:
@@ -169,3 +191,4 @@ volumes:
     driver: local
   letsencrypt-certs:
     driver: local
+

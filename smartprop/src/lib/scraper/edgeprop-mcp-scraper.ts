@@ -312,7 +312,8 @@ export async function scrapeEdgePropMCP(
               // Page 1: Use Flaresolverr immediately (no cookies yet)
               console.log(`   🔧 Using Flaresolverr for first page (no cookies yet)...`);
               try {
-        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+        // Use useSession: false to prevent multiple Chrome instances and OOM kills
+        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, false);
         
         if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
           await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
@@ -340,7 +341,8 @@ export async function scrapeEdgePropMCP(
             }
             
             try {
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true);
+              // Use useSession: false to prevent multiple Chrome instances and OOM kills
+        const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, false);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');

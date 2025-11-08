@@ -147,7 +147,8 @@ export async function scrapeEdgePropUnified(
     
     // Use Flaresolverr to solve Cloudflare before initial navigation
     const initialUrl = 'https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=1&page_size=20&sort_by=posted_desc&category=';
-    const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, true);
+    // Use useSession: false to prevent multiple Chrome instances and OOM kills
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, false);
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
@@ -283,7 +284,8 @@ export async function scrapeEdgePropUnified(
     try {
       // Use Flaresolverr to solve Cloudflare before initial navigation
       const initialUrl = 'https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=1&page_size=20&sort_by=posted_desc&category=';
-      const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, true);
+      // Use useSession: false to prevent multiple Chrome instances and OOM kills
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(initialUrl, false);
       
       if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
         await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');

@@ -4,8 +4,48 @@
 version: '3.8'
 
 services:
-  # NOTE: smartprop-app is NOT run in Docker - it's managed by PM2
-  # Main Application runs via PM2: pm2 start bun --name smartprop -- start
+  # Main Application
+  smartprop-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: smartprop-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - WAHA_URL=http://waha:3030
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - WABA_TOKEN=${WABA_TOKEN}
+      - WABA_PHONE_ID=${WABA_PHONE_ID}
+    ports:
+      - "3000:3000"
+    volumes:
+      - app-storage:/app/storage
+      - app-logs:/app/logs
+    networks:
+      - smartprop-network
+    depends_on:
+      - waha
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
 
   # WhatsApp Business API (WAHA)
   waha:
@@ -43,7 +83,7 @@ services:
           memory: 1G
           cpus: '0.5'
 
-  # Flaresolverr - Cloudflare bypass (OPTIMIZED for t4g.medium - 4GB RAM)
+  # Flaresolverr - Cloudflare bypass
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
@@ -55,17 +95,12 @@ services:
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
       - TZ=Asia/Singapore
-      - LANG=en_SG  # Match Singapore locale for better Cloudflare compatibility
-      # Browser timeout: Maximum time for browser operations (default: 40000ms)
-      # Increased to 200000ms (200s) to match maxTimeout for aggressive challenges
-      - BROWSER_TIMEOUT=200000
     networks:
       - smartprop-network
-    # Increased shared memory for Chrome's multi-process architecture
-    # Chrome needs more shared memory for multiple tabs/processes during Cloudflare challenges
-    shm_size: 512M  # Increased from 256M for better performance on t4g.medium
+    # Increase shared memory for Chrome's multi-process architecture
+    shm_size: 128M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8191/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -73,52 +108,20 @@ services:
     deploy:
       resources:
         limits:
-          # OPTIMIZED LIMITS for t4g.medium (4GB RAM total):
-          # - smartprop-app: ~600M-800M (actual usage)
-          # - waha: ~200M-400M (actual usage)
-          # - nginx: ~50M (actual usage)
-          # - system: ~200M
-          # - Available for flaresolverr: ~2.5-3GB
-          # Setting limit to 1.5G for optimal performance while leaving headroom
-          memory: 1.5G  # Increased from 800M - much faster Cloudflare solving
-          cpus: '1.0'  # Increased from 0.75 - faster processing (safe for 2 vCPU instance)
+          # Increased from 500M to 1G to prevent Chrome OOM kills
+          # Chrome + Flaresolverr + Cloudflare challenges need more memory
+          memory: 1G
+          cpus: '0.5'
         reservations:
-          # Guaranteed minimum for stable operation
-          memory: 600M  # Increased from 400M for better stability
-          cpus: '0.5'  # Increased from 0.4
+          # Increased from 300M to 512M for better stability
+          memory: 512M
+          cpus: '0.25'
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "2"
 
-  # Nginx Reverse Proxy
-  # NOTE: Nginx proxies to PM2-managed smartprop-app on port 3000
-  nginx:
-    image: nginx:alpine
-    container_name: smartprop-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - nginx-logs:/var/log/nginx
-      - letsencrypt-certs:/etc/letsencrypt:ro
-    networks:
-      - smartprop-network
-    # No depends_on since app runs via PM2, not Docker
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.25'
 
 
 
@@ -132,15 +135,7 @@ networks:
 
 # Volumes
 volumes:
-  app-storage:
-    driver: local
-  app-logs:
-    driver: local
   waha-sessions:
     driver: local
   waha-files:
-    driver: local
-  nginx-logs:
-    driver: local
-  letsencrypt-certs:
     driver: local

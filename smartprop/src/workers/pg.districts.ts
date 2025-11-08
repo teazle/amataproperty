@@ -915,11 +915,14 @@ async function scrapePropertyGuruByDistrict() {
           console.log(`   🔗 ${listingUrl}`);
 
           const listingPage = await context.newPage();
+          
+          // Declare timeout variable outside try block so it's accessible in finally
+          let listingTimeout: NodeJS.Timeout | null = null;
+          let listingTimedOut = false;
 
           try {
             // Start timeout for listing processing
-            let listingTimedOut = false;
-            const listingTimeout = setTimeout(() => {
+            listingTimeout = setTimeout(() => {
               console.log(`   ⏱️  Listing timeout (120s) - forcing close...`);
               listingTimedOut = true;
               listingPage.close().catch(() => {});
@@ -973,7 +976,9 @@ async function scrapePropertyGuruByDistrict() {
               
               // Close current page before calling Flaresolverr
               await listingPage.close();
-              clearTimeout(listingTimeout);
+              if (listingTimeout) {
+                clearTimeout(listingTimeout);
+              }
               
               // Call Flaresolverr to solve Cloudflare
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
@@ -1146,7 +1151,9 @@ async function scrapePropertyGuruByDistrict() {
               console.log(`   🛡️  Cloudflare detected (already tried Flaresolverr). Skipping...`);
               overallStats.totalErrors++;
               await listingPage.close();
-              clearTimeout(listingTimeout);
+              if (listingTimeout) {
+                clearTimeout(listingTimeout);
+              }
               continue;
             } else if (hasCloudflareText && hasPropertyContent) {
               // Cloudflare warning but content loaded - continue
@@ -1344,7 +1351,9 @@ async function scrapePropertyGuruByDistrict() {
             }
           } finally {
             // Always clear timeout and close page
-            clearTimeout(listingTimeout);
+            if (listingTimeout) {
+              clearTimeout(listingTimeout);
+            }
             await listingPage.close().catch(() => {});
           }
         }

@@ -383,10 +383,20 @@ async function scrapeEdgePropFinal() {
       let navRetryCount = 0;
       const maxNavRetries = 3;
       
-      while (!navigationSuccess && navRetryCount < maxNavRetries) {
+        while (!navigationSuccess && navRetryCount < maxNavRetries) {
         try {
           // Use Flaresolverr to solve Cloudflare before navigating (first attempt only)
           if (navRetryCount === 0) {
+            // IMPORTANT: Navigate to EdgeProp domain first to ensure cookies from storageState are active
+            // This ensures login cookies are properly loaded before applying Flaresolverr cookies
+            try {
+              await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await humanPause(1000, 1500); // Give cookies time to be set
+              console.log(`   🔐 Navigated to EdgeProp domain to activate login cookies from storageState`);
+            } catch (navError) {
+              console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
+            }
+            
             // Use useSession: false to prevent multiple Chrome instances and OOM kills
             const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
             

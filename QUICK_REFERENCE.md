@@ -103,6 +103,7 @@ URL: pfdsmpfgwbbeijdzevpu.supabase.co
 | AI | Groq (LLaMA) |
 | Real-time | SSE |
 | WhatsApp | WAHA |
+| Testing | Chrome DevTools MCP |
 
 ---
 
@@ -116,6 +117,30 @@ URL: pfdsmpfgwbbeijdzevpu.supabase.co
 | `ARCHITECTURE_COMPARISON.md` | Why scrapers work this way |
 | `AI_FEATURES.md` | AI conversation features |
 | `WAHA_SETUP.md` | WhatsApp integration |
+
+---
+
+## 🤖 MCP Servers (Model Context Protocol)
+
+### Configured Servers
+
+1. **Supabase MCP** - Database operations and migrations
+2. **Chrome DevTools MCP** - Browser automation and testing
+
+### Chrome DevTools MCP Usage
+
+Chrome DevTools MCP is now configured and ready to use! You can ask me to:
+- Navigate to web pages
+- Fill out forms
+- Click buttons
+- Take screenshots
+- Run performance tests
+- Simulate network conditions
+- Test responsive designs
+
+**Example**: "Navigate to http://localhost:3000/admin and take a screenshot"
+
+**Configuration**: Located in `.cursor/settings.json`
 
 ---
 

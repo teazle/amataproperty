@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to view EdgeProp scraper logs on EC2
 
-EC2_HOST="18.142.253.142"
+EC2_HOST="52.76.114.103"
 EC2_USER="ec2-user"
 KEY_FILE="/Users/vincent/propertydemo/smartprop-new-key.pem"
 

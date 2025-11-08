@@ -362,6 +362,133 @@ async function scrapeEdgePropFinal() {
   const page = await context.newPage();
 
   try {
+    // VERIFY LOGIN STATUS BEFORE SCRAPING
+    console.log('\n🔐 Verifying login status...');
+    let isLoggedIn = false;
+    try {
+      // Navigate to EdgeProp homepage to check login status
+      await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await humanPause(2000, 3000);
+      
+      // Check for logged-in indicators
+      const loginIndicators = [
+        'a[href*="/user/logout"]',           // Logout link
+        'a[href*="/user/"]:not([href*="/user/login"]):not([href*="/user/register"])', // User profile link
+        '[class*="user-menu"]',               // User menu
+        '[class*="logged-in"]',               // Logged-in class
+        'button:has-text("Logout")',          // Logout button
+        'button:has-text("Sign Out")'         // Sign out button
+      ];
+      
+      for (const selector of loginIndicators) {
+        try {
+          const element = page.locator(selector).first();
+          const count = await element.count();
+          if (count > 0) {
+            const isVisible = await element.isVisible({ timeout: 2000 }).catch(() => false);
+            if (isVisible) {
+              isLoggedIn = true;
+              console.log(`   ✅ Login verified - found indicator: ${selector}`);
+              break;
+            }
+          }
+        } catch (e) {
+          // Continue checking other indicators
+        }
+      }
+      
+      // Also check for NOT logged-in indicators
+      if (!isLoggedIn) {
+        const notLoggedInIndicators = [
+          'a[href*="/user/login"]',           // Login link
+          'button:has-text("Login")',         // Login button
+          'button:has-text("Sign In")'        // Sign in button
+        ];
+        
+        for (const selector of notLoggedInIndicators) {
+          try {
+            const element = page.locator(selector).first();
+            const count = await element.count();
+            if (count > 0) {
+              const isVisible = await element.isVisible({ timeout: 2000 }).catch(() => false);
+              if (isVisible) {
+                console.log(`   ❌ Not logged in - found login link: ${selector}`);
+                break;
+              }
+            }
+          } catch (e) {
+            // Continue
+          }
+        }
+      }
+      
+      // Alternative: Check cookies for session/auth tokens
+      const cookies = await context.cookies();
+      const hasAuthCookie = cookies.some(cookie => 
+        cookie.name.toLowerCase().includes('session') || 
+        cookie.name.toLowerCase().includes('auth') ||
+        cookie.name.toLowerCase().includes('login') ||
+        cookie.name.toLowerCase().includes('user')
+      );
+      
+      if (hasAuthCookie && !isLoggedIn) {
+        console.log('   ⚠️  Auth cookies found but login indicators not visible - may need to navigate to user page');
+        // Try navigating to user page to verify
+        try {
+          await page.goto('https://www.edgeprop.sg/user', { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await humanPause(1000, 2000);
+          const pageUrl = page.url();
+          if (!pageUrl.includes('/user/login') && !pageUrl.includes('/user/register')) {
+            isLoggedIn = true;
+            console.log('   ✅ Login verified - user page accessible');
+          }
+        } catch (e) {
+          console.log('   ⚠️  Could not verify via user page');
+        }
+      }
+      
+    } catch (verifyError) {
+      console.log(`   ⚠️  Login verification failed: ${verifyError}`);
+    }
+    
+    if (!isLoggedIn) {
+      console.log('\n❌ NOT LOGGED IN - Phone numbers will not be available!');
+      console.log('⚠️  Re-authenticating now...');
+      
+      // Trigger re-authentication
+      try {
+        // Use xvfb-run for headless environments (EC2), fallback to direct bun for local
+        const hasDisplay = !!process.env.DISPLAY;
+        const authCommand = hasDisplay 
+          ? `bun src/workers/auth.ep.ts`
+          : `xvfb-run -a bun src/workers/auth.ep.ts`;
+        
+        execSync(authCommand, { 
+          cwd: process.cwd(),
+          stdio: 'inherit',
+          timeout: 120000 // 2 minute timeout
+        });
+        
+        // Reload storage state after re-auth
+        const freshStatePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+        if (fs.existsSync(freshStatePath)) {
+          const freshState = JSON.parse(fs.readFileSync(freshStatePath, 'utf-8'));
+          await context.addCookies(freshState.cookies || []);
+          console.log('   ✅ Re-authentication completed, cookies reloaded');
+          
+          // Verify again
+          await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await humanPause(2000, 3000);
+          isLoggedIn = true; // Assume success after re-auth
+        }
+      } catch (reauthError) {
+        console.log(`   ❌ Re-authentication failed: ${reauthError}`);
+        console.log('   ⚠️  Continuing anyway, but phone numbers may not be available');
+      }
+    } else {
+      console.log('   ✅ Login verified - phone numbers should be available\n');
+    }
+    
     // Base URL (page will be appended in the loop)
     const baseUrl = 'https://www.edgeprop.sg/property-search?listing_type=sale&property_type=9%252C103%252C107%252C105%252C106%252C104&district=&bedroom_min=&asking_price_min=1000000&asking_price_max=3000000&floor_area_min=&floor_area_max=&land_area_min=&land_area_max=&tenure=&bathroom=&furnishing=&completed=&level=&completion_year_min=&completion_year_max=&rental_yield=&high_rental_volume=&high_sales_volume=&deals=&nearby_amenities=&amenities_distance=500&rental_type=&keyword_features=&keyword=&mrt_keywords=&school_keywords=&hdbtowns_keywords=&areas_keywords=&district_keywords=&asset_id=&resource_type=&x=&y=&radius=1000&search_by=&search_by_distance=&search_by_location=&search_by_showmap=true&below_valuation=&map_zoom=&asset_lat=&asset_lng=&pageSize=20&order_by=recommended&fittings=&with_new_launches=0&area=&region=&subzone=&subzone_keywords=';
     

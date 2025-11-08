@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-EC2_IP="18.142.253.142"
+EC2_IP="52.76.114.103"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 # Git repository URL

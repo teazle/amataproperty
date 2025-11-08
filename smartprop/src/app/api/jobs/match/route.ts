@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { withAdvisoryLock } from '@/jobs/lock';
+import { withAdvisoryLock, advisoryUnlock } from '@/jobs/lock';
 import { runMatchingJob } from '@/jobs/match';
 
 /**
@@ -40,6 +40,47 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { 
         error: 'Failed to run matcher job',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/jobs/match
+ * Stops the matching job by releasing the advisory lock
+ * 
+ * Releases advisory lock key 10101 to allow new jobs to run
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    console.log('Received request to stop matching job');
+
+    // Release the advisory lock (key 10101)
+    const unlocked = await advisoryUnlock(10101);
+
+    if (unlocked) {
+      return NextResponse.json({
+        success: true,
+        message: 'Matching job lock released successfully',
+        lockKey: 10101,
+        timestamp: new Date().toISOString()
+      }, { status: 200 });
+    } else {
+      return NextResponse.json({
+        success: false,
+        message: 'No matching job lock found to release (may not be running)',
+        lockKey: 10101,
+        timestamp: new Date().toISOString()
+      }, { status: 200 });
+    }
+
+  } catch (error: any) {
+    console.error('Error stopping matcher job:', error);
+    return NextResponse.json(
+      { 
+        error: 'Failed to stop matcher job',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }

@@ -19,11 +19,21 @@ async function authenticateEdgeProp() {
     throw new Error('EP_EMAIL and EP_PASSWORD must be set in .env.local');
   }
   
-  console.log('🚀 Launching Chromium browser for automated login...');
+  // Detect if we should use headless mode
+  // Use headless if: DISPLAY is not set, or explicitly set HEADLESS env var, or running in CI/server environment
+  const hasDisplay = !!process.env.DISPLAY;
+  const forceHeadless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
+  const isHeadless = !hasDisplay || forceHeadless || process.env.CI === 'true' || process.env.NODE_ENV === 'production';
+  
+  console.log(`🚀 Launching Chromium browser for automated login (${isHeadless ? 'headless' : 'headed'} mode)...`);
   console.log(`📧 Logging in as: ${email}`);
   
+  if (isHeadless && !hasDisplay) {
+    console.log('⚠️  DISPLAY not set - using headless mode. Set DISPLAY=:99 if Xvfb is running.');
+  }
+  
   const browser = await chromium.launch({
-    headless: false,
+    headless: isHeadless,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',

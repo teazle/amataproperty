@@ -782,17 +782,57 @@ export default function OutreachPage() {
         toast.warning('Matcher job is already running', {
           description: 'Please wait for the current job to complete',
         });
+        setIsMatching(true); // Keep it as running since job is active
       } else {
         toast.error('Failed to run matcher job', {
           description: data.error || data.message || 'Unknown error',
         });
+        setIsMatching(false);
       }
     } catch (error) {
       toast.error('Error starting matcher job', {
         description: error instanceof Error ? error.message : 'Network error',
       });
-    } finally {
       setIsMatching(false);
+    } finally {
+      // Don't set isMatching to false if job is running (409 status)
+      // It will be set to false when job completes or is stopped
+    }
+  };
+
+  const stopMatcher = async () => {
+    try {
+      const response = await fetch('/api/jobs/match', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        if (data.success) {
+          toast.success('Matcher job stopped successfully', {
+            description: 'The matching job lock has been released',
+            duration: 3000,
+          });
+        } else {
+          toast.info('No active matcher job found', {
+            description: data.message || 'The job may have already completed',
+            duration: 3000,
+          });
+        }
+        setIsMatching(false);
+      } else {
+        toast.error('Failed to stop matcher job', {
+          description: data.error || data.message || 'Unknown error',
+        });
+      }
+    } catch (error) {
+      toast.error('Error stopping matcher job', {
+        description: error instanceof Error ? error.message : 'Network error',
+      });
     }
   };
 
@@ -1087,13 +1127,25 @@ export default function OutreachPage() {
               >
                 Refresh
               </Button>
-              <Button 
-                onClick={runMatcher} 
-                disabled={isMatching || isLoading}
-                className="bg-purple-600 hover:bg-purple-700"
-              >
-                {isMatching ? 'Running...' : 'Run Matcher'}
-              </Button>
+              {isMatching ? (
+                <Button 
+                  onClick={stopMatcher} 
+                  disabled={isLoading}
+                  variant="destructive"
+                  size="sm"
+                >
+                  Stop Matcher
+                </Button>
+              ) : (
+                <Button 
+                  onClick={runMatcher} 
+                  disabled={isLoading}
+                  className="bg-purple-600 hover:bg-purple-700"
+                  size="sm"
+                >
+                  Run Matcher
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>

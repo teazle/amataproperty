@@ -115,6 +115,8 @@ export async function startScrapeJob(config: ScraperConfig) {
         PG_MAX_PAGES: config.pages.toString(),
         PG_JOB_ID: job.id,
         HOME: homeDir,
+        // Set DISPLAY for headless browser (Xvfb is running on EC2)
+        DISPLAY: process.env.DISPLAY || ':99',
       };
       
       const child = spawn(bunPath, ['src/workers/pg.districts.ts'], {

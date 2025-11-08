@@ -693,6 +693,10 @@ async function scrapePropertyGuruByDistrict() {
   
   // Track processed URLs to avoid duplicates across pages
   const processedUrls = new Set<string>();
+  
+  // Track cookie saves to avoid excessive file I/O
+  let listingsSinceLastCookieSave = 0;
+  const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
 
   // Loop through each district
   for (const district of districts) {
@@ -702,6 +706,9 @@ async function scrapePropertyGuruByDistrict() {
     console.log(`${'='.repeat(60)}`);
 
     overallStats.totalDistricts++;
+
+    // Track if Flaresolverr has been called for this district
+    let flaresolverrCalledForDistrict = false;
 
     const page = await context.newPage();
 
@@ -744,6 +751,15 @@ async function scrapePropertyGuruByDistrict() {
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies and user-agent from Flaresolverr
                 await applyFlaresolverrToContext(context, flaresolverrResult);
+                
+                // Always save cookies immediately after search page (first fresh cookies)
+                try {
+                  await context.storageState({ path: stateFilePath });
+                  console.log(`   💾 Saved fresh Cloudflare cookies to storage state (search page)`);
+                  listingsSinceLastCookieSave = 0; // Reset counter after saving
+                } catch (saveError) {
+                  console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
+                }
                 
                 // Small delay to ensure cookies are set before navigation
                 await humanPause(500, 1000);
@@ -901,26 +917,15 @@ async function scrapePropertyGuruByDistrict() {
           const listingPage = await context.newPage();
 
           try {
-            // Use Flaresolverr to solve Cloudflare before navigating to listing page
-            // Use useSession: false to prevent multiple Chrome instances and OOM kills
-            // Note: Flaresolverr can take 30-180 seconds, so we call it BEFORE starting the timeout
-            console.log(`   🔧 Calling Flaresolverr (may take 30-180s for PropertyGuru Cloudflare)...`);
-            const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
-            
-            // Start timeout AFTER Flaresolverr completes (allows 120s for page processing)
+            // Start timeout for listing processing
             let listingTimedOut = false;
             const listingTimeout = setTimeout(() => {
               console.log(`   ⏱️  Listing timeout (120s) - forcing close...`);
               listingTimedOut = true;
               listingPage.close().catch(() => {});
-            }, 120000); // 120 seconds for page processing (Flaresolverr already done)
-            
-            if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-              // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
-              await applyFlaresolverrToContext(context, flaresolverrResult);
-              await humanPause(500, 1000);
-            }
+            }, 120000); // 120 seconds for page processing
 
+            // Try loading listing with existing cookies first (no Flaresolverr call)
             await listingPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
             
             // Check if timed out during navigation
@@ -948,6 +953,10 @@ async function scrapePropertyGuruByDistrict() {
             const priceSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.col-lg-8.col-md-12 > div.row > div > div.property-snapshot-section > div > div > div.price > h2';
             const priceText = await listingPage.locator(priceSelector).textContent().catch(() => '');
             const price = priceText ? parsePrice(priceText) : undefined;
+            
+            // Define selectors for reuse
+            const ceaSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-header > a > div.details-wrapper > span > div';
+            const otherWaysButtonSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-body > div > div.extended-view-root > div.actionable-link.contact-button-root.extend-view-trigger-point';
 
             // Check for Cloudflare on listing page - but verify if content actually loaded
             const listingPageText = await listingPage.textContent('body').catch(() => null) || '';
@@ -958,8 +967,183 @@ async function scrapePropertyGuruByDistrict() {
             // Check if we have actual property content (title, price, etc.)
             const hasPropertyContent = title && title !== 'Untitled' && title.length > 10;
             
-            if (hasCloudflareText && !hasPropertyContent) {
-              console.log(`   🛡️  Cloudflare detected on listing page. Skipping...`);
+            // If Cloudflare blocks AND we haven't called Flaresolverr for this district, try solving it
+            if (hasCloudflareText && !hasPropertyContent && !flaresolverrCalledForDistrict) {
+              console.log(`   🛡️  Cloudflare detected - calling Flaresolverr to solve...`);
+              
+              // Close current page before calling Flaresolverr
+              await listingPage.close();
+              clearTimeout(listingTimeout);
+              
+              // Call Flaresolverr to solve Cloudflare
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
+              
+              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+                // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
+                await applyFlaresolverrToContext(context, flaresolverrResult);
+                
+                // Save fresh Cloudflare cookies immediately
+                try {
+                  await context.storageState({ path: stateFilePath });
+                  console.log(`   💾 Saved fresh Cloudflare cookies to storage state`);
+                  listingsSinceLastCookieSave = 0; // Reset counter
+                } catch (saveError) {
+                  console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
+                }
+                
+                flaresolverrCalledForDistrict = true; // Mark as called for this district
+                await humanPause(1000, 2000);
+                
+                // Retry loading the listing with fresh cookies
+                const retryPage = await context.newPage();
+                try {
+                  await retryPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                  await humanPause(600, 1400);
+                  
+                  // Re-check for Cloudflare after retry
+                  const retryPageText = await retryPage.textContent('body').catch(() => null) || '';
+                  const retryTitle = await retryPage.title().catch(() => 'Untitled');
+                  const retryHasCloudflare = retryPageText.includes('Pardon Our Interruption') || 
+                                            retryPageText.includes('Verify you are human');
+                  const retryHasContent = retryTitle && retryTitle !== 'Untitled' && retryTitle.length > 10;
+                  
+                  if (retryHasCloudflare && !retryHasContent) {
+                    console.log(`   ❌ Cloudflare still blocking after Flaresolverr. Skipping listing...`);
+                    overallStats.totalErrors++;
+                    await retryPage.close();
+                    continue;
+                  }
+                  
+                  // Success - use retryPage for processing
+                  await retryPage.close();
+                  // Recreate listing page and continue processing
+                  const newListingPage = await context.newPage();
+                  await newListingPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                  await humanPause(600, 1400);
+                  
+                  // Update title and other variables for the new page
+                  const newTitle = await newListingPage.title().catch(() => 'Untitled');
+                  const newPriceText = await newListingPage.locator(priceSelector).textContent().catch(() => '');
+                  const newPrice = newPriceText ? parsePrice(newPriceText) : undefined;
+                  
+                  // Continue with extraction using newListingPage
+                  const agentName = await newListingPage.locator('.agent-section-desktop .card-header .details-wrapper .agent-name, div.agent-info div.details-wrapper div:first-child').first().textContent().catch(() => null);
+                  const propertyDetails = await extractPropertyDetails(newListingPage, newTitle);
+                  const agency = await newListingPage.locator('.agent-section-desktop .card-header .details-wrapper .agency-name, [class*="agency"]').first().textContent().catch(() => null);
+                  const ceaText = await newListingPage.locator(ceaSelector).textContent().catch(() => null);
+                  
+                  // Extract phone number
+                  let agentPhone = null;
+                  try {
+                    await humanPause(1000, 1500);
+                    const directPhoneLink = await newListingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 2000 }).catch(() => null);
+                    if (directPhoneLink) {
+                      agentPhone = directPhoneLink;
+                    } else {
+                      const otherWaysButton = newListingPage.locator(otherWaysButtonSelector).first();
+                      const otherWaysVisible = await otherWaysButton.isVisible({ timeout: 5000 }).catch(() => false);
+                      if (otherWaysVisible) {
+                        await otherWaysButton.click();
+                        await humanPause(1500, 2000);
+                        const viewPhoneButton = newListingPage.locator('text=View Phone Number').first();
+                        const viewPhoneVisible = await viewPhoneButton.isVisible({ timeout: 5000 }).catch(() => false);
+                        if (viewPhoneVisible) {
+                          await viewPhoneButton.click();
+                          await humanPause(1500, 2500);
+                          agentPhone = await newListingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
+                        }
+                      }
+                    }
+                  } catch (_error) {
+                    // Phone extraction failed
+                  }
+                  
+                  // Clean phone number
+                  let cleanPhone = '';
+                  if (agentPhone) {
+                    cleanPhone = agentPhone.replace(/[^\d]/g, '');
+                    if (cleanPhone && !cleanPhone.startsWith('65')) {
+                      if (cleanPhone.length === 8) {
+                        cleanPhone = '65' + cleanPhone;
+                      }
+                    }
+                  }
+                  
+                  // Skip if no agent name
+                  if (!agentName) {
+                    console.log(`   ⚠️  Skipping - missing agent name`);
+                    overallStats.totalErrors++;
+                    await newListingPage.close();
+                    continue;
+                  }
+                  
+                  // Check for phone number
+                  if (!cleanPhone) {
+                    console.log(`   ⚠️  No phone number found - SKIPPING to maintain data integrity`);
+                    consecutiveNoPhone++;
+                    overallStats.totalSkippedNoPhone++;
+                    
+                    if (consecutiveNoPhone >= MAX_CONSECUTIVE_NO_PHONE) {
+                      console.log(`\n🚨 ${consecutiveNoPhone} consecutive listings without phone numbers!`);
+                      console.log(`🔄 Authentication may have expired. Triggering re-login...\n`);
+                      jobStatus.statusMessage = '🔄 Re-authenticating...';
+                      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+                      await reAuthenticate();
+                      consecutiveNoPhone = 0;
+                    }
+                    
+                    await newListingPage.close();
+                    continue;
+                  }
+                  
+                  consecutiveNoPhone = 0; // Reset counter on success
+                  
+                  // Upsert data
+                  await upsertAgentAndListing({
+                    agent: {
+                      name: agentName.trim(),
+                      phone: cleanPhone,
+                      agency: agency?.trim(),
+                      cea_reg_no: ceaText?.trim(),
+                      source: 'propertyguru',
+                      source_url: listingUrl,
+                    },
+                    listing: {
+                      portal: 'propertyguru',
+                      url: listingUrl,
+                      title: newTitle?.trim(),
+                      price: newPrice,
+                      district: district || undefined,
+                      property_type: propertyDetails.property_type,
+                      beds: propertyDetails.beds,
+                      baths: propertyDetails.baths,
+                      size_sqft: propertyDetails.size_sqft,
+                      price_psf: propertyDetails.price_psf,
+                      year_built: propertyDetails.year_built,
+                      tenure: propertyDetails.tenure,
+                      address: propertyDetails.address,
+                    }
+                  });
+                  
+                  console.log(`✅ Saved: ${agentName} - ${cleanPhone}`);
+                  overallStats.totalSuccess++;
+                  
+                  await newListingPage.close();
+                  continue; // Skip to next listing
+                } catch (retryError) {
+                  console.log(`   ⚠️  Retry failed: ${retryError}`);
+                  await retryPage.close();
+                  overallStats.totalErrors++;
+                  continue;
+                }
+              } else {
+                console.log(`   ❌ Flaresolverr failed to solve Cloudflare. Skipping listing...`);
+                overallStats.totalErrors++;
+                continue;
+              }
+            } else if (hasCloudflareText && !hasPropertyContent) {
+              // Cloudflare blocks but we already tried Flaresolverr - skip
+              console.log(`   🛡️  Cloudflare detected (already tried Flaresolverr). Skipping...`);
               overallStats.totalErrors++;
               await listingPage.close();
               clearTimeout(listingTimeout);
@@ -979,7 +1163,6 @@ async function scrapePropertyGuruByDistrict() {
             const agency = await listingPage.locator('.agent-section-desktop .card-header .details-wrapper .agency-name, [class*="agency"]').first().textContent().catch(() => null);
 
             // Extract CEA registration number
-            const ceaSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-header > a > div.details-wrapper > span > div';
             const ceaText = await listingPage.locator(ceaSelector).textContent().catch(() => null);
 
             // Extract phone number
@@ -991,7 +1174,6 @@ async function scrapePropertyGuruByDistrict() {
               if (directPhoneLink) {
                 agentPhone = directPhoneLink;
               } else {
-                const otherWaysButtonSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-body > div > div.extended-view-root > div.actionable-link.contact-button-root.extend-view-trigger-point';
                 const otherWaysButton = listingPage.locator(otherWaysButtonSelector).first();
                 const otherWaysVisible = await otherWaysButton.isVisible({ timeout: 5000 }).catch(() => false);
 

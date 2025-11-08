@@ -924,7 +924,8 @@ export async function scrapeEdgePropMCP(
               console.log(`⚠️ Cloudflare challenge page detected, using Flaresolverr...`);
               // Don't skip immediately - try Flaresolverr first
               try {
-                const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                // Use useSession: false to prevent multiple Chrome instances and OOM kills
+                const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, false);
                 if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                   await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
                   await articlePage.waitForTimeout(1500);

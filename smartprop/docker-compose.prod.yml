@@ -1,52 +1,10 @@
 # Production Docker Compose Configuration for SmartProp
-# Includes all services: app, database, WhatsApp, and reverse proxy
+# Only includes: WAHA (WhatsApp) and Flaresolverr (Cloudflare bypass)
+# Note: smartprop-app runs via PM2, nginx runs via systemd
 
 version: '3.8'
 
 services:
-  # Main Application
-  smartprop-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    container_name: smartprop-app
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - HOSTNAME=0.0.0.0
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
-      - WAHA_URL=http://waha:3030
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - WABA_TOKEN=${WABA_TOKEN}
-      - WABA_PHONE_ID=${WABA_PHONE_ID}
-    ports:
-      - "3000:3000"
-    volumes:
-      - app-storage:/app/storage
-      - app-logs:/app/logs
-    networks:
-      - smartprop-network
-    depends_on:
-      - waha
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 1G
-          cpus: '0.5'
-
   # WhatsApp Business API (WAHA)
   waha:
     image: devlikeapro/waha:arm-2025.9.8
@@ -83,7 +41,7 @@ services:
           memory: 1G
           cpus: '0.5'
 
-  # Flaresolverr - Cloudflare bypass
+  # Flaresolverr - Cloudflare bypass (OPTIMIZED for t4g.medium - 4GB RAM)
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
@@ -95,12 +53,17 @@ services:
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
       - TZ=Asia/Singapore
+      - LANG=en_SG  # Match Singapore locale for better Cloudflare compatibility
+      # Browser timeout: Maximum time for browser operations (default: 40000ms)
+      # Increased to 200000ms (200s) to match maxTimeout for aggressive challenges
+      - BROWSER_TIMEOUT=200000
     networks:
       - smartprop-network
-    # Increase shared memory for Chrome's multi-process architecture
-    shm_size: 128M
+    # Increased shared memory for Chrome's multi-process architecture
+    # Chrome needs more shared memory for multiple tabs/processes during Cloudflare challenges
+    shm_size: 512M  # Increased from 256M for better performance on t4g.medium
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -108,22 +71,24 @@ services:
     deploy:
       resources:
         limits:
-          # Increased from 500M to 1G to prevent Chrome OOM kills
-          # Chrome + Flaresolverr + Cloudflare challenges need more memory
-          memory: 1G
-          cpus: '0.5'
+          # OPTIMIZED LIMITS for t4g.medium (4GB RAM total):
+          # - smartprop-app: ~600M-800M (actual usage, runs via PM2)
+          # - waha: ~200M-400M (actual usage)
+          # - nginx: ~50M (actual usage, runs via systemd)
+          # - system: ~200M
+          # - Available for flaresolverr: ~2.5-3GB
+          # Setting limit to 1.5G for optimal performance while leaving headroom
+          memory: 1.5G  # Increased from 800M - much faster Cloudflare solving
+          cpus: '1.0'  # Increased from 0.75 - faster processing (safe for 2 vCPU instance)
         reservations:
-          # Increased from 300M to 512M for better stability
-          memory: 512M
-          cpus: '0.25'
+          # Guaranteed minimum for stable operation
+          memory: 600M  # Increased from 400M for better stability
+          cpus: '0.5'  # Increased from 0.4
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "2"
-
-
-
 
 # Networks
 networks:

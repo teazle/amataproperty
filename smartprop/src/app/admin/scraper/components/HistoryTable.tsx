@@ -56,10 +56,20 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
         toast.success('Job history deleted successfully');
         onHistoryChanged?.();
       } else {
-        toast.error(result.error || 'Failed to delete job');
+        // Ensure error is a string, not an object
+        const errorMessage = typeof result.error === 'string' 
+          ? result.error 
+          : result.error?.message || JSON.stringify(result.error) || 'Failed to delete job';
+        toast.error(errorMessage);
       }
     } catch (error) {
-      toast.error('Failed to delete job');
+      // Handle unexpected errors
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : typeof error === 'string' 
+        ? error 
+        : 'Failed to delete job';
+      toast.error(errorMessage);
       console.error('Error deleting job:', error);
     } finally {
       setDeletingJobs(prev => {
@@ -83,10 +93,20 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
         toast.success('All scraping history deleted');
         onHistoryChanged?.();
       } else {
-        toast.error(result.error || 'Failed to delete history');
+        // Ensure error is a string, not an object
+        const errorMessage = typeof result.error === 'string' 
+          ? result.error 
+          : result.error?.message || JSON.stringify(result.error) || 'Failed to delete history';
+        toast.error(errorMessage);
       }
     } catch (error) {
-      toast.error('Failed to delete history');
+      // Handle unexpected errors
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : typeof error === 'string' 
+        ? error 
+        : 'Failed to delete history';
+      toast.error(errorMessage);
       console.error('Error deleting history:', error);
     } finally {
       setIsDeletingAll(false);

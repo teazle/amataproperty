@@ -574,12 +574,20 @@ export async function stopScraperJob() {
 export async function deleteScraperHistory() {
   try {
     // Delete all completed and failed jobs
-    const { error } = await supabase
+    const { error, data } = await supabase
       .from('scraper_jobs')
       .delete()
       .in('status', ['completed', 'failed']);
 
-    if (error) throw error;
+    if (error) {
+      // Handle Supabase PostgrestError
+      const errorMessage = error.message || error.details || 'Failed to delete scraper history';
+      console.error('Error deleting scraper history:', error);
+      return {
+        success: false,
+        error: errorMessage
+      };
+    }
 
     revalidatePath('/admin/scraper');
 
@@ -590,9 +598,19 @@ export async function deleteScraperHistory() {
 
   } catch (error) {
     console.error('Error deleting scraper history:', error);
+    // Handle various error types
+    let errorMessage = 'Failed to delete scraper history';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (error && typeof error === 'object' && 'message' in error) {
+      errorMessage = String((error as any).message);
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+    
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: errorMessage
     };
   }
 }
@@ -607,7 +625,15 @@ export async function deleteScraperJob(jobId: string) {
       .delete()
       .eq('id', jobId);
 
-    if (error) throw error;
+    if (error) {
+      // Handle Supabase PostgrestError
+      const errorMessage = error.message || error.details || 'Failed to delete scraper job';
+      console.error('Error deleting scraper job:', error);
+      return {
+        success: false,
+        error: errorMessage
+      };
+    }
 
     revalidatePath('/admin/scraper');
 
@@ -618,9 +644,19 @@ export async function deleteScraperJob(jobId: string) {
 
   } catch (error) {
     console.error('Error deleting scraper job:', error);
+    // Handle various error types
+    let errorMessage = 'Failed to delete scraper job';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (error && typeof error === 'object' && 'message' in error) {
+      errorMessage = String((error as any).message);
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+    
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: errorMessage
     };
   }
 }

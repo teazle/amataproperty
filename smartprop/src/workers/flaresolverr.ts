@@ -65,16 +65,18 @@ export async function createFlaresolverrSession(): Promise<string | null> {
 
 /**
  * Solve Cloudflare challenge using Flaresolverr
+ * NOTE: Sessions disabled by default to prevent Chrome OOM kills (see commit 8c60007)
+ * Flaresolverr creates temporary sessions automatically and cleans them up
  */
 export async function solveCloudflareWithFlaresolverr(
   url: string, 
-  useSession: boolean = false // Default to false - Flaresolverr works better without sessions
+  useSession: boolean = false // Default to false - prevents multiple Chrome instances and OOM kills
 ): Promise<FlaresolverrResult | null> {
   try {
     console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
     
     // Skip session creation by default - Flaresolverr creates temporary sessions automatically
-    // Sessions can cause Chrome connection issues
+    // Sessions can cause Chrome connection issues and OOM kills (see CHROME_PROCESS_OPTIMIZATION.md)
     let session = null;
     if (useSession) {
       session = flaresolverrSession || await createFlaresolverrSession();

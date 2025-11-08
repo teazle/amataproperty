@@ -317,6 +317,7 @@ export async function scrapeEdgePropMCP(
               console.log(`   🔧 Using Flaresolverr for first page (no cookies yet)...`);
               try {
                 // Use useSession: false to prevent multiple Chrome instances and OOM kills
+                // See CHROME_PROCESS_OPTIMIZATION.md for details
                 const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, false);
                 
                 if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {

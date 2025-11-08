@@ -97,6 +97,8 @@ services:
       - TZ=Asia/Singapore
     networks:
       - smartprop-network
+    # Increase shared memory for Chrome's multi-process architecture
+    shm_size: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8191/"]
       interval: 30s
@@ -106,10 +108,13 @@ services:
     deploy:
       resources:
         limits:
-          memory: 500M
+          # Increased from 500M to 1G to prevent Chrome OOM kills
+          # Chrome + Flaresolverr + Cloudflare challenges need more memory
+          memory: 1G
           cpus: '0.5'
         reservations:
-          memory: 300M
+          # Increased from 300M to 512M for better stability
+          memory: 512M
           cpus: '0.25'
     logging:
       driver: "json-file"

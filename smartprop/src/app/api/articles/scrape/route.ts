@@ -2,6 +2,14 @@
  * SSE endpoint for real-time scraper updates with database tracking
  */
 
+import { config } from 'dotenv';
+import path from 'path';
+
+// Load environment variables explicitly (Next.js doesn't always load .env.local in API routes)
+// This ensures FLARESOLVERR_URL and other scraper env vars are available
+config({ path: path.resolve(process.cwd(), '.env') });
+config({ path: path.resolve(process.cwd(), '.env.local') });
+
 import { NextRequest } from 'next/server';
 import { scrapeEdgePropUnified, stopUnifiedScraper } from '@/lib/scraper/edgeprop-unified-scraper';
 import { scrapeEdgePropMCP } from '@/lib/scraper/edgeprop-mcp-scraper';

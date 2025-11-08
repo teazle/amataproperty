@@ -159,6 +159,22 @@ export async function startScrapeJob(config: ScraperConfig) {
         stdio: ['ignore', logFd, logFd],
       });
       
+      // Store PID in lock file immediately for process tracking
+      const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
+      try {
+        const lockData = {
+          pid: child.pid,
+          jobId: job.id,
+          platform: 'edgeprop',
+          startedAt: new Date().toISOString(),
+          status: 'running'
+        };
+        fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
+        console.log(`Created lock file with PID: ${child.pid}`);
+      } catch (lockError) {
+        console.log(`Warning: Could not create lock file: ${lockError}`);
+      }
+      
       // Close the file descriptor in the parent process
       fs.closeSync(logFd);
       child.unref(); // Allow parent process to exit independently
@@ -511,9 +527,10 @@ export async function stopScraperJob() {
 
     // Try to get PID from lock file and kill the process
     let pid: number | null = null;
+    const lockFile = path.join(process.cwd(), 'storage', 
+      job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+    
     try {
-      const lockFile = path.join(process.cwd(), 'storage', 
-        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
       if (fs.existsSync(lockFile)) {
         const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
         pid = lockData.pid || null;
@@ -521,13 +538,81 @@ export async function stopScraperJob() {
     } catch (error) {
       console.log(`Could not read lock file for job ${job.id}:`, error);
     }
+    
+    // Always try pkill first (most reliable for detached processes)
+    try {
+      const { execSync } = await import('child_process');
+      const scriptPattern = job.platform === 'propertyguru' ? 'pg.districts.ts' : 'ep.live.ts';
+      // Kill processes matching the script and job ID
+      execSync(`pkill -f "${scriptPattern}.*${job.id}" || pkill -f "${scriptPattern}" || true`, { 
+        stdio: 'ignore',
+        timeout: 5000 
+      });
+      console.log(`Used pkill to stop ${job.platform} scraper processes for job ${job.id}`);
+    } catch (pkillError) {
+      console.log(`pkill attempt failed: ${pkillError}`);
+    }
 
     if (pid && typeof pid === 'number' && pid > 0) {
       try {
-        process.kill(pid, 'SIGTERM');
-        console.log(`Killed process ${pid} for job ${job.id}`);
+        // Try to kill the process and its children (process group)
+        // On Linux, negative PID kills the process group
+        try {
+          process.kill(-pid, 'SIGTERM'); // Kill process group
+          console.log(`Sent SIGTERM to process group ${pid} for job ${job.id}`);
+        } catch (pgError) {
+          // Fallback: try killing just the process
+          try {
+            process.kill(pid, 'SIGTERM');
+            console.log(`Sent SIGTERM to process ${pid} for job ${job.id}`);
+          } catch (killError) {
+            console.log(`Process ${pid} may have already stopped`);
+          }
+        }
+        
+        // Wait a bit, then force kill if still running
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Check if process is still running and force kill
+        try {
+          const { execSync } = await import('child_process');
+          // Check if process exists
+          try {
+            execSync(`ps -p ${pid} > /dev/null 2>&1`);
+            // Process still exists, force kill
+            try {
+              process.kill(-pid, 'SIGKILL');
+              console.log(`Force killed process group ${pid}`);
+            } catch {
+              process.kill(pid, 'SIGKILL');
+              console.log(`Force killed process ${pid}`);
+            }
+          } catch {
+            // Process doesn't exist, already stopped
+            console.log(`Process ${pid} already stopped`);
+          }
+        } catch (checkError) {
+          console.log(`Could not check/kill process: ${checkError}`);
+        }
       } catch (killError) {
-        console.log(`Process ${pid} may have already stopped`);
+        console.log(`Error killing process ${pid}: ${killError}`);
+        // Try using kill command as fallback
+        try {
+          const { execSync } = await import('child_process');
+          execSync(`pkill -f "ep.live.ts.*${job.id}" || true`, { stdio: 'ignore' });
+          console.log(`Used pkill to stop scraper processes for job ${job.id}`);
+        } catch (pkillError) {
+          console.log(`Could not use pkill: ${pkillError}`);
+        }
+      }
+    } else {
+      // No PID in lock file, try to find and kill by process name
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`pkill -f "ep.live.ts.*${job.id}" || true`, { stdio: 'ignore' });
+        console.log(`Used pkill to stop scraper processes for job ${job.id}`);
+      } catch (pkillError) {
+        console.log(`Could not use pkill: ${pkillError}`);
       }
     }
 

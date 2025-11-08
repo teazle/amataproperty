@@ -98,6 +98,52 @@ async function scrapeEdgePropFinal() {
   const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
   const hasStorageState = fs.existsSync(stateFilePath);
   
+  // Flag to track if we should stop gracefully
+  let shouldStop = false;
+  
+  // Handle stop signals gracefully
+  const handleStopSignal = async (signal: string) => {
+    console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
+    shouldStop = true;
+    
+    // Update lock file
+    if (fs.existsSync(lockFile)) {
+      try {
+        const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+        lockData.status = 'stopped';
+        lockData.statusMessage = `Stopped by ${signal} signal`;
+        lockData.completedAt = new Date().toISOString();
+        fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
+      } catch (e) {
+        console.log('Could not update lock file:', e);
+      }
+    }
+    
+    // Update database if jobId exists
+    if (jobId) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: `Stopped by ${signal} signal`
+          })
+          .eq('id', jobId);
+      } catch (error) {
+        console.error('Failed to update database:', error);
+      }
+    }
+    
+    // Clean up and exit
+    process.exit(0);
+  };
+  
+  // Register signal handlers
+  process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
+  process.on('SIGINT', () => handleStopSignal('SIGINT'));
+  
   // Check for existing lock file
   if (fs.existsSync(lockFile)) {
     const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
@@ -125,6 +171,7 @@ async function scrapeEdgePropFinal() {
   const jobStatus = {
     startedAt: new Date().toISOString(),
     pid: process.pid,
+    jobId: jobId || null,
     status: 'running',
     statusMessage: 'Starting scraper...',
     progress: {
@@ -493,7 +540,13 @@ async function scrapeEdgePropFinal() {
     const baseUrl = 'https://www.edgeprop.sg/property-search?listing_type=sale&property_type=9%252C103%252C107%252C105%252C106%252C104&district=&bedroom_min=&asking_price_min=1000000&asking_price_max=3000000&floor_area_min=&floor_area_max=&land_area_min=&land_area_max=&tenure=&bathroom=&furnishing=&completed=&level=&completion_year_min=&completion_year_max=&rental_yield=&high_rental_volume=&high_sales_volume=&deals=&nearby_amenities=&amenities_distance=500&rental_type=&keyword_features=&keyword=&mrt_keywords=&school_keywords=&hdbtowns_keywords=&areas_keywords=&district_keywords=&asset_id=&resource_type=&x=&y=&radius=1000&search_by=&search_by_distance=&search_by_location=&search_by_showmap=true&below_valuation=&map_zoom=&asset_lat=&asset_lng=&pageSize=20&order_by=recommended&fittings=&with_new_launches=0&area=&region=&subzone=&subzone_keywords=';
     
     // Loop through pages
-    while (currentPage <= maxPages) {
+    while (currentPage <= maxPages && !shouldStop) {
+      // Check if we should stop before processing each page
+      if (shouldStop) {
+        console.log('\n🛑 Stop signal received, exiting gracefully...');
+        break;
+      }
+      
       console.log(`\n${'='.repeat(60)}`);
       console.log(`📄 PAGE ${currentPage}/${maxPages}`);
       console.log(`${'='.repeat(60)}`);

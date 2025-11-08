@@ -54,12 +54,55 @@ if ! command -v pm2 &> /dev/null; then
     sudo npm install -g pm2
 fi
 
+# Install Nginx if not already installed
+if ! command -v nginx &> /dev/null; then
+    echo "Installing Nginx..."
+    sudo dnf install -y nginx
+    sudo systemctl enable nginx
+fi
+
 # Create app directory
 sudo mkdir -p /opt/smartprop
 sudo chown -R $USER:$USER /opt/smartprop
 
 # Create necessary directories
 mkdir -p /opt/smartprop/{storage,logs}
+
+# Setup Nginx configuration (ensure http block exists)
+if [ -f /opt/smartprop/app/smartprop/scripts/setup-nginx-ec2.sh ]; then
+    echo "Setting up Nginx configuration..."
+    bash /opt/smartprop/app/smartprop/scripts/setup-nginx-ec2.sh
+elif [ -f app/smartprop/scripts/setup-nginx-ec2.sh ]; then
+    echo "Setting up Nginx configuration..."
+    bash app/smartprop/scripts/setup-nginx-ec2.sh
+else
+    echo "⚠️  Nginx setup script not found, ensuring http block exists..."
+    # Quick fix: ensure http block exists in nginx.conf
+    if ! grep -q "^http {" /etc/nginx/nginx.conf 2>/dev/null; then
+        sudo tee -a /etc/nginx/nginx.conf > /dev/null << 'NGINX_HTTP_BLOCK'
+
+http {
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" "\$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    include /etc/nginx/conf.d/*.conf;
+}
+NGINX_HTTP_BLOCK
+        sudo nginx -t && sudo systemctl restart nginx || true
+    fi
+fi
 
 echo "✅ Environment setup complete"
 ENDSSH
@@ -69,7 +112,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 2: Copy environment file to EC2
+# Step 2: Copy environment file and nginx config to EC2
 if [ -f .env.local ]; then
     echo -e "${BLUE}📋 Copying environment file to EC2...${NC}"
     scp -i ${PEM_KEY} \
@@ -77,6 +120,16 @@ if [ -f .env.local ]; then
         .env.local \
         ${EC2_USER}@${EC2_IP}:/tmp/.env.local
     echo -e "${GREEN}✅ Environment file copied${NC}"
+fi
+
+# Copy nginx server config if it exists
+if [ -f nginx-smartprop.conf ]; then
+    echo -e "${BLUE}📋 Copying nginx config to EC2...${NC}"
+    scp -i ${PEM_KEY} \
+        -o StrictHostKeyChecking=no \
+        nginx-smartprop.conf \
+        ${EC2_USER}@${EC2_IP}:/tmp/smartprop.conf
+    echo -e "${GREEN}✅ Nginx config copied${NC}"
 fi
 
 # Step 3: Deploy application
@@ -109,6 +162,15 @@ if [ -f /tmp/.env.local ]; then
     echo "Copying environment file..."
     cp /tmp/.env.local .env.local
     rm /tmp/.env.local
+fi
+
+# Copy nginx server config if it was uploaded
+if [ -f /tmp/smartprop.conf ]; then
+    echo "Copying nginx server config..."
+    sudo cp /tmp/smartprop.conf /etc/nginx/conf.d/smartprop.conf
+    sudo chmod 644 /etc/nginx/conf.d/smartprop.conf
+    rm /tmp/smartprop.conf
+    echo "✅ Nginx server config installed"
 fi
 
 # Install dependencies

@@ -155,10 +155,22 @@ async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Prom
 }
 
 /**
- * Processes up to 25 queued outreach messages
+ * Processes queued outreach messages
+ * @param limit - Maximum number of messages to process (default: 15, recommended: 10-20 to avoid WhatsApp rate limiting)
+ * @param delayBetweenMessages - Delay in milliseconds between messages (default: 1000ms = 1 second)
  */
-export async function processOutreachMessages(): Promise<{ processed: number; sent: number; failed: number }> {
-  // Fetch up to 25 queued outreach messages
+export async function processOutreachMessages(
+  limit: number = 15,
+  delayBetweenMessages: number = 1000
+): Promise<{ processed: number; sent: number; failed: number }> {
+  // Ensure limit is within safe range (10-20 recommended by WAHA docs)
+  const safeLimit = Math.max(1, Math.min(limit, 20));
+  
+  if (limit > 20) {
+    console.warn(`⚠️  Outreach limit ${limit} exceeds recommended maximum of 20. Using ${safeLimit} instead.`);
+  }
+  
+  // Fetch queued outreach messages
   const { data: queuedOutreach, error: fetchError } = await supabase
     .from('outreach')
     .select(`
@@ -168,7 +180,7 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
     `)
     .eq('status', 'queued')
     .eq('channel', 'whatsapp')
-    .limit(25)
+    .limit(safeLimit)
     .order('created_at', { ascending: true });
 
   if (fetchError) {
@@ -184,8 +196,16 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
   let sent = 0;
   let failed = 0;
 
-  // Process each message
-  for (const outreach of queuedOutreach) {
+  // Process each message with delay between messages to avoid rate limiting
+  for (let i = 0; i < queuedOutreach.length; i++) {
+    const outreach = queuedOutreach[i];
+    
+    // Add delay before sending (except for the first message)
+    if (i > 0 && delayBetweenMessages > 0) {
+      console.log(`⏳ Waiting ${delayBetweenMessages}ms before sending next message (rate limiting protection)...`);
+      await new Promise(resolve => setTimeout(resolve, delayBetweenMessages));
+    }
+    
     try {
       // Update status to 'sent' first
       const { error: updateError } = await supabase
@@ -228,13 +248,13 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
             })
             .eq('id', outreach.id);
 
-          console.log(`WhatsApp message sent successfully to ${outreach.agents.phone}`);
+          console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
           sent++;
         } else {
           throw new Error(result.error || 'Failed to send message');
         }
       } catch (error) {
-        console.error(`Failed to send WhatsApp message to ${outreach.agents.phone}:`, error);
+        console.error(`❌ Failed to send WhatsApp message to ${outreach.agents.phone}:`, error);
         
         // Update status to 'failed'
         await supabase
@@ -245,7 +265,7 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
         failed++;
       }
     } catch (error) {
-      console.error(`Error processing outreach ${outreach.id}:`, error);
+      console.error(`❌ Error processing outreach ${outreach.id}:`, error);
       
       // Update status to 'failed'
       await supabase
@@ -266,8 +286,9 @@ export async function processOutreachMessages(): Promise<{ processed: number; se
 
 /**
  * Main matching job function
+ * @param outreachLimit - Optional limit for outreach messages (defaults to 15 if not provided)
  */
-export async function runMatchingJob(): Promise<{
+export async function runMatchingJob(outreachLimit?: number): Promise<{
   success: boolean;
   message: string;
   stats: {
@@ -294,8 +315,8 @@ export async function runMatchingJob(): Promise<{
     const outreachEntries = await upsertOutreachEntries(listings, agents);
     console.log(`Created ${outreachEntries.length} new outreach entries`);
 
-    // Process queued messages
-    const messageStats = await processOutreachMessages();
+    // Process queued messages (use provided limit or default)
+    const messageStats = await processOutreachMessages(outreachLimit);
     console.log(`Processed ${messageStats.processed} messages: ${messageStats.sent} sent, ${messageStats.failed} failed`);
 
     return {

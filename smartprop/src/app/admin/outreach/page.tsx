@@ -62,6 +62,7 @@ interface ListingWithOutreach {
 export default function OutreachPage() {
   const [listings, setListings] = useState<ListingWithOutreach[]>([]);
   const [isMatching, setIsMatching] = useState(false);
+  const [outreachLimit, setOutreachLimit] = useState<number>(15);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filtering and search state
@@ -766,6 +767,9 @@ export default function OutreachPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          limit: outreachLimit
+        }),
       });
 
       const data = await response.json();
@@ -1109,7 +1113,7 @@ export default function OutreachPage() {
                 {isLoading ? 'Loading...' : `${filteredListings.length} of ${listings.length} listing${listings.length !== 1 ? 's' : ''} shown`}
               </CardDescription>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <Button 
                 onClick={exportToCSV} 
                 disabled={isLoading || filteredListings.length === 0}
@@ -1127,6 +1131,29 @@ export default function OutreachPage() {
               >
                 Refresh
               </Button>
+              {!isMatching && (
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="outreach-limit" className="text-sm text-gray-600 whitespace-nowrap">
+                    Limit:
+                  </Label>
+                  <Input
+                    id="outreach-limit"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={outreachLimit}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val) && val >= 1 && val <= 20) {
+                        setOutreachLimit(val);
+                      }
+                    }}
+                    className="w-20 h-8"
+                    disabled={isLoading || isMatching}
+                    title="Number of messages to send (1-20, recommended: 10-20)"
+                  />
+                </div>
+              )}
               {isMatching ? (
                 <Button 
                   onClick={stopMatcher} 

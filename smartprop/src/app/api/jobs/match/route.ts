@@ -12,9 +12,21 @@ export async function POST(request: NextRequest) {
   try {
     console.log('Received request to run matching job');
 
+    // Parse optional limit from request body
+    let outreachLimit: number | undefined;
+    try {
+      const body = await request.json().catch(() => ({}));
+      if (body.limit && typeof body.limit === 'number') {
+        outreachLimit = body.limit;
+        console.log(`Using custom outreach limit: ${outreachLimit}`);
+      }
+    } catch {
+      // Body parsing failed or no body, use defaults
+    }
+
     // Run the matching job with advisory lock (key 10101)
     const result = await withAdvisoryLock(10101, async () => {
-      return await runMatchingJob();
+      return await runMatchingJob(outreachLimit);
     });
 
     if (result === null) {

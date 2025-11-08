@@ -9,7 +9,22 @@ export async function POST(request: NextRequest) {
   try {
     console.log('Processing queued outreach messages...');
     
-    const result = await processOutreachMessages();
+    // Parse optional limit and delay from request body
+    let limit: number | undefined;
+    let delay: number | undefined;
+    try {
+      const body = await request.json().catch(() => ({}));
+      if (body.limit && typeof body.limit === 'number') {
+        limit = body.limit;
+      }
+      if (body.delay && typeof body.delay === 'number') {
+        delay = body.delay;
+      }
+    } catch {
+      // Body parsing failed or no body, use defaults
+    }
+    
+    const result = await processOutreachMessages(limit, delay);
     
     return NextResponse.json({
       success: true,

@@ -186,7 +186,14 @@ export async function applyFlaresolverrToContext(
   defaultDomain?: string // Optional: default domain for cookies (e.g., '.propertyguru.com.sg' or '.edgeprop.sg')
 ): Promise<void> {
   // Get existing cookies to preserve login session
+  // Wait a moment to ensure storageState cookies are loaded if context was just created
+  await new Promise(resolve => setTimeout(resolve, 100));
   const existingCookies = await context.cookies();
+  
+  // Log cookie count for debugging
+  if (existingCookies.length > 0) {
+    console.log(`   📊 Found ${existingCookies.length} existing cookies in context`);
+  }
   
   // Identify Cloudflare cookie names that should be replaced
   const cloudflareCookieNames = ['__cf_bm', 'cf_clearance', '__cfduid', '__cf_ob_info', '__cf_ob_equ'];

@@ -35,8 +35,9 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const handleStopScraper = async () => {
     setIsStopping(true);
@@ -95,6 +96,7 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
 
     setIsLoadingLogs(true);
     setShowLogs(true);
+    shouldAutoScrollRef.current = true; // Reset auto-scroll when opening logs
     
     // Load initial logs
     try {
@@ -139,6 +141,7 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
           if (data.reset) {
             // File was reset, replace all logs
             setLogs(data.newLines || []);
+            shouldAutoScrollRef.current = true;
           } else {
             // Append new lines
             setLogs(prevLogs => {
@@ -148,10 +151,14 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             });
           }
           
-          // Auto-scroll to bottom
-          setTimeout(() => {
-            logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-          }, 100);
+          // Auto-scroll to bottom only if user hasn't manually scrolled up
+          if (shouldAutoScrollRef.current) {
+            setTimeout(() => {
+              if (logsContainerRef.current) {
+                logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+              }
+            }, 50);
+          }
         } else if (data.type === 'error') {
           console.error('Logs SSE error:', data.message);
           toast.error(`Logs error: ${data.message}`);
@@ -175,14 +182,32 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
     };
   }, [showLogs, job.platform]);
 
-  // Auto-scroll to bottom when logs change
+  // Auto-scroll to bottom when logs change (only if user hasn't scrolled up)
   useEffect(() => {
-    if (showLogs && logs.length > 0) {
+    if (showLogs && logs.length > 0 && shouldAutoScrollRef.current) {
       setTimeout(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+        if (logsContainerRef.current) {
+          logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+        }
+      }, 50);
     }
   }, [logs, showLogs]);
+
+  // Track user scroll to disable auto-scroll if they scroll up
+  useEffect(() => {
+    if (!showLogs || !logsContainerRef.current) return;
+
+    const container = logsContainerRef.current;
+    const handleScroll = () => {
+      // Check if user is near the bottom (within 100px)
+      const isNearBottom = 
+        container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      shouldAutoScrollRef.current = isNearBottom;
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [showLogs]);
   const progress = job.listingsProcessed && job.totalPages 
     ? Math.round((job.listingsProcessed / (job.totalPages * 20)) * 100)
     : 0;
@@ -316,7 +341,10 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
                 Hide Logs
               </Button>
             </div>
-            <div className="bg-gray-900 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96">
+            <div 
+              ref={logsContainerRef}
+              className="bg-gray-900 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96"
+            >
               {isLoadingLogs ? (
                 <div className="text-white">Loading logs...</div>
               ) : logs.length === 0 ? (
@@ -324,7 +352,6 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
               ) : (
                 <pre className="whitespace-pre-wrap text-white">
                   {logs.join('\n')}
-                  <div ref={logsEndRef} />
                 </pre>
               )}
             </div>

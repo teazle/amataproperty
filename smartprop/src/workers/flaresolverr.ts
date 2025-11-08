@@ -192,7 +192,13 @@ export async function applyFlaresolverrToContext(
   const cloudflareCookieNames = ['__cf_bm', 'cf_clearance', '__cfduid', '__cf_ob_info', '__cf_ob_equ'];
   
   // Identify login/session cookie names that should be preserved
-  const loginCookiePatterns = ['session', 'auth', 'token', 'user', 'login', 'access', 'refresh', 'jwt'];
+  // PropertyGuru uses: pgutid, Visitor, and other site-specific cookies
+  // EdgeProp uses: SSESS*, PSESSID, EP_*, FBRLHL_*
+  const loginCookiePatterns = [
+    'session', 'auth', 'token', 'user', 'login', 'access', 'refresh', 'jwt',
+    'pgutid', 'visitor', 'propertyguru', // PropertyGuru-specific
+    'ssess', 'psessid', 'ep_', 'fbrlhl', 'edgeprop' // EdgeProp-specific
+  ];
   
   // Filter out Cloudflare cookies but keep login cookies
   const preservedCookies = existingCookies.filter((cookie: any) => {
@@ -201,11 +207,12 @@ export async function applyFlaresolverrToContext(
     if (cloudflareCookieNames.some(cfName => cookieName.includes(cfName.toLowerCase()))) {
       return false;
     }
-    // Keep login/session cookies
+    // Keep login/session cookies (including PropertyGuru and EdgeProp specific)
     if (loginCookiePatterns.some(pattern => cookieName.includes(pattern))) {
       return true;
     }
-    // Keep all other cookies (they might be important)
+    // Keep all other cookies that are NOT Cloudflare (they might be important for authentication)
+    // This includes analytics cookies, but better safe than sorry
     return true;
   });
   

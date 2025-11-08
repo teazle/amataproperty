@@ -111,6 +111,20 @@ async function authenticatePropertyGuru() {
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult);
+      
+      // Save Cloudflare cookies immediately (will be overwritten with full auth state after login)
+      const storagePath = path.join(process.cwd(), 'storage');
+      if (!fs.existsSync(storagePath)) {
+        fs.mkdirSync(storagePath, { recursive: true });
+      }
+      const tempStatePath = path.join(storagePath, 'pg.state.temp.json');
+      try {
+        await context.storageState({ path: tempStatePath });
+        console.log('   💾 Saved Cloudflare cookies temporarily');
+      } catch (saveError) {
+        console.log(`   ⚠️  Failed to save temp cookies: ${saveError}`);
+      }
+      
       await humanPause(500, 1000);
     }
   } catch (error) {

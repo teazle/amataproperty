@@ -392,6 +392,16 @@ async function scrapeEdgePropFinal() {
             
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+              
+              // Save fresh Cloudflare cookies to storage state for reuse
+              const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+              try {
+                await context.storageState({ path: stateFilePath });
+                console.log(`   💾 Saved fresh Cloudflare cookies to storage state (search page)`);
+              } catch (saveError) {
+                console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
+              }
+              
               await humanPause(500, 1000);
             }
           }

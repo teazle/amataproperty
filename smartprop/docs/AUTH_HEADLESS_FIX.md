@@ -74,10 +74,33 @@ The fix ensures:
 
 ## Status
 
-- ✅ Fixed `auth.pg.ts`
-- ✅ Fixed `auth.ep.ts`
-- ✅ `actions.ts` already sets `DISPLAY=:99` for PropertyGuru scraper
+- ✅ Fixed `auth.pg.ts` - auto-detects headless mode
+- ✅ Fixed `auth.ep.ts` - auto-detects headless mode
+- ✅ Updated `actions.ts` to use `xvfb-run` consistently (same as `pg.districts.ts` and `ep.live.ts`)
 - ✅ EdgeProp scraper uses headless mode by default (no DISPLAY needed)
+
+## Additional Improvement: Consistent `xvfb-run` Usage
+
+After fixing the headless detection, we also updated `actions.ts` to use `xvfb-run` when spawning scrapers, making it consistent with how the scrapers themselves call auth scripts:
+
+**Before:**
+```typescript
+const child = spawn(bunPath, ['src/workers/pg.districts.ts'], {
+  env: { DISPLAY: process.env.DISPLAY || ':99' }
+});
+```
+
+**After:**
+```typescript
+const child = spawn('xvfb-run', ['-a', bunPath, 'src/workers/pg.districts.ts'], {
+  env: { /* xvfb-run handles DISPLAY automatically */ }
+});
+```
+
+This ensures:
+- ✅ Consistent approach across all code paths
+- ✅ `xvfb-run` automatically handles DISPLAY setup
+- ✅ More robust - works even if Xvfb wasn't pre-started
 
 ## Testing
 

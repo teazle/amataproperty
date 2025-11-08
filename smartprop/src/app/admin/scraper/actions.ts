@@ -104,7 +104,7 @@ export async function startScrapeJob(config: ScraperConfig) {
     
     if (config.platform === 'propertyguru') {
       const district = config.district!.replace('D', '');
-      // Use spawn with absolute path to bun for better control
+      // Use xvfb-run for headless environments (same as pg.districts.ts uses for auth)
       const logFile = `/tmp/pg-scraper-${job.id}.log`;
       const logFd = fs.openSync(logFile, 'a');
       
@@ -115,11 +115,11 @@ export async function startScrapeJob(config: ScraperConfig) {
         PG_MAX_PAGES: config.pages.toString(),
         PG_JOB_ID: job.id,
         HOME: homeDir,
-        // Set DISPLAY for headless browser (Xvfb is running on EC2)
-        DISPLAY: process.env.DISPLAY || ':99',
+        // xvfb-run will handle DISPLAY automatically
       };
       
-      const child = spawn(bunPath, ['src/workers/pg.districts.ts'], {
+      // Use xvfb-run to ensure Xvfb is available (consistent with how auth.pg.ts is called)
+      const child = spawn('xvfb-run', ['-a', bunPath, 'src/workers/pg.districts.ts'], {
         cwd,
         env,
         detached: true,
@@ -130,9 +130,11 @@ export async function startScrapeJob(config: ScraperConfig) {
       fs.closeSync(logFd);
       child.unref(); // Allow parent process to exit independently
       
-      console.log(`Started PG scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);
+      console.log(`Started PG scraper with job ID: ${job.id}, PID: ${child.pid}, using xvfb-run`);
     } else {
       // EdgeProp scraper
+      // Note: ep.live.ts uses headless: true by default, but we use xvfb-run for consistency
+      // and in case auth.ep.ts needs to run (which may use headed mode)
       const logFile = `/tmp/ep-scraper-${job.id}.log`;
       const logFd = fs.openSync(logFile, 'a');
       
@@ -142,9 +144,11 @@ export async function startScrapeJob(config: ScraperConfig) {
         EP_MAX_PAGES: config.pages.toString(),
         EP_JOB_ID: job.id,
         HOME: homeDir,
+        // xvfb-run will handle DISPLAY automatically
       };
       
-      const child = spawn(bunPath, ['src/workers/ep.live.ts'], {
+      // Use xvfb-run for consistency (same as ep.live.ts uses for auth.ep.ts)
+      const child = spawn('xvfb-run', ['-a', bunPath, 'src/workers/ep.live.ts'], {
         cwd,
         env,
         detached: true,
@@ -155,7 +159,7 @@ export async function startScrapeJob(config: ScraperConfig) {
       fs.closeSync(logFd);
       child.unref(); // Allow parent process to exit independently
       
-      console.log(`Started EP scraper with job ID: ${job.id}, PID: ${child.pid}, bun path: ${bunPath}`);
+      console.log(`Started EP scraper with job ID: ${job.id}, PID: ${child.pid}, using xvfb-run`);
     }
 
     // Update job status to running

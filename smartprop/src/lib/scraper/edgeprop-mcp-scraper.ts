@@ -770,7 +770,8 @@ export async function scrapeEdgePropMCP(
                   }
                   
                   try {
-                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                    // Use useSession: false to prevent multiple Chrome instances and OOM kills
+                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, false);
                     
                     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
@@ -802,7 +803,8 @@ export async function scrapeEdgePropMCP(
                   }
                   
                   try {
-                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true);
+                    // Use useSession: false to prevent multiple Chrome instances and OOM kills
+                    const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, false);
                     
                     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');

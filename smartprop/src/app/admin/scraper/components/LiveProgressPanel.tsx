@@ -5,7 +5,7 @@ import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { stopScraperJob, forceResetStuckJobs } from '../actions';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface JobProgress {
   platform?: string;
@@ -35,6 +35,8 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const handleStopScraper = async () => {
     setIsStopping(true);
@@ -82,13 +84,19 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
 
   const handleViewLogs = async () => {
     if (showLogs) {
+      // Hide logs and close stream
       setShowLogs(false);
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       return;
     }
 
     setIsLoadingLogs(true);
     setShowLogs(true);
     
+    // Load initial logs
     try {
       const platform = job.platform || 'edgeprop';
       const response = await fetch(`/api/scraper/logs?platform=${platform}&lines=200`);
@@ -108,6 +116,73 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
       setIsLoadingLogs(false);
     }
   };
+
+  // Set up SSE streaming when logs are shown
+  useEffect(() => {
+    if (!showLogs) {
+      return;
+    }
+
+    const platform = job.platform || 'edgeprop';
+    const eventSource = new EventSource(`${window.location.origin}/api/scraper/logs/stream?platform=${platform}`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onopen = () => {
+      console.log('Logs SSE connection opened');
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'logs') {
+          if (data.reset) {
+            // File was reset, replace all logs
+            setLogs(data.newLines || []);
+          } else {
+            // Append new lines
+            setLogs(prevLogs => {
+              const updated = [...prevLogs, ...(data.newLines || [])];
+              // Keep only last 2000 lines to prevent memory issues
+              return updated.slice(-2000);
+            });
+          }
+          
+          // Auto-scroll to bottom
+          setTimeout(() => {
+            logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 100);
+        } else if (data.type === 'error') {
+          console.error('Logs SSE error:', data.message);
+          toast.error(`Logs error: ${data.message}`);
+        }
+        // Ignore heartbeat messages
+      } catch (error) {
+        console.error('Error parsing logs SSE message:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('Logs SSE connection error:', error);
+      // SSE will auto-reconnect, so we don't need to handle it manually
+    };
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [showLogs, job.platform]);
+
+  // Auto-scroll to bottom when logs change
+  useEffect(() => {
+    if (showLogs && logs.length > 0) {
+      setTimeout(() => {
+        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  }, [logs, showLogs]);
   const progress = job.listingsProcessed && job.totalPages 
     ? Math.round((job.listingsProcessed / (job.totalPages * 20)) * 100)
     : 0;
@@ -229,14 +304,16 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
         {showLogs && (
           <div className="pt-4 border-t">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">Console Logs</span>
+              <span className="text-sm font-medium text-gray-700">
+                Console Logs {showLogs && <span className="text-green-500 text-xs">● Live</span>}
+              </span>
               <Button
                 onClick={handleViewLogs}
                 variant="ghost"
                 size="sm"
                 className="h-6 text-xs"
               >
-                Refresh
+                Hide Logs
               </Button>
             </div>
             <div className="bg-gray-900 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96">
@@ -247,6 +324,7 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
               ) : (
                 <pre className="whitespace-pre-wrap text-white">
                   {logs.join('\n')}
+                  <div ref={logsEndRef} />
                 </pre>
               )}
             </div>

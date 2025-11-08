@@ -89,8 +89,9 @@ async function authenticateEdgeProp() {
 
   try {
     // Use Flaresolverr to solve Cloudflare before navigating
+    // Use useSession: false to prevent Chrome connection issues and OOM kills
     const homepageUrl = 'https://www.edgeprop.sg/';
-    const flaresolverrResult = await solveCloudflareWithFlaresolverr(homepageUrl, true);
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(homepageUrl, false);
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');

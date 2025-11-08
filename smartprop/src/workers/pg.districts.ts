@@ -737,8 +737,9 @@ async function scrapePropertyGuruByDistrict() {
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
             // Try Flaresolverr first if this is the first attempt
+            // Use useSession: false to prevent multiple Chrome instances and OOM kills
             if (navRetryCount === 0) {
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true);
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies and user-agent from Flaresolverr
@@ -909,7 +910,8 @@ async function scrapePropertyGuruByDistrict() {
 
           try {
             // Use Flaresolverr to solve Cloudflare before navigating to listing page
-            const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, true);
+            // Use useSession: false to prevent multiple Chrome instances and OOM kills
+            const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
             
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               // Apply cookies and user-agent from Flaresolverr (preserves login cookies)

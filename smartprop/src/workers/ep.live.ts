@@ -387,7 +387,8 @@ async function scrapeEdgePropFinal() {
         try {
           // Use Flaresolverr to solve Cloudflare before navigating (first attempt only)
           if (navRetryCount === 0) {
-            const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true);
+            // Use useSession: false to prevent multiple Chrome instances and OOM kills
+            const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
             
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');

@@ -106,7 +106,8 @@ async function authenticatePropertyGuru() {
   
   try {
     // Use Flaresolverr to solve Cloudflare before navigating
-    const flaresolverrResult = await solveCloudflareWithFlaresolverr(loginUrl, true);
+    // Use useSession: false to prevent Chrome connection issues and OOM kills
+    const flaresolverrResult = await solveCloudflareWithFlaresolverr(loginUrl, false);
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult);

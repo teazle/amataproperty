@@ -746,6 +746,16 @@ async function scrapePropertyGuruByDistrict() {
             // Try Flaresolverr first if this is the first attempt
             // Use useSession: false to prevent multiple Chrome instances and OOM kills
             if (navRetryCount === 0) {
+              // IMPORTANT: Navigate to PropertyGuru domain first to ensure cookies from storageState are active
+              // This ensures login cookies are properly loaded before applying Flaresolverr cookies
+              try {
+                await page.goto('https://www.propertyguru.com.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await humanPause(1000, 1500); // Give cookies time to be set
+                console.log(`   🔐 Navigated to PropertyGuru domain to activate login cookies from storageState`);
+              } catch (navError) {
+                console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
+              }
+              
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {

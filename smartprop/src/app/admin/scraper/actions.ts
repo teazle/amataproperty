@@ -115,6 +115,8 @@ export async function startScrapeJob(config: ScraperConfig) {
         PG_MAX_PAGES: config.pages.toString(),
         PG_JOB_ID: job.id,
         HOME: homeDir,
+        HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments
+        NODE_ENV: process.env.NODE_ENV || 'production', // Ensure production mode
         // xvfb-run will handle DISPLAY automatically
       };
       
@@ -144,6 +146,8 @@ export async function startScrapeJob(config: ScraperConfig) {
         EP_MAX_PAGES: config.pages.toString(),
         EP_JOB_ID: job.id,
         HOME: homeDir,
+        HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments
+        NODE_ENV: process.env.NODE_ENV || 'production', // Ensure production mode
         // xvfb-run will handle DISPLAY automatically
       };
       

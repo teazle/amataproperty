@@ -1308,7 +1308,14 @@ async function scrapeEdgePropFinal() {
       }
     }
   } finally {
-    await browser.close();
+    // Always close browser to prevent resource leaks
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (closeError) {
+        console.error('⚠️  Error closing browser:', closeError);
+      }
+    }
     
     const endTime = Date.now();
     const totalTime = Math.round((endTime - startTime) / 1000);
@@ -1372,6 +1379,7 @@ async function scrapeEdgePropFinal() {
 // Run the scraper
 scrapeEdgePropFinal().catch((error) => {
   console.error('❌ Fatal error:', error);
+  // Browser will be closed in finally block, so we can exit safely
   process.exit(1);
 });
 

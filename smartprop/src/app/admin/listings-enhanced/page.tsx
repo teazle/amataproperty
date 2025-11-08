@@ -251,8 +251,15 @@ export default function EnhancedListingsPage() {
   };
 
   const handleEditListing = (listing: Listing) => {
+    console.log('Edit button clicked for listing:', listing.id, listing.title);
+    if (!listing) {
+      console.error('Cannot edit: listing is null or undefined');
+      toast.error('Cannot edit listing: listing data is missing');
+      return;
+    }
     setEditingListing(listing);
     setIsEditModalOpen(true);
+    console.log('Edit modal opened for listing:', listing.id);
   };
 
   const handleSaveListing = (updatedListing: Listing) => {

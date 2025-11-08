@@ -195,11 +195,12 @@ export default function EditListingModal({ listing, isOpen, onClose, onSave }: E
     }
   };
 
-  if (!listing) return null;
+  // Don't render if not open or no listing
+  if (!isOpen || !listing) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto z-[100]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span>Edit Listing</span>

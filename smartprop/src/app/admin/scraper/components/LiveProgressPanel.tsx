@@ -239,13 +239,13 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
                 Refresh
               </Button>
             </div>
-            <div className="bg-gray-900 text-gray-100 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96">
+            <div className="bg-gray-900 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96">
               {isLoadingLogs ? (
-                <div className="text-gray-400">Loading logs...</div>
+                <div className="text-white">Loading logs...</div>
               ) : logs.length === 0 ? (
-                <div className="text-gray-400">No logs available</div>
+                <div className="text-white">No logs available</div>
               ) : (
-                <pre className="whitespace-pre-wrap">
+                <pre className="whitespace-pre-wrap text-white">
                   {logs.join('\n')}
                 </pre>
               )}

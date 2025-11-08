@@ -628,10 +628,7 @@ export async function stopScraperJob() {
 
     if (updateError) throw updateError;
 
-    // Remove lock file
-    const lockFile = path.join(process.cwd(), 'storage', 
-      job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-    
+    // Remove lock file (already declared above)
     if (fs.existsSync(lockFile)) {
       fs.unlinkSync(lockFile);
       console.log(`Removed lock file: ${lockFile}`);

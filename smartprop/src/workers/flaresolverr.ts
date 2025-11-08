@@ -89,7 +89,7 @@ export async function solveCloudflareWithFlaresolverr(
     const requestBody: any = {
       cmd: 'request.get',
       url: url,
-      maxTimeout: 180000, // Increased to 180 seconds (3 minutes) for aggressive Cloudflare
+      maxTimeout: 180000, // 180 seconds (3 minutes) for aggressive Cloudflare challenges
       returnOnlyCookies: false,
     };
     
@@ -98,13 +98,13 @@ export async function solveCloudflareWithFlaresolverr(
       requestBody.session = session;
     }
     
-    // Add timeout to fetch request (slightly longer than Flaresolverr timeout)
-    // Use a more aggressive timeout to prevent hanging
+    // Add timeout to fetch request - match Flaresolverr's maxTimeout (180s) plus buffer
+    // PropertyGuru Cloudflare can take 30-180 seconds to solve
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
-      console.log(`   ⚠️  Flaresolverr request timed out after 120s. Continuing without Flaresolverr...`);
-    }, 120000); // 120 seconds - more aggressive timeout
+      console.log(`   ⚠️  Flaresolverr request timed out after 200s. Continuing without Flaresolverr...`);
+    }, 200000); // 200 seconds - slightly longer than Flaresolverr's 180s maxTimeout
     
     try {
       const response = await fetch(FLARESOLVERR_URL, {

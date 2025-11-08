@@ -900,18 +900,20 @@ async function scrapePropertyGuruByDistrict() {
 
           const listingPage = await context.newPage();
 
-          // Add timeout wrapper for entire listing processing (60 seconds max)
-          let listingTimedOut = false;
-          const listingTimeout = setTimeout(() => {
-            console.log(`   ⏱️  Listing timeout (60s) - forcing close...`);
-            listingTimedOut = true;
-            listingPage.close().catch(() => {});
-          }, 60000);
-
           try {
             // Use Flaresolverr to solve Cloudflare before navigating to listing page
             // Use useSession: false to prevent multiple Chrome instances and OOM kills
+            // Note: Flaresolverr can take 30-180 seconds, so we call it BEFORE starting the timeout
+            console.log(`   🔧 Calling Flaresolverr (may take 30-180s for PropertyGuru Cloudflare)...`);
             const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
+            
+            // Start timeout AFTER Flaresolverr completes (allows 120s for page processing)
+            let listingTimedOut = false;
+            const listingTimeout = setTimeout(() => {
+              console.log(`   ⏱️  Listing timeout (120s) - forcing close...`);
+              listingTimedOut = true;
+              listingPage.close().catch(() => {});
+            }, 120000); // 120 seconds for page processing (Flaresolverr already done)
             
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               // Apply cookies and user-agent from Flaresolverr (preserves login cookies)

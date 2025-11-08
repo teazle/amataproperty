@@ -573,7 +573,28 @@ export async function stopScraperJob() {
  */
 export async function deleteScraperHistory() {
   try {
-    // Delete all completed and failed jobs
+    // First, get all jobs that will be deleted
+    const { data: jobsToDelete } = await supabase
+      .from('scraper_jobs')
+      .select('id')
+      .in('status', ['completed', 'failed']);
+
+    if (jobsToDelete && jobsToDelete.length > 0) {
+      const jobIds = jobsToDelete.map(job => job.id);
+      
+      // Clear foreign key references in district_metadata before deleting
+      const { error: updateError } = await supabase
+        .from('district_metadata')
+        .update({ last_job_id: null })
+        .in('last_job_id', jobIds);
+
+      if (updateError) {
+        console.error('Error clearing foreign key references:', updateError);
+        // Continue anyway - might not have any references
+      }
+    }
+
+    // Now delete all completed and failed jobs
     const { error, data } = await supabase
       .from('scraper_jobs')
       .delete()
@@ -620,6 +641,18 @@ export async function deleteScraperHistory() {
  */
 export async function deleteScraperJob(jobId: string) {
   try {
+    // First, clear foreign key references in district_metadata
+    const { error: updateError } = await supabase
+      .from('district_metadata')
+      .update({ last_job_id: null })
+      .eq('last_job_id', jobId);
+
+    if (updateError) {
+      console.error('Error clearing foreign key references:', updateError);
+      // Continue anyway - might not have any references
+    }
+
+    // Now delete the job
     const { error } = await supabase
       .from('scraper_jobs')
       .delete()

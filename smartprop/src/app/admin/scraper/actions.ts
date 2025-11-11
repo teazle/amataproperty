@@ -159,21 +159,8 @@ export async function startScrapeJob(config: ScraperConfig) {
         stdio: ['ignore', logFd, logFd],
       });
       
-      // Store PID in lock file immediately for process tracking
-      const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
-      try {
-        const lockData = {
-          pid: child.pid,
-          jobId: job.id,
-          platform: 'edgeprop',
-          startedAt: new Date().toISOString(),
-          status: 'running'
-        };
-        fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
-        console.log(`Created lock file with PID: ${child.pid}`);
-      } catch (lockError) {
-        console.log(`Warning: Could not create lock file: ${lockError}`);
-      }
+      // Don't create lock file here - let the worker (ep.live.ts) create it with its own PID
+      // The xvfb-run PID exits quickly, so checking it would give false positives
       
       // Close the file descriptor in the parent process
       fs.closeSync(logFd);

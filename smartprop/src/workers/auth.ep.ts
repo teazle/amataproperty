@@ -381,8 +381,10 @@ async function authenticateEdgeProp() {
   console.log('💾 Saving authentication state...');
   
   // Navigate to homepage to ensure all cookies are properly set
-  await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 30000 });
-  await humanPause(3000, 4000);
+  // Use 'domcontentloaded' instead of 'networkidle' to avoid timeout issues
+  // EdgeProp may have long-running connections that never finish
+  await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await humanPause(2000, 3000);
   
   // Verify we're still logged in before saving - check multiple indicators
   const finalBookmarkCheck = page.locator('[href*="/bookmarks"], a:has-text("Bookmarks")').first();

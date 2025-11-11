@@ -244,7 +244,9 @@ async function scrapeEdgePropFinal() {
       console.log(`⚠️  Auth state file is ${ageInHours.toFixed(1)} hours old, re-authenticating...`);
       shouldReAuth = true;
     } else {
-      console.log(`✅ Using existing auth state file (${ageInHours.toFixed(1)} hours old)`);
+      console.log(`📁 Found auth state file (${ageInHours.toFixed(1)} hours old) - will verify login status before using`);
+      // Don't set shouldReAuth = false here - we'll verify login status later
+      // If login indicators aren't visible, we'll re-auth regardless of file age
     }
   }
   

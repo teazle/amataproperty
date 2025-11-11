@@ -43,6 +43,7 @@ export async function GET(request: NextRequest) {
           // Read lock file for real-time progress
           const lockFile = path.join(process.cwd(), 'storage',
             job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+          const completedFile = lockFile.replace('.lock', '.completed.json');
 
           let progress = {
             currentDistrict: job.current_district,
@@ -52,12 +53,29 @@ export async function GET(request: NextRequest) {
           let statusMessage = 'Scraping...';
           let realtimeStats = job.stats;
 
+          // First try to read from lock file (active job)
           if (fs.existsSync(lockFile)) {
-            const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-            progress = lockData.progress || progress;
-            statusMessage = lockData.statusMessage || statusMessage;
-            // Use real-time stats from lock file if available
-            realtimeStats = lockData.stats || job.stats;
+            try {
+              const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+              progress = lockData.progress || progress;
+              statusMessage = lockData.statusMessage || statusMessage;
+              // Use real-time stats from lock file if available
+              realtimeStats = lockData.stats || job.stats;
+            } catch (e) {
+              console.error('Error reading lock file:', e);
+            }
+          } 
+          // If lock file doesn't exist, try reading from completed.json (recently completed job)
+          else if (fs.existsSync(completedFile)) {
+            try {
+              const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
+              progress = completedData.progress || progress;
+              statusMessage = completedData.statusMessage || statusMessage;
+              // Use stats from completed file if available
+              realtimeStats = completedData.stats || job.stats;
+            } catch (e) {
+              console.error('Error reading completed file:', e);
+            }
           }
 
           const statusData = {

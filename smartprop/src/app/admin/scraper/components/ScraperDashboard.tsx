@@ -84,6 +84,7 @@ export function ScraperDashboard({
   initialAuthStatus
 }: ScraperDashboardProps) {
   const [activeJob, setActiveJob] = useState(initialActiveJob);
+  const [completedJob, setCompletedJob] = useState<Job | null>(null); // Keep completed job for log review
   const [authStatus, setAuthStatus] = useState(initialAuthStatus);
   const [qualityMetrics, setQualityMetrics] = useState(initialQualityMetrics);
   const [districts, setDistricts] = useState(initialDistricts);
@@ -180,6 +181,8 @@ export function ScraperDashboard({
             
             if (data.status === 'active' && data.job) {
               setActiveJob(data.job);
+              // Clear completed job when new job starts
+              setCompletedJob(null);
             } else if (data.status === 'idle') {
               // Job just completed! Refresh district metadata
               const refreshDistricts = async () => {
@@ -191,8 +194,10 @@ export function ScraperDashboard({
               };
               
               // Only refresh if we had a job running
-              if (lastJobId) {
+              if (lastJobId && activeJob) {
                 refreshDistricts();
+                // Keep the completed job visible for log review
+                setCompletedJob(activeJob);
               }
               
               setActiveJob(null);
@@ -302,12 +307,14 @@ export function ScraperDashboard({
       {/* Data Quality Metrics */}
       <DataQualityDashboard metrics={qualityMetrics} />
 
-      {/* Live Progress (only show if active job) */}
-      {activeJob && (
+      {/* Live Progress (show if active job or completed job) */}
+      {(activeJob || completedJob) && (
         <LiveProgressPanel 
-          job={activeJob} 
+          job={activeJob || completedJob!} 
+          isCompleted={!!completedJob && !activeJob}
           onJobStopped={() => {
             setActiveJob(null);
+            setCompletedJob(null);
             setLastJobId(null);
           }}
         />

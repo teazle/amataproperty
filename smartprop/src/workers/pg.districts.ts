@@ -1317,6 +1317,11 @@ async function scrapePropertyGuruByDistrict() {
                     consecutiveNoPhone++;
                     overallStats.totalSkippedNoPhone++;
                     
+                    // Update stats in lock file immediately
+                    jobStatus.stats = overallStats;
+                    jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+                    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+                    
                     if (consecutiveNoPhone >= MAX_CONSECUTIVE_NO_PHONE) {
                       console.log(`\n🚨 ${consecutiveNoPhone} consecutive listings without phone numbers!`);
                       console.log(`🔄 Authentication may have expired. Triggering re-login...\n`);
@@ -1368,17 +1373,29 @@ async function scrapePropertyGuruByDistrict() {
                   console.log(`   ⚠️  Retry failed: ${retryError}`);
                   await retryPage.close();
                   overallStats.totalErrors++;
+                  // Update stats in lock file immediately
+                  jobStatus.stats = overallStats;
+                  jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+                  fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
                   continue;
                 }
               } else {
                 console.log(`   ❌ Flaresolverr failed to solve Cloudflare. Skipping listing...`);
                 overallStats.totalErrors++;
+                // Update stats in lock file immediately
+                jobStatus.stats = overallStats;
+                jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+                fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
                 continue;
               }
             } else if (hasCloudflareText && !hasPropertyContent) {
               // Cloudflare blocks but we already tried Flaresolverr - skip
               console.log(`   🛡️  Cloudflare detected (already tried Flaresolverr). Skipping...`);
               overallStats.totalErrors++;
+              // Update stats in lock file immediately
+              jobStatus.stats = overallStats;
+              jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+              fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
               await listingPage.close();
               if (listingTimeout) {
                 clearTimeout(listingTimeout);
@@ -1446,6 +1463,10 @@ async function scrapePropertyGuruByDistrict() {
             if (!agentName) {
               console.log(`   ⚠️  Skipping - missing agent name`);
               overallStats.totalErrors++;
+              // Update stats in lock file immediately
+              jobStatus.stats = overallStats;
+              jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+              fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
               await listingPage.close();
               continue;
             }
@@ -1455,6 +1476,11 @@ async function scrapePropertyGuruByDistrict() {
               console.log(`   ⚠️  No phone number found - SKIPPING to maintain data integrity`);
               consecutiveNoPhone++;
               overallStats.totalSkippedNoPhone++;
+              
+              // Update stats in lock file immediately
+              jobStatus.stats = overallStats;
+              jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+              fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
               
               // If we've had too many consecutive failures, trigger re-authentication
               if (consecutiveNoPhone >= MAX_CONSECUTIVE_NO_PHONE) {
@@ -1574,6 +1600,11 @@ async function scrapePropertyGuruByDistrict() {
             console.error(`   ❌ Error: ${errorMsg}`);
             overallStats.totalErrors++;
             
+            // Update stats in lock file immediately after error
+            jobStatus.stats = overallStats;
+            jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+            fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+            
             // If timeout, log it specifically
             if (listingTimedOut || errorMsg.includes('timeout')) {
               console.log(`   ⏭️  Skipping to next listing due to timeout`);
@@ -1594,6 +1625,19 @@ async function scrapePropertyGuruByDistrict() {
       // Always close page for this district
       await page.close().catch(() => {});
     }
+  }
+
+  // Scraping completed successfully - mark as completed
+  console.log('\n✅ All districts scraped successfully!');
+  jobStatus.status = 'completed';
+  jobStatus.statusMessage = 'Scraping completed successfully';
+  if (typeof overallStats !== 'undefined') {
+    jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+    jobStatus.stats = overallStats;
+  }
+  // Update lock file with completion status before finally block
+  if (fs.existsSync(lockFile)) {
+    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
   }
 
   } catch (error: unknown) {
@@ -1634,10 +1678,45 @@ async function scrapePropertyGuruByDistrict() {
       }
     }
     
-    // Always remove lock file, regardless of success or failure
+    // Update database job status BEFORE removing lock file to prevent race condition
+    const jobId = process.env.PG_JOB_ID;
+    if (jobId && typeof overallStats !== 'undefined') {
+      try {
+        // Ensure status is set (should already be set above, but ensure it's set)
+        if (!jobStatus.status || jobStatus.status === 'running') {
+          jobStatus.status = 'completed';
+        }
+        jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
+        jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
+        jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+        jobStatus.stats = overallStats;
+        
+        // Update database FIRST before removing lock file
+        const finalStatus = jobStatus.status === 'failed' ? 'failed' : 'completed';
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: finalStatus,
+            completed_at: jobStatus.completedAt,
+            listings_processed: overallStats.totalSuccess,
+            stats: overallStats,
+            current_page: jobStatus.progress.currentPage,
+            current_district: jobStatus.progress.currentDistrict
+          })
+          .eq('id', jobId);
+        console.log(`✅ Database job status updated to: ${finalStatus}`);
+        console.log(`   Listings processed: ${overallStats.totalSuccess}`);
+        console.log(`   Stats: saved=${overallStats.totalSuccess}, skipped=${overallStats.totalSkippedNoPhone}, errors=${overallStats.totalErrors}`);
+      } catch (_error) {
+        console.error('⚠️  Failed to update database job status:', _error);
+        console.error('   Error details:', _error instanceof Error ? _error.message : String(_error));
+      }
+    }
+    
+    // Now remove lock file AFTER database update completes
     if (fs.existsSync(lockFile)) {
       try {
-        // Update job status with final values
+        // Update job status with final values (in case they weren't set above)
         jobStatus.status = jobStatus.status || 'completed';
         jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
         jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
@@ -1661,26 +1740,6 @@ async function scrapePropertyGuruByDistrict() {
         } catch (retryError) {
           console.error('❌ Could not remove lock file after retry:', retryError);
         }
-      }
-    }
-    
-    // Update database job status
-    const jobId = process.env.PG_JOB_ID;
-    if (jobId && typeof overallStats !== 'undefined') {
-      try {
-        // Use imported supabase client
-        await supabase
-          .from('scraper_jobs')
-          .update({
-            status: jobStatus.status === 'failed' ? 'failed' : 'completed',
-            completed_at: new Date().toISOString(),
-            listings_processed: overallStats.totalSuccess,
-            stats: overallStats
-          })
-          .eq('id', jobId);
-        console.log('✅ Database job status updated');
-      } catch (_error) {
-        console.error('⚠️  Failed to update database job status:', _error);
       }
     }
 

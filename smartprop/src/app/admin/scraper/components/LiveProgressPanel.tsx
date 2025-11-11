@@ -26,10 +26,11 @@ interface JobProgress {
 
 interface LiveProgressPanelProps {
   job: JobProgress;
+  isCompleted?: boolean; // Whether the job has completed
   onJobStopped?: () => void;
 }
 
-export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps) {
+export function LiveProgressPanel({ job, isCompleted = false, onJobStopped }: LiveProgressPanelProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -38,6 +39,45 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const shouldAutoScrollRef = useRef(true);
+  
+  // Keep logs open if job completes while logs are open
+  const [wasLogsOpenBeforeCompletion, setWasLogsOpenBeforeCompletion] = useState(false);
+  
+  // Track if logs were open before completion
+  useEffect(() => {
+    if (isCompleted && showLogs && !wasLogsOpenBeforeCompletion) {
+      setWasLogsOpenBeforeCompletion(true);
+    }
+  }, [isCompleted, showLogs, wasLogsOpenBeforeCompletion]);
+  
+  // Auto-open logs if job completes and logs were previously open
+  useEffect(() => {
+    if (isCompleted && wasLogsOpenBeforeCompletion && !showLogs) {
+      // Open logs automatically when job completes if they were open before
+      setIsLoadingLogs(true);
+      setShowLogs(true);
+      shouldAutoScrollRef.current = true;
+      
+      // Load initial logs
+      const platform = job.platform || 'edgeprop';
+      fetch(`/api/scraper/logs?platform=${platform}&lines=200`)
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            setLogs(data.lines || []);
+          } else {
+            setLogs([`Error: ${data.error || 'Failed to load logs'}`]);
+          }
+        })
+        .catch(error => {
+          console.error('Error loading logs:', error);
+          setLogs([`Error: ${error instanceof Error ? error.message : 'Unknown error'}`]);
+        })
+        .finally(() => {
+          setIsLoadingLogs(false);
+        });
+    }
+  }, [isCompleted, wasLogsOpenBeforeCompletion, showLogs, job.platform]);
 
   const handleStopScraper = async () => {
     setIsStopping(true);
@@ -122,6 +162,11 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
   // Set up SSE streaming when logs are shown
   useEffect(() => {
     if (!showLogs) {
+      // Close SSE connection when logs are hidden
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       return;
     }
 
@@ -152,7 +197,8 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
           }
           
           // Auto-scroll to bottom only if user hasn't manually scrolled up
-          if (shouldAutoScrollRef.current) {
+          // Don't auto-scroll for completed jobs unless user is at bottom
+          if (shouldAutoScrollRef.current && (!isCompleted || shouldAutoScrollRef.current)) {
             setTimeout(() => {
               if (logsContainerRef.current) {
                 logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
@@ -161,7 +207,10 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
           }
         } else if (data.type === 'error') {
           console.error('Logs SSE error:', data.message);
-          toast.error(`Logs error: ${data.message}`);
+          // Don't show error toast for completed jobs (stream may close naturally)
+          if (!isCompleted) {
+            toast.error(`Logs error: ${data.message}`);
+          }
         }
         // Ignore heartbeat messages
       } catch (error) {
@@ -170,11 +219,16 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
     };
 
     eventSource.onerror = (error) => {
-      console.error('Logs SSE connection error:', error);
-      // SSE will auto-reconnect, so we don't need to handle it manually
+      // For completed jobs, don't log errors (stream closing is expected)
+      if (!isCompleted) {
+        console.error('Logs SSE connection error:', error);
+      }
+      // SSE will auto-reconnect for active jobs, but for completed jobs we'll keep the logs static
     };
 
     return () => {
+      // Close SSE when logs are hidden or component unmounts
+      // For completed jobs, we keep the static logs but don't need the SSE stream
       if (eventSource) {
         eventSource.close();
         eventSourceRef.current = null;
@@ -226,12 +280,12 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
   const isReAuth = job.statusMessage?.includes('Re-authenticating') || job.statusMessage?.includes('Re-authenticated');
 
   return (
-    <Card className={`border-2 ${isReAuth ? 'border-amber-500' : 'border-blue-500'}`}>
+    <Card className={`border-2 ${isCompleted ? 'border-green-500' : isReAuth ? 'border-amber-500' : 'border-blue-500'}`}>
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            <span className="animate-pulse">{isReAuth ? '🔄' : '🟢'}</span>
-            Live Progress - {job.platform === 'propertyguru' ? 'PropertyGuru' : 'EdgeProp'}
+            <span className={isCompleted ? '' : 'animate-pulse'}>{isCompleted ? '✅' : isReAuth ? '🔄' : '🟢'}</span>
+            {isCompleted ? 'Completed' : 'Live'} Progress - {job.platform === 'propertyguru' ? 'PropertyGuru' : 'EdgeProp'}
           </CardTitle>
           <div className="flex gap-2">
             <Button
@@ -242,14 +296,16 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
             >
               {showLogs ? 'Hide Logs' : 'View Logs'}
             </Button>
-          <Button
-            onClick={handleStopScraper}
+          {!isCompleted && (
+            <Button
+              onClick={handleStopScraper}
               disabled={isStopping || isResetting}
-            variant="destructive"
-            size="sm"
-          >
-            {isStopping ? 'Stopping...' : 'Stop Scraper'}
-          </Button>
+              variant="destructive"
+              size="sm"
+            >
+              {isStopping ? 'Stopping...' : 'Stop Scraper'}
+            </Button>
+          )}
             <Button
               onClick={handleForceReset}
               disabled={isStopping || isResetting}
@@ -266,11 +322,18 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
         {/* Status Message Banner */}
         {job.statusMessage && (
           <div className={`p-3 rounded-lg text-sm font-medium ${
-            isReAuth 
+            isCompleted
+              ? 'bg-green-50 text-green-900 border border-green-200'
+              : isReAuth 
               ? 'bg-amber-50 text-amber-900 border border-amber-200' 
               : 'bg-blue-50 text-blue-900 border border-blue-200'
           }`}>
-            {job.statusMessage}
+            {isCompleted ? '✅ ' : ''}{job.statusMessage || (isCompleted ? 'Scraping completed successfully' : 'Scraping...')}
+          </div>
+        )}
+        {isCompleted && !job.statusMessage && (
+          <div className="p-3 rounded-lg text-sm font-medium bg-green-50 text-green-900 border border-green-200">
+            ✅ Scraping completed successfully
           </div>
         )}
 
@@ -330,7 +393,8 @@ export function LiveProgressPanel({ job, onJobStopped }: LiveProgressPanelProps)
           <div className="pt-4 border-t">
             <div className="flex justify-between items-center mb-2">
               <span className="text-sm font-medium text-gray-700">
-                Console Logs {showLogs && <span className="text-green-500 text-xs">● Live</span>}
+                Console Logs {showLogs && !isCompleted && <span className="text-green-500 text-xs">● Live</span>}
+                {showLogs && isCompleted && <span className="text-gray-500 text-xs">● Completed</span>}
               </span>
               <Button
                 onClick={handleViewLogs}

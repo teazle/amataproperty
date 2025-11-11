@@ -459,14 +459,49 @@ async function scrapePropertyGuruByDistrict() {
     const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
     const lockAge = Date.now() - new Date(lockData.startedAt).getTime();
     
-    // If lock is older than 2 hours, assume stale and remove
-    if (lockAge > 2 * 60 * 60 * 1000) {
+    // Check if the process is actually running
+    let processRunning = false;
+    if (lockData.pid) {
+      try {
+        // Try to send signal 0 to check if process exists (doesn't kill, just checks)
+        process.kill(lockData.pid, 0);
+        processRunning = true;
+      } catch (error: any) {
+        // ESRCH means process doesn't exist
+        if (error.code === 'ESRCH') {
+          processRunning = false;
+        } else {
+          // Other error, assume process might be running
+          processRunning = true;
+        }
+      }
+    }
+    
+    // If process is not running, remove stale lock file
+    if (!processRunning) {
+      console.log('⚠️  Found stale lock file (process not running), removing...');
+      console.log(`   Previous PID: ${lockData.pid || 'unknown'}`);
+      console.log(`   Started: ${lockData.startedAt}`);
+      if (lockData.districts) {
+        console.log(`   Districts: ${lockData.districts}`);
+      }
+      fs.unlinkSync(lockFile);
+    } else if (lockAge > 2 * 60 * 60 * 1000) {
+      // If lock is older than 2 hours, assume stale and remove (even if process seems running)
       console.log('⚠️  Found stale lock file (>2h old), removing...');
+      console.log(`   PID: ${lockData.pid || 'unknown'}`);
+      console.log(`   Started: ${lockData.startedAt}`);
+      if (lockData.districts) {
+        console.log(`   Districts: ${lockData.districts}`);
+      }
       fs.unlinkSync(lockFile);
     } else {
       console.error('❌ Another PropertyGuru scraper is already running!');
       console.error(`   Started: ${lockData.startedAt}`);
-      console.error(`   Districts: ${lockData.districts}`);
+      console.error(`   PID: ${lockData.pid || 'unknown'}`);
+      if (lockData.districts) {
+        console.error(`   Districts: ${lockData.districts}`);
+      }
       console.error('   Wait for it to complete or delete storage/pg-scraper.lock manually.');
       process.exit(1);
     }

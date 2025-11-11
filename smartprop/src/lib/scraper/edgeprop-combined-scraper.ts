@@ -308,6 +308,26 @@ export async function scrapeEdgePropCombined(
               
               // Extract text content and paragraphs (NO HTML, NO IMAGES)
               // Simple approach: get all text and filter out navigation/footer content
+              // First, remove social sharing buttons from the DOM before extracting content
+              const socialSharingButtons = Array.from(contentContainer.querySelectorAll('a, button, div')).filter(el => {
+                const text = (el.textContent || '').toLowerCase();
+                const href = (el as HTMLElement).getAttribute('href') || '';
+                return text.includes('facebook sharing button') ||
+                       text.includes('twitter sharing button') ||
+                       text.includes('linkedin sharing button') ||
+                       text.includes('messenger sharing button') ||
+                       text.includes('whatsapp sharing button') ||
+                       text.includes('email sharing button') ||
+                       text.includes('wechat sharing button') ||
+                       (href && (href.includes('facebook.com/share') || 
+                                 href.includes('twitter.com/intent') ||
+                                 href.includes('linkedin.com/shareArticle') ||
+                                 href.includes('wa.me') ||
+                                 href.includes('wechat') ||
+                                 href.startsWith('mailto:')));
+              });
+              socialSharingButtons.forEach(btn => btn.remove());
+              
               let paragraphs: string[] = [];
               
               // Get all text content from the page
@@ -319,37 +339,44 @@ export async function scrapeEdgePropCombined(
                 paragraphs = allText
                   .split(/\n\s*\n|\.\s+(?=[A-Z])/)
                   .map(p => p.trim())
-                  .filter(text => 
-                    text && 
-                    text.length > 50 && // Longer paragraphs
-                    text.length < 1500 && // Not too long
-                    !text.includes('EdgeProp') && // Filter out navigation
-                    !text.includes('Follow Us') &&
-                    !text.includes('Subscribe') &&
-                    !text.includes('Download') &&
-                    !text.includes('Popular Projects') &&
-                    !text.includes('Property Research') &&
-                    !text.includes('Properties For Sale') &&
-                    !text.includes('Browse Listings') &&
-                    !text.includes('Our Site') &&
-                    !text.includes('About Us') &&
-                    !text.includes('Terms') &&
-                    !text.includes('Privacy') &&
-                    !text.includes('Contact') &&
-                    !text.includes('Advertise') &&
-                    !text.includes('User Guide') &&
-                    !text.includes('We\'re Hiring') &&
-                    !text.includes('FAQs') &&
-                    !text.includes('Sale') &&
-                    !text.includes('Rent') &&
-                    !text.includes('New Launches') &&
-                    !text.includes('Analytics') &&
-                    !text.includes('News') &&
-                    !text.includes('Ask Buddy') &&
-                    !text.includes('Agent') &&
-                    !text.includes('Register') &&
-                    !text.includes('Login')
-                  )
+                  .filter(text => {
+                    if (!text || text.length <= 50 || text.length >= 1500) return false;
+                    const lowerText = text.toLowerCase();
+                    return !lowerText.includes('edgeprop') && // Filter out navigation
+                           !lowerText.includes('follow us') &&
+                           !lowerText.includes('subscribe') &&
+                           !lowerText.includes('download') &&
+                           !lowerText.includes('popular projects') &&
+                           !lowerText.includes('property research') &&
+                           !lowerText.includes('properties for sale') &&
+                           !lowerText.includes('browse listings') &&
+                           !lowerText.includes('our site') &&
+                           !lowerText.includes('about us') &&
+                           !lowerText.includes('terms') &&
+                           !lowerText.includes('privacy') &&
+                           !lowerText.includes('contact') &&
+                           !lowerText.includes('advertise') &&
+                           !lowerText.includes('user guide') &&
+                           !lowerText.includes('we\'re hiring') &&
+                           !lowerText.includes('faqs') &&
+                           !lowerText.includes('sale') &&
+                           !lowerText.includes('rent') &&
+                           !lowerText.includes('new launches') &&
+                           !lowerText.includes('analytics') &&
+                           !lowerText.includes('news') &&
+                           !lowerText.includes('ask buddy') &&
+                           !lowerText.includes('agent') &&
+                           !lowerText.includes('register') &&
+                           !lowerText.includes('login') &&
+                           // Filter out social sharing button text
+                           !lowerText.includes('facebook sharing button') &&
+                           !lowerText.includes('twitter sharing button') &&
+                           !lowerText.includes('linkedin sharing button') &&
+                           !lowerText.includes('messenger sharing button') &&
+                           !lowerText.includes('whatsapp sharing button') &&
+                           !lowerText.includes('email sharing button') &&
+                           !lowerText.includes('wechat sharing button');
+                  })
                   .slice(0, 20); // Limit to first 20 meaningful paragraphs
               }
               

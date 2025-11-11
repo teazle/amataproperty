@@ -284,6 +284,7 @@ export async function scrapeArticleContent(
       const paragraphs = rawParagraphs
         .filter((para: string) => {
           const cleanPara = para?.trim() || '';
+          const lowerPara = cleanPara.toLowerCase();
           return cleanPara.length > 20 && 
                  !cleanPara.includes('!function') && 
                  !cleanPara.includes('fbq(') && 
@@ -298,7 +299,15 @@ export async function scrapeArticleContent(
                  !cleanPara.includes('Click into any listing to check out the new AI Redesign tool') &&
                  !cleanPara.includes('Make data-driven property decisions with our easy-to-use free and paid tools') &&
                  !cleanPara.includes('The Edge Fair Value tool lets users calculate the fair value of a property') &&
-                 !cleanPara.includes('The En Bloc Calculator helps to determine the probability of a Singapore project being put up for collective sale');
+                 !cleanPara.includes('The En Bloc Calculator helps to determine the probability of a Singapore project being put up for collective sale') &&
+                 // Filter out social sharing button text
+                 !lowerPara.includes('facebook sharing button') &&
+                 !lowerPara.includes('twitter sharing button') &&
+                 !lowerPara.includes('linkedin sharing button') &&
+                 !lowerPara.includes('messenger sharing button') &&
+                 !lowerPara.includes('whatsapp sharing button') &&
+                 !lowerPara.includes('email sharing button') &&
+                 !lowerPara.includes('wechat sharing button');
         })
         .filter((para: string, index: number, array: string[]) => 
           array.indexOf(para) === index // Remove duplicates
@@ -309,11 +318,27 @@ export async function scrapeArticleContent(
         .map(img => (img as HTMLImageElement).src)
         .filter(src => src && !src.includes('logo') && !src.includes('icon'));
       
-      // Get all links
+      // Get all links - filter out social sharing buttons
       const links = Array.from(document.querySelectorAll('a[href]'))
         .filter(a => {
           const href = (a as HTMLAnchorElement).href;
-          return href && !href.includes('facebook') && !href.includes('telegram') && a.textContent?.trim();
+          const text = (a.textContent?.trim() || '').toLowerCase();
+          return href && 
+                 !href.includes('facebook') && 
+                 !href.includes('twitter') &&
+                 !href.includes('linkedin') &&
+                 !href.includes('messenger') &&
+                 !href.includes('whatsapp') &&
+                 !href.includes('wechat') &&
+                 !href.includes('telegram') &&
+                 !text.includes('facebook sharing button') &&
+                 !text.includes('twitter sharing button') &&
+                 !text.includes('linkedin sharing button') &&
+                 !text.includes('messenger sharing button') &&
+                 !text.includes('whatsapp sharing button') &&
+                 !text.includes('email sharing button') &&
+                 !text.includes('wechat sharing button') &&
+                 a.textContent?.trim();
         })
         .map(a => {
           const href = (a as HTMLAnchorElement).href;
@@ -330,8 +355,29 @@ export async function scrapeArticleContent(
       const tags = tagEls.map(el => el.textContent?.trim() || '');
       
       // Get full HTML content (article body) - improved selection
+      // First, remove social sharing buttons from the DOM before extracting content
+      const socialSharingButtons = Array.from(document.querySelectorAll('a, button, div')).filter(el => {
+        const text = (el.textContent || '').toLowerCase();
+        const href = (el as HTMLElement).getAttribute('href') || '';
+        return text.includes('facebook sharing button') ||
+               text.includes('twitter sharing button') ||
+               text.includes('linkedin sharing button') ||
+               text.includes('messenger sharing button') ||
+               text.includes('whatsapp sharing button') ||
+               text.includes('email sharing button') ||
+               text.includes('wechat sharing button') ||
+               (href && (href.includes('facebook.com/share') || 
+                         href.includes('twitter.com/intent') ||
+                         href.includes('linkedin.com/shareArticle') ||
+                         href.includes('wa.me') ||
+                         href.includes('wechat') ||
+                         href.startsWith('mailto:')));
+      });
+      socialSharingButtons.forEach(btn => btn.remove());
+      
       const contentContainer = Array.from(document.querySelectorAll('div')).find(el => {
         const text = el.textContent || '';
+        const lowerText = text.toLowerCase();
         return el.querySelectorAll('div').length > 3 && 
                text.length > 500 &&
                !text.includes('!function') &&
@@ -340,7 +386,14 @@ export async function scrapeArticleContent(
                !text.includes('vgo(') &&
                !text.includes('window._peq') &&
                !text.includes('Check out our insightful property news') &&
-               !text.includes('We also provide fruitful information');
+               !text.includes('We also provide fruitful information') &&
+               !lowerText.includes('facebook sharing button') &&
+               !lowerText.includes('twitter sharing button') &&
+               !lowerText.includes('linkedin sharing button') &&
+               !lowerText.includes('messenger sharing button') &&
+               !lowerText.includes('whatsapp sharing button') &&
+               !lowerText.includes('email sharing button') &&
+               !lowerText.includes('wechat sharing button');
       });
       
       // Clean up HTML content by removing scripts and tracking elements

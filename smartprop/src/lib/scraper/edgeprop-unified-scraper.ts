@@ -738,12 +738,43 @@ export async function scrapeEdgePropUnified(
               }
               
               // Extract text content and paragraphs using improved content parser
+              // First, remove social sharing buttons from the DOM before extracting content
+              const socialSharingButtons = Array.from(contentContainer.querySelectorAll('a, button, div')).filter(el => {
+                const text = (el.textContent || '').toLowerCase();
+                const href = (el as HTMLElement).getAttribute('href') || '';
+                return text.includes('facebook sharing button') ||
+                       text.includes('twitter sharing button') ||
+                       text.includes('linkedin sharing button') ||
+                       text.includes('messenger sharing button') ||
+                       text.includes('whatsapp sharing button') ||
+                       text.includes('email sharing button') ||
+                       text.includes('wechat sharing button') ||
+                       (href && (href.includes('facebook.com/share') || 
+                                 href.includes('twitter.com/intent') ||
+                                 href.includes('linkedin.com/shareArticle') ||
+                                 href.includes('wa.me') ||
+                                 href.includes('wechat') ||
+                                 href.startsWith('mailto:')));
+              });
+              socialSharingButtons.forEach(btn => btn.remove());
+              
               let paragraphs: string[] = [];
               
               // First, try to extract from paragraph elements within the content container
               const pElements = Array.from(contentContainer.querySelectorAll('p'))
                 .map(p => p.textContent?.trim())
-                .filter(text => text && text.length > 30);
+                .filter(text => {
+                  if (!text || text.length <= 30) return false;
+                  const lowerText = text.toLowerCase();
+                  // Filter out social sharing button text
+                  return !lowerText.includes('facebook sharing button') &&
+                         !lowerText.includes('twitter sharing button') &&
+                         !lowerText.includes('linkedin sharing button') &&
+                         !lowerText.includes('messenger sharing button') &&
+                         !lowerText.includes('whatsapp sharing button') &&
+                         !lowerText.includes('email sharing button') &&
+                         !lowerText.includes('wechat sharing button');
+                });
               
               if (pElements.length > 0) {
                 paragraphs = pElements;
@@ -759,7 +790,18 @@ export async function scrapeEdgePropUnified(
                   const rawParagraphs = allText
                     .split(/\n\s*\n|\.\s+(?=[A-Z])/)
                     .map(p => p.trim())
-                    .filter(text => text && text.length > 50);
+                    .filter(text => {
+                      if (!text || text.length <= 50) return false;
+                      const lowerText = text.toLowerCase();
+                      // Filter out social sharing button text
+                      return !lowerText.includes('facebook sharing button') &&
+                             !lowerText.includes('twitter sharing button') &&
+                             !lowerText.includes('linkedin sharing button') &&
+                             !lowerText.includes('messenger sharing button') &&
+                             !lowerText.includes('whatsapp sharing button') &&
+                             !lowerText.includes('email sharing button') &&
+                             !lowerText.includes('wechat sharing button');
+                    });
                   
                   paragraphs = rawParagraphs;
                   console.log(`Found ${paragraphs.length} paragraphs from text splitting`);
@@ -776,14 +818,32 @@ export async function scrapeEdgePropUnified(
               console.log(`Final text content length: ${textContent.length}`);
               console.log(`Word count: ${wordCount}`);
               
-              // Extract links
+              // Extract links - filter out social sharing buttons
               const links = Array.from(contentContainer.querySelectorAll('a'))
                 .map(link => ({
                   text: link.textContent?.trim() || '',
                   url: link.getAttribute('href') || '',
                   type: (link.getAttribute('href')?.includes('edgeprop.sg') ? 'internal' : 'external') as 'internal' | 'external'
                 }))
-                .filter(link => link.url);
+                .filter(link => {
+                  if (!link.url) return false;
+                  const lowerText = link.text.toLowerCase();
+                  const lowerUrl = link.url.toLowerCase();
+                  // Filter out social sharing buttons
+                  return !lowerUrl.includes('facebook.com/share') &&
+                         !lowerUrl.includes('twitter.com/intent') &&
+                         !lowerUrl.includes('linkedin.com/sharearticle') &&
+                         !lowerUrl.includes('wa.me') &&
+                         !lowerUrl.includes('wechat') &&
+                         !lowerUrl.startsWith('mailto:') &&
+                         !lowerText.includes('facebook sharing button') &&
+                         !lowerText.includes('twitter sharing button') &&
+                         !lowerText.includes('linkedin sharing button') &&
+                         !lowerText.includes('messenger sharing button') &&
+                         !lowerText.includes('whatsapp sharing button') &&
+                         !lowerText.includes('email sharing button') &&
+                         !lowerText.includes('wechat sharing button');
+                });
 
               // Extract images from the content
               const images = Array.from(contentContainer.querySelectorAll('img'))

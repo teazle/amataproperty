@@ -573,29 +573,18 @@ async function scrapeEdgePropFinal() {
         cookie.name.toLowerCase().includes('user')
       );
       
-      if (hasAuthCookie && !isLoggedIn) {
-        console.log('   ⚠️  Auth cookies found but login indicators not visible - may need to navigate to user page');
-        // Try navigating to user page to verify
-        try {
-          await page.goto('https://www.edgeprop.sg/user', { waitUntil: 'domcontentloaded', timeout: 15000 });
-          await humanPause(1000, 2000);
-          const pageUrl = page.url();
-          if (!pageUrl.includes('/user/login') && !pageUrl.includes('/user/register')) {
-            isLoggedIn = true;
-            console.log('   ✅ Login verified - user page accessible');
-          }
-        } catch (e) {
-          console.log('   ⚠️  Could not verify via user page');
-        }
+      // If login indicators are not visible, skip cookie check and just re-authenticate
+      if (!isLoggedIn) {
+        console.log('   ⚠️  Login indicators not visible - will re-authenticate');
       }
       
     } catch (verifyError) {
       console.log(`   ⚠️  Login verification failed: ${verifyError}`);
     }
     
+    // If login indicators are not visible, re-authenticate immediately
     if (!isLoggedIn) {
-      console.log('\n❌ NOT LOGGED IN - Phone numbers will not be available!');
-      console.log('⚠️  Re-authenticating now...');
+      console.log('\n⚠️  Login indicators not visible - re-authenticating now...');
       
       // Trigger re-authentication
       try {
@@ -618,14 +607,50 @@ async function scrapeEdgePropFinal() {
           await context.addCookies(freshState.cookies || []);
           console.log('   ✅ Re-authentication completed, cookies reloaded');
           
-          // Verify again
+          // Verify login again after re-auth
           await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
           await humanPause(2000, 3000);
-          isLoggedIn = true; // Assume success after re-auth
+          
+          // Check login indicators again
+          const loginIndicators = [
+            'a[href*="/user/logout"]',
+            'a[href*="/user/"]:not([href*="/user/login"]):not([href*="/user/register"])',
+            '[class*="user-menu"]',
+            '[class*="logged-in"]',
+            'button:has-text("Logout")',
+            'button:has-text("Sign Out")'
+          ];
+          
+          for (const selector of loginIndicators) {
+            try {
+              const element = page.locator(selector).first();
+              const count = await element.count();
+              if (count > 0) {
+                const isVisible = await element.isVisible({ timeout: 2000 }).catch(() => false);
+                if (isVisible) {
+                  isLoggedIn = true;
+                  console.log(`   ✅ Login verified after re-auth - found indicator: ${selector}`);
+                  break;
+                }
+              }
+            } catch (e) {
+              // Continue checking other indicators
+            }
+          }
+          
+          if (isLoggedIn) {
+            console.log('   ✅ Login successful - phone numbers should be available\n');
+          } else {
+            console.log('   ⚠️  Re-authentication completed but login indicators still not visible');
+            console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
+          }
+        } else {
+          console.log('   ❌ Re-authentication failed - no state file created');
+          console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
         }
       } catch (reauthError) {
         console.log(`   ❌ Re-authentication failed: ${reauthError}`);
-        console.log('   ⚠️  Continuing anyway, but phone numbers may not be available');
+        console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
       }
     } else {
       console.log('   ✅ Login verified - phone numbers should be available\n');

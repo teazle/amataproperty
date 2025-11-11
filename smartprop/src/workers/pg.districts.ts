@@ -19,7 +19,7 @@
  *   PG_DISTRICTS="01,02,03" PG_MAX_PAGES=5 bun src/workers/pg.districts.ts
  */
 
-import { chromium, type Page, type BrowserContextOptions } from 'playwright-ghost';
+import { chromium, type Page, type BrowserContextOptions, type Browser } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
@@ -493,6 +493,15 @@ async function scrapePropertyGuruByDistrict() {
     for (const district of requestedDistricts) {
       if (!validDistricts.includes(district)) {
         console.error(`❌ Invalid district: ${district}. Must be 01-28.`);
+        // Remove lock file before exit
+        if (fs.existsSync(lockFile)) {
+          try {
+            fs.unlinkSync(lockFile);
+            console.log('🔓 Lock file removed');
+          } catch (e) {
+            console.log('Could not remove lock file:', e);
+          }
+        }
         process.exit(1);
       }
       districts.push(district);
@@ -501,6 +510,15 @@ async function scrapePropertyGuruByDistrict() {
   
   if (districts.length === 0) {
     console.error('❌ No valid districts specified!');
+    // Remove lock file before exit
+    if (fs.existsSync(lockFile)) {
+      try {
+        fs.unlinkSync(lockFile);
+        console.log('🔓 Lock file removed');
+      } catch (e) {
+        console.log('Could not remove lock file:', e);
+      }
+    }
     process.exit(1);
   }
 
@@ -522,6 +540,64 @@ async function scrapePropertyGuruByDistrict() {
   };
   
   fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+  
+  // Flag to track if we should stop gracefully
+  let shouldStop = false;
+  
+  // Handle stop signals gracefully
+  const handleStopSignal = async (signal: string) => {
+    console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
+    shouldStop = true;
+    
+    // Update and remove lock file
+    if (fs.existsSync(lockFile)) {
+      try {
+        const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+        lockData.status = 'stopped';
+        lockData.statusMessage = `Stopped by ${signal} signal`;
+        lockData.completedAt = new Date().toISOString();
+        // Save completed status before removing
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(lockData, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log('🔓 Lock file removed');
+      } catch (e) {
+        console.log('Could not update/remove lock file:', e);
+        // Try to remove anyway if update failed
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+          }
+        } catch (removeError) {
+          console.log('Could not remove lock file:', removeError);
+        }
+      }
+    }
+    
+    // Update database if jobId exists
+    const jobId = process.env.PG_JOB_ID;
+    if (jobId) {
+      try {
+        // Use imported supabase client
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: `Stopped by ${signal} signal`
+          })
+          .eq('id', jobId);
+      } catch (error) {
+        console.error('Failed to update database:', error);
+      }
+    }
+    
+    // Clean up and exit
+    process.exit(0);
+  };
+  
+  // Register signal handlers
+  process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
+  process.on('SIGINT', () => handleStopSignal('SIGINT'));
   
   console.log('🚀 Starting PropertyGuru District-based Scraper...');
   console.log(`📍 Districts to scrape: ${districts.join(', ')}`);
@@ -560,6 +636,45 @@ async function scrapePropertyGuruByDistrict() {
     
     if (!authSuccess) {
       console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
+      // Update lock file and database, then remove lock file
+      if (fs.existsSync(lockFile)) {
+        try {
+          jobStatus.status = 'failed';
+          jobStatus.statusMessage = 'Re-authentication failed';
+          jobStatus.completedAt = new Date().toISOString();
+          fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+          fs.unlinkSync(lockFile);
+          console.log('🔓 Lock file removed');
+        } catch (e) {
+          console.log('Could not update/remove lock file:', e);
+          // Try to remove anyway
+          try {
+            if (fs.existsSync(lockFile)) {
+              fs.unlinkSync(lockFile);
+            }
+          } catch (removeError) {
+            console.log('Could not remove lock file:', removeError);
+          }
+        }
+      }
+      
+      const jobId = process.env.PG_JOB_ID;
+      if (jobId) {
+        try {
+          // Use imported supabase client
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Re-authentication failed'
+            })
+            .eq('id', jobId);
+        } catch (error) {
+          console.error('Failed to update database:', error);
+        }
+      }
+      
       process.exit(1);
     }
     
@@ -567,6 +682,45 @@ async function scrapePropertyGuruByDistrict() {
     const updatedStateExists = fs.existsSync(stateFilePath);
     if (!updatedStateExists) {
       console.error('❌ Authentication state file not found after re-authentication!');
+      // Update lock file and database, then remove lock file
+      if (fs.existsSync(lockFile)) {
+        try {
+          jobStatus.status = 'failed';
+          jobStatus.statusMessage = 'Authentication state file not found';
+          jobStatus.completedAt = new Date().toISOString();
+          fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+          fs.unlinkSync(lockFile);
+          console.log('🔓 Lock file removed');
+        } catch (e) {
+          console.log('Could not update/remove lock file:', e);
+          // Try to remove anyway
+          try {
+            if (fs.existsSync(lockFile)) {
+              fs.unlinkSync(lockFile);
+            }
+          } catch (removeError) {
+            console.log('Could not remove lock file:', removeError);
+          }
+        }
+      }
+      
+      const jobId = process.env.PG_JOB_ID;
+      if (jobId) {
+        try {
+          // Use imported supabase client
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Authentication state file not found'
+            })
+            .eq('id', jobId);
+        } catch (error) {
+          console.error('Failed to update database:', error);
+        }
+      }
+      
       process.exit(1);
     }
   }
@@ -574,6 +728,28 @@ async function scrapePropertyGuruByDistrict() {
   // Final check: ensure auth state file exists before proceeding
   if (!fs.existsSync(stateFilePath)) {
     console.error('❌ Authentication state file not found! Cannot proceed.');
+    // Update lock file and database, then remove lock file
+    if (fs.existsSync(lockFile)) {
+      try {
+        jobStatus.status = 'failed';
+        jobStatus.statusMessage = 'Authentication state file not found';
+        jobStatus.completedAt = new Date().toISOString();
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log('🔓 Lock file removed');
+      } catch (e) {
+        console.log('Could not update/remove lock file:', e);
+        // Try to remove anyway
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+          }
+        } catch (removeError) {
+          console.log('Could not remove lock file:', removeError);
+        }
+      }
+    }
+    
     process.exit(1);
   }
   
@@ -581,7 +757,10 @@ async function scrapePropertyGuruByDistrict() {
   // Launch browser once for all districts
   // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
   const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
-  const browser = await chromium.launch({
+  let browser: Browser | null = null;
+  
+  try {
+    browser = await chromium.launch({
     headless: isHeadless, // Use headless mode on EC2/server environments
     plugins: [
       ...plugins.recommended({
@@ -1377,87 +1556,136 @@ async function scrapePropertyGuruByDistrict() {
     }
   }
 
-  // Always close browser at the end
-  await browser.close().catch(() => {});
-
-  // Mark job as completed and remove lock file
-  if (fs.existsSync(lockFile)) {
-    jobStatus.status = 'completed';
+  } catch (error: unknown) {
+    console.error('❌ Fatal error during scraping:', error);
+    // Update lock file and database on error (lock file will be removed in finally block)
+    jobStatus.status = 'failed';
+    jobStatus.statusMessage = error instanceof Error ? error.message : 'Fatal error during scraping';
     jobStatus.completedAt = new Date().toISOString();
-    jobStatus.stats = overallStats;
-    fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
-    fs.unlinkSync(lockFile);
-    console.log('🔓 Lock file removed, job marked as completed\n');
-  }
+    if (typeof overallStats !== 'undefined') {
+      jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+      jobStatus.stats = overallStats;
+    }
+    
+    const jobId = process.env.PG_JOB_ID;
+    if (jobId) {
+      try {
+        // Use imported supabase client
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: error instanceof Error ? error.message : 'Fatal error during scraping',
+            listings_processed: typeof overallStats !== 'undefined' ? overallStats.totalSuccess : 0
+          })
+          .eq('id', jobId);
+      } catch (dbError) {
+        console.error('Failed to update database on error:', dbError);
+      }
+    }
+  } finally {
+    // Always close browser to prevent resource leaks
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (closeError) {
+        console.error('⚠️  Error closing browser:', closeError);
+      }
+    }
+    
+    // Always remove lock file, regardless of success or failure
+    if (fs.existsSync(lockFile)) {
+      try {
+        // Update job status with final values
+        jobStatus.status = jobStatus.status || 'completed';
+        jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
+        jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
+        if (typeof overallStats !== 'undefined') {
+          jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
+          jobStatus.stats = overallStats;
+        }
+        
+        // Save completed/failed status to a separate file before removing lock
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log(`🔓 Lock file removed, job marked as ${jobStatus.status}\n`);
+      } catch (e) {
+        console.error('⚠️  Error removing lock file:', e);
+        // Try one more time to remove it
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+            console.log('🔓 Lock file removed (retry)\n');
+          }
+        } catch (retryError) {
+          console.error('❌ Could not remove lock file after retry:', retryError);
+        }
+      }
+    }
+    
+    // Update database job status
+    const jobId = process.env.PG_JOB_ID;
+    if (jobId && typeof overallStats !== 'undefined') {
+      try {
+        // Use imported supabase client
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: jobStatus.status === 'failed' ? 'failed' : 'completed',
+            completed_at: new Date().toISOString(),
+            listings_processed: overallStats.totalSuccess,
+            stats: overallStats
+          })
+          .eq('id', jobId);
+        console.log('✅ Database job status updated');
+      } catch (_error) {
+        console.error('⚠️  Failed to update database job status:', _error);
+      }
+    }
 
-  // Update database job status
-  const jobId = process.env.PG_JOB_ID;
-  if (jobId) {
-    try {
-      await supabase
-        .from('scraper_jobs')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          listings_processed: overallStats.totalSuccess,
-          stats: overallStats
-        })
-        .eq('id', jobId);
-      console.log('✅ Database job status updated');
-    } catch (_error) {
-      console.error('⚠️  Failed to update database job status:', _error);
+    // Update district metadata for each scraped district
+    if (typeof overallStats !== 'undefined') {
+      for (const district of districts) {
+        const districtCode = `D${district}`;
+        try {
+          // Get count of listings for this district
+          const { count } = await supabase
+            .from('listings')
+            .select('*', { count: 'exact', head: true })
+            .eq('district', district);
+
+          await supabase
+            .from('district_metadata')
+            .upsert({
+              district: districtCode,
+              last_scraped_at: new Date().toISOString(),
+              total_listings: count || 0,
+              last_job_id: jobId
+            }, {
+              onConflict: 'district'
+            });
+          
+          console.log(`✅ Updated metadata for district ${districtCode}`);
+        } catch (_error) {
+          console.error(`⚠️  Failed to update district metadata for ${districtCode}:`, _error);
+        }
+      }
+
+      // Final summary
+      console.log(`\n${'='.repeat(60)}`);
+      console.log('📊 Final Summary:');
+      console.log(`${'='.repeat(60)}`);
+      console.log(`Districts processed: ${overallStats.totalDistricts}`);
+      console.log(`Total listings found: ${overallStats.totalListings}`);
+      console.log(`Successfully saved: ${overallStats.totalSuccess}`);
+      console.log(`Skipped (no phone): ${overallStats.totalSkippedNoPhone}`);
+      console.log(`Errors: ${overallStats.totalErrors}`);
+      console.log(`${'='.repeat(60)}\n`);
     }
   }
-
-  // Update district metadata for each scraped district
-  for (const district of districts) {
-    const districtCode = `D${district}`;
-    try {
-      // Get count of listings for this district
-      const { count } = await supabase
-        .from('listings')
-        .select('*', { count: 'exact', head: true })
-        .eq('district', district);
-
-      await supabase
-        .from('district_metadata')
-        .upsert({
-          district: districtCode,
-          last_scraped_at: new Date().toISOString(),
-          total_listings: count || 0,
-          last_job_id: jobId
-        }, {
-          onConflict: 'district'
-        });
-      
-      console.log(`✅ Updated metadata for district ${districtCode}`);
-    } catch (_error) {
-      console.error(`⚠️  Failed to update district metadata for ${districtCode}:`, _error);
-    }
-  }
-
-  // Final summary
-  console.log(`\n${'='.repeat(60)}`);
-  console.log('📊 Final Summary:');
-  console.log(`${'='.repeat(60)}`);
-  console.log(`Districts processed: ${overallStats.totalDistricts}`);
-  console.log(`Total listings found: ${overallStats.totalListings}`);
-  console.log(`Successfully saved: ${overallStats.totalSuccess}`);
-  console.log(`Skipped (no phone): ${overallStats.totalSkippedNoPhone}`);
-  console.log(`Errors: ${overallStats.totalErrors}`);
-  console.log(`${'='.repeat(60)}\n`);
 }
 
-scrapePropertyGuruByDistrict().catch((error) => {
-  console.error('❌ Fatal error:', error);
-  
-  // Remove lock file on fatal error
-  const lockFile = path.join(process.cwd(), 'storage', 'pg-scraper.lock');
-  if (fs.existsSync(lockFile)) {
-    fs.unlinkSync(lockFile);
-    console.log('🔓 Lock file removed due to error');
-  }
-  
-  process.exit(1);
-});
+// The function now handles all errors internally with try-catch-finally
+scrapePropertyGuruByDistrict();
 

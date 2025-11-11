@@ -202,6 +202,9 @@ export function ScraperDashboard({
               
               setActiveJob(null);
               setLastJobId(null);
+              
+              // Note: Completed job will be cleared when a new job starts (handled above)
+              // Or user can manually close it via the UI
             }
           } catch (error) {
             console.error('Error parsing SSE message:', error);

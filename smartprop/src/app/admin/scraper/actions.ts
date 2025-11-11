@@ -44,9 +44,114 @@ export interface ScraperJobStatus {
 /**
  * Start a new scraper job
  */
+/**
+ * Check and clean up stale lock files (lock file exists but process is dead)
+ * Returns cleanup results
+ */
+async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: string[] }> {
+  const errors: string[] = [];
+  let cleaned = 0;
+  
+  const platforms = ['propertyguru', 'edgeprop'] as const;
+  
+  for (const platform of platforms) {
+    const lockFile = path.join(process.cwd(), 'storage', 
+      platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+    
+    if (!fs.existsSync(lockFile)) {
+      continue; // No lock file, nothing to clean
+    }
+    
+    try {
+      const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+      const pid = lockData.pid;
+      
+      if (!pid || typeof pid !== 'number') {
+        // Lock file exists but no valid PID - stale lock
+        console.log(`🧹 Cleaning stale lock file (no PID): ${lockFile}`);
+        fs.unlinkSync(lockFile);
+        cleaned++;
+        
+        // Also check if there's a job in database that should be marked as completed/failed
+        const { data: jobs } = await supabase
+          .from('scraper_jobs')
+          .select('id, status')
+          .eq('platform', platform)
+          .in('status', ['queued', 'running'])
+          .order('started_at', { ascending: false })
+          .limit(1);
+        
+        if (jobs && jobs.length > 0) {
+          // Mark as failed since lock file exists but no process
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'Lock file found but no process running - stale lock cleaned'
+            })
+            .eq('id', jobs[0].id);
+        }
+        continue;
+      }
+      
+      // Check if process is actually running
+      const isRunning = await isProcessRunning(pid);
+      
+      if (!isRunning) {
+        // Process is dead but lock file exists - stale lock
+        console.log(`🧹 Cleaning stale lock file (process ${pid} not running): ${lockFile}`);
+        fs.unlinkSync(lockFile);
+        cleaned++;
+        
+        // Mark corresponding job as failed
+        const { data: jobs } = await supabase
+          .from('scraper_jobs')
+          .select('id, status')
+          .eq('platform', platform)
+          .in('status', ['queued', 'running'])
+          .order('started_at', { ascending: false })
+          .limit(1);
+        
+        if (jobs && jobs.length > 0) {
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: `Process ${pid} not running - stale lock cleaned`
+            })
+            .eq('id', jobs[0].id);
+        }
+      }
+    } catch (error) {
+      const errorMsg = `Error checking lock file ${lockFile}: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(errorMsg);
+      errors.push(errorMsg);
+      
+      // If we can't read the lock file, try to remove it anyway (might be corrupted)
+      try {
+        fs.unlinkSync(lockFile);
+        cleaned++;
+        console.log(`🧹 Removed corrupted lock file: ${lockFile}`);
+      } catch (removeError) {
+        errors.push(`Could not remove corrupted lock file ${lockFile}`);
+      }
+    }
+  }
+  
+  return { cleaned, errors };
+}
+
 export async function startScrapeJob(config: ScraperConfig) {
   try {
-    // Check for active jobs
+    // First, check and clean up any stale locks
+    const cleanupResult = await checkAndCleanStaleLocks();
+    if (cleanupResult.cleaned > 0) {
+      console.log(`🧹 Cleaned up ${cleanupResult.cleaned} stale lock file(s)`);
+    }
+    
+    // Check for active jobs (after cleanup)
     const { data: activeJobs } = await supabase
       .from('scraper_jobs')
       .select('id, platform, started_at')
@@ -54,10 +159,58 @@ export async function startScrapeJob(config: ScraperConfig) {
       .limit(1);
 
     if (activeJobs && activeJobs.length > 0) {
-      return {
-        success: false,
-        error: `Another scraper (${activeJobs[0].platform}) is already running. Please wait for it to complete.`
-      };
+      // Also check if lock file exists for this job
+      const job = activeJobs[0];
+      const lockFile = path.join(process.cwd(), 'storage', 
+        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      
+      if (fs.existsSync(lockFile)) {
+        // Lock file exists, check if process is running
+        try {
+          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+          const pid = lockData.pid;
+          if (pid && typeof pid === 'number') {
+            const isRunning = await isProcessRunning(pid);
+            if (!isRunning) {
+              // Process is dead, clean it up and allow new job
+              console.log(`🧹 Found dead process ${pid} for active job, cleaning up...`);
+              fs.unlinkSync(lockFile);
+              await supabase
+                .from('scraper_jobs')
+                .update({
+                  status: 'failed',
+                  completed_at: new Date().toISOString(),
+                  error_message: 'Process died - cleaned up stale lock'
+                })
+                .eq('id', job.id);
+              // Continue to start new job
+            } else {
+              // Process is actually running
+              return {
+                success: false,
+                error: `Another scraper (${job.platform}) is already running. Please wait for it to complete.`
+              };
+            }
+          }
+        } catch (error) {
+          console.error('Error checking lock file:', error);
+          // If we can't read lock file, remove it and continue
+          try {
+            fs.unlinkSync(lockFile);
+          } catch {}
+        }
+      } else {
+        // No lock file but database says running - mark as failed
+        await supabase
+          .from('scraper_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'No lock file found but job marked as running - cleaning up'
+          })
+          .eq('id', job.id);
+        // Continue to start new job
+      }
     }
 
     // Validate config

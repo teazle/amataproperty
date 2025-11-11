@@ -23,9 +23,69 @@ export async function GET(request: NextRequest) {
     async start(controller) {
       const supabase = createClient(supabaseUrl, supabaseKey);
 
+      // Helper function to check if process is running
+      const isProcessRunning = async (pid: number): Promise<boolean> => {
+        try {
+          const { execSync } = await import('child_process');
+          execSync(`ps -p ${pid} > /dev/null 2>&1`);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       // Send initial status
       const sendStatus = async () => {
         try {
+          // Check for stale locks first
+          const platforms = ['propertyguru', 'edgeprop'] as const;
+          for (const platform of platforms) {
+            const lockFile = path.join(process.cwd(), 'storage', 
+              platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+            
+            if (fs.existsSync(lockFile)) {
+              try {
+                const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+                const pid = lockData.pid;
+                
+                if (pid && typeof pid === 'number') {
+                  const isRunning = await isProcessRunning(pid);
+                  if (!isRunning) {
+                    // Stale lock detected - clean it up
+                    console.log(`🧹 Status API: Cleaning stale lock file (process ${pid} not running)`);
+                    fs.unlinkSync(lockFile);
+                    
+                    // Mark corresponding job as failed
+                    const { data: jobs } = await supabase
+                      .from('scraper_jobs')
+                      .select('id, status')
+                      .eq('platform', platform)
+                      .in('status', ['queued', 'running'])
+                      .order('started_at', { ascending: false })
+                      .limit(1);
+                    
+                    if (jobs && jobs.length > 0) {
+                      await supabase
+                        .from('scraper_jobs')
+                        .update({
+                          status: 'failed',
+                          completed_at: new Date().toISOString(),
+                          error_message: 'Stale lock detected and cleaned'
+                        })
+                        .eq('id', jobs[0].id);
+                    }
+                  }
+                }
+              } catch (error) {
+                // Lock file might be corrupted, try to remove it
+                try {
+                  fs.unlinkSync(lockFile);
+                  console.log(`🧹 Status API: Removed corrupted lock file`);
+                } catch {}
+              }
+            }
+          }
+          
           // Get active job from database
           const { data: job } = await supabase
             .from('scraper_jobs')

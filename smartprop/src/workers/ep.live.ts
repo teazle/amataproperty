@@ -106,16 +106,27 @@ async function scrapeEdgePropFinal() {
     console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
     shouldStop = true;
     
-    // Update lock file
+    // Update and remove lock file
     if (fs.existsSync(lockFile)) {
       try {
         const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
         lockData.status = 'stopped';
         lockData.statusMessage = `Stopped by ${signal} signal`;
         lockData.completedAt = new Date().toISOString();
-        fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
+        // Save completed status before removing
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(lockData, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log('🔓 Lock file removed');
       } catch (e) {
-        console.log('Could not update lock file:', e);
+        console.log('Could not update/remove lock file:', e);
+        // Try to remove anyway if update failed
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+          }
+        } catch (removeError) {
+          console.log('Could not remove lock file:', removeError);
+        }
       }
     }
     
@@ -212,11 +223,28 @@ async function scrapeEdgePropFinal() {
     
     if (!authSuccess) {
       console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
-      // Update lock file and database
+      // Update lock file and database, then remove lock file
       jobStatus.status = 'failed';
       jobStatus.statusMessage = 'Re-authentication failed';
       jobStatus.completedAt = new Date().toISOString();
-      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+      
+      if (fs.existsSync(lockFile)) {
+        try {
+          fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+          fs.unlinkSync(lockFile);
+          console.log('🔓 Lock file removed');
+        } catch (e) {
+          console.log('Could not update/remove lock file:', e);
+          // Try to remove anyway
+          try {
+            if (fs.existsSync(lockFile)) {
+              fs.unlinkSync(lockFile);
+            }
+          } catch (removeError) {
+            console.log('Could not remove lock file:', removeError);
+          }
+        }
+      }
       
       if (jobId) {
         try {
@@ -241,11 +269,28 @@ async function scrapeEdgePropFinal() {
     const updatedStateExists = fs.existsSync(stateFilePath);
     if (!updatedStateExists) {
       console.error('❌ Authentication state file not found after re-authentication!');
-      // Update lock file and database
+      // Update lock file and database, then remove lock file
       jobStatus.status = 'failed';
       jobStatus.statusMessage = 'Authentication state file not found';
       jobStatus.completedAt = new Date().toISOString();
-      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+      
+      if (fs.existsSync(lockFile)) {
+        try {
+          fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+          fs.unlinkSync(lockFile);
+          console.log('🔓 Lock file removed');
+        } catch (e) {
+          console.log('Could not update/remove lock file:', e);
+          // Try to remove anyway
+          try {
+            if (fs.existsSync(lockFile)) {
+              fs.unlinkSync(lockFile);
+            }
+          } catch (removeError) {
+            console.log('Could not remove lock file:', removeError);
+          }
+        }
+      }
       
       if (jobId) {
         try {
@@ -273,7 +318,25 @@ async function scrapeEdgePropFinal() {
     jobStatus.status = 'failed';
     jobStatus.statusMessage = 'Authentication state file not found';
     jobStatus.completedAt = new Date().toISOString();
-    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
+    
+    if (fs.existsSync(lockFile)) {
+      try {
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log('🔓 Lock file removed');
+      } catch (e) {
+        console.log('Could not update/remove lock file:', e);
+        // Try to remove anyway
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+          }
+        } catch (removeError) {
+          console.log('Could not remove lock file:', removeError);
+        }
+      }
+    }
+    
     process.exit(1);
   }
   
@@ -1467,7 +1530,7 @@ async function scrapeEdgePropFinal() {
     
   } catch (error: unknown) {
     console.error('❌ Fatal error during scraping:', error);
-    // Update lock file and database on error
+    // Update lock file and database on error (lock file will be removed in finally block)
     jobStatus.status = 'failed';
     jobStatus.statusMessage = error instanceof Error ? error.message : 'Fatal error during scraping';
     jobStatus.completedAt = new Date().toISOString();
@@ -1476,10 +1539,6 @@ async function scrapeEdgePropFinal() {
     jobStatus.stats.totalSuccess = totalSuccess;
     jobStatus.stats.totalSkippedNoPhone = totalSkipped;
     jobStatus.stats.totalErrors = totalErrors;
-    
-    if (fs.existsSync(lockFile)) {
-      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-    }
     
     if (jobId) {
       try {
@@ -1522,21 +1581,35 @@ async function scrapeEdgePropFinal() {
     console.log(`   Success rate: ${totalProcessed > 0 ? Math.round((totalSuccess / totalProcessed) * 100) : 0}%`);
     console.log('='.repeat(60));
     
-    // Mark job as completed and remove lock file
+    // Always remove lock file, regardless of success or failure
     if (fs.existsSync(lockFile)) {
-      jobStatus.status = 'completed';
-      jobStatus.statusMessage = 'Scraping completed';
-      jobStatus.completedAt = new Date().toISOString();
-      jobStatus.progress.currentPage = currentPage;
-      jobStatus.progress.listingsProcessed = totalProcessed;
-      jobStatus.stats.totalSuccess = totalSuccess;
-      jobStatus.stats.totalSkippedNoPhone = totalSkipped;
-      jobStatus.stats.totalErrors = totalErrors;
-      
-      // Save completed status to a separate file
-      fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
-      fs.unlinkSync(lockFile);
-      console.log('🔓 Lock file removed, job marked as completed\n');
+      try {
+        // Update job status with final values
+        jobStatus.status = jobStatus.status || 'completed';
+        jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
+        jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
+        jobStatus.progress.currentPage = currentPage;
+        jobStatus.progress.listingsProcessed = totalProcessed;
+        jobStatus.stats.totalSuccess = totalSuccess;
+        jobStatus.stats.totalSkippedNoPhone = totalSkipped;
+        jobStatus.stats.totalErrors = totalErrors;
+        
+        // Save completed/failed status to a separate file before removing lock
+        fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
+        fs.unlinkSync(lockFile);
+        console.log(`🔓 Lock file removed, job marked as ${jobStatus.status}\n`);
+      } catch (e) {
+        console.error('⚠️  Error removing lock file:', e);
+        // Try one more time to remove it
+        try {
+          if (fs.existsSync(lockFile)) {
+            fs.unlinkSync(lockFile);
+            console.log('🔓 Lock file removed (retry)\n');
+          }
+        } catch (retryError) {
+          console.error('❌ Could not remove lock file after retry:', retryError);
+        }
+      }
     }
     
     // Update database job status

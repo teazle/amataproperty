@@ -167,15 +167,20 @@ async function scrapeEdgePropFinal() {
         // Try to send signal 0 to check if process exists (doesn't kill, just checks)
         process.kill(lockData.pid, 0);
         processRunning = true;
+        console.log(`   ✓ Process ${lockData.pid} is running`);
       } catch (error: any) {
         // ESRCH means process doesn't exist
         if (error.code === 'ESRCH') {
           processRunning = false;
+          console.log(`   ✗ Process ${lockData.pid} is NOT running (ESRCH)`);
         } else {
           // Other error, assume process might be running
           processRunning = true;
+          console.log(`   ⚠ Process check error (assuming running): ${error.code || error.message}`);
         }
       }
+    } else {
+      console.log('   ⚠ No PID in lock file, cannot verify process');
     }
     
     // If process is not running, remove stale lock file

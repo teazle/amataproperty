@@ -4,10 +4,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { BorderBeam } from "@/components/ui/border-beam";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const buttonRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [overlayStyle, setOverlayStyle] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
 
   useEffect(() => {
     const btns = buttonRefs.current.filter(Boolean) as HTMLAnchorElement[];
@@ -60,6 +62,36 @@ export default function Home() {
     };
   }, []);
 
+  // Keep overlay aligned with the video's black box across breakpoints
+  useEffect(() => {
+    const videoAspectRatio = 1.335187; // width / height of hero.mp4 (derived from earlier measurements)
+    const overlayLeftRatio = 0.184;    // black box left offset as fraction of video width
+    const overlayWidthRatio = 0.5321;  // black box width as fraction of video width (862 / 1620)
+
+    const compute = () => {
+      const section = sectionRef.current;
+      if (!section) return;
+      const width = section.clientWidth;
+      const height = section.clientHeight;
+      // For object-cover: displayed video width is the max of container width and height*aspect
+      const displayedVideoWidth = Math.max(width, height * videoAspectRatio);
+      const videoLeft = (width - displayedVideoWidth) / 2; // can be negative when video wider than container
+      const left = videoLeft + overlayLeftRatio * displayedVideoWidth;
+      const overlayWidth = overlayWidthRatio * displayedVideoWidth;
+      setOverlayStyle({ left: left, width: overlayWidth });
+    };
+
+    compute();
+    const onResize = () => compute();
+    window.addEventListener('resize', onResize);
+    const observer = new ResizeObserver(() => compute());
+    if (sectionRef.current) observer.observe(sectionRef.current);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      observer.disconnect();
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-background font-sans antialiased">
       {/* Navigation */}
@@ -83,7 +115,7 @@ export default function Home() {
 
       <main>
         {/* Hero Section */}
-        <section className="relative h-[1438px] overflow-hidden bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
+        <section ref={sectionRef} className="relative h-[1438px] overflow-hidden bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
           {/* Full-bleed media wrapper (video + overlay image together) */}
           <div className="absolute inset-0 z-0 overflow-hidden">
             <video
@@ -97,8 +129,8 @@ export default function Home() {
             </video>
 
             {/* Overlay image positioned relative to the video using percentages for responsiveness */}
-            <div className="absolute bottom-0 left-[18.4%] w-[53.2%] z-10">
-              <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full">
+            <div className="absolute bottom-0 z-10" style={{ left: overlayStyle.left, width: overlayStyle.width, aspectRatio: '862 / 600' }}>
+              <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
                 <BorderBeam
                   size={100}
                   duration={12}
@@ -112,7 +144,7 @@ export default function Home() {
                   alt="Hero Image"
                   width={2048}
                   height={1138}
-                  className="w-full h-auto object-contain object-top"
+                  className="w-full h-full object-contain object-top"
                   priority
                 />
 

@@ -83,69 +83,74 @@ export default function Home() {
 
       <main>
         {/* Hero Section */}
-        <section className="relative h-[1438px] overflow-x-hidden overflow-y-visible bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
-          {/* Video Background Wrapper */}
-          <div className="absolute -left-[344px] bottom-0 z-0 aspect-[1.335187] w-[1920px] max-w-none lg:bottom-0 lg:left-[-253px] lg:w-[1620px] md:bottom-[-2.1%] md:left-[-27%] md:w-[147%] sm:bottom-[5.4%] sm:left-[-34.95%] sm:w-[189%]">
-            <video
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="absolute inset-0 w-full h-full object-contain"
-            >
-              <source src="/hero.mp4" type="video/mp4" />
-            </video>
-          </div>
-          
-          {/* Content Container */}
-          <div className="container relative flex h-full flex-col px-8 z-10">
-            {/* Title */}
-            <div className="relative mb-32 z-30">
-              <h1 className="hero-title text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight text-white leading-[0.9] max-w-[616px] lg:max-w-[528px] md:max-w-[441px] md:text-5xl sm:max-w-64 sm:text-3xl">
-                SmartProp
-              </h1>
-            </div>
+        <section className="relative w-full overflow-hidden bg-black py-20 md:py-32 lg:py-40">
+          {/* Max-width container to center content */}
+          <div className="container mx-auto max-w-7xl px-4">
+            
+            {/* Video + Image Container - Grouped Together */}
+            <div className="relative w-full aspect-[1.77] max-w-5xl mx-auto">
+              {/* Video Background */}
+              <div className="absolute inset-0 z-0">
+                <video
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  className="w-full h-full object-contain"
+                >
+                  <source src="/hero.mp4" type="video/mp4" />
+                </video>
+              </div>
 
-            {/* Button */}
-            <div className="flex flex-col sm:flex-row gap-4 items-start mb-12 z-30 relative ml-8">
-              <Link 
-                href="/admin"
-                className="cta"
-                ref={(el) => {
-                  if (el) buttonRefs.current[0] = el;
-                }}
-              >
-                <div className="glow-container">
-                  <div className="glow-layer-1"></div>
-                  <div className="glow-layer-2"></div>
+              {/* Content Container - Title and Button Overlaying Video */}
+              <div className="absolute top-0 left-0 z-20 p-6 md:p-8 lg:p-12">
+                {/* Title */}
+                <h1 className="hero-title text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-bold tracking-tight text-white leading-[0.9] mb-6 md:mb-8">
+                  SmartProp
+                </h1>
+
+                {/* Button */}
+                <div className="flex flex-col sm:flex-row gap-4 items-start">
+                  <Link 
+                    href="/admin"
+                    className="cta"
+                    ref={(el) => {
+                      if (el) buttonRefs.current[0] = el;
+                    }}
+                  >
+                    <div className="glow-container">
+                      <div className="glow-layer-1"></div>
+                      <div className="glow-layer-2"></div>
+                    </div>
+                    <span className="label">Admin Dashboard</span>
+                  </Link>
                 </div>
-                <span className="label">Admin Dashboard</span>
-              </Link>
-            </div>
-          </div>
+              </div>
 
-          {/* Hero Image - Positioned at left bottom to match video black box */}
-          <div className="absolute bottom-0 left-[45px] z-30 w-[862px] lg:w-[862px] md:w-[750px] sm:w-[600px] h-[600px] lg:h-[600px] md:h-[520px] sm:h-[450px]">
-            <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
-              <BorderBeam
-                size={100}
-                duration={12}
-                borderWidth={2}
-                colorFrom="#ff00aa"
-                colorTo="#00FFF1"
-                delay={0}
-              />
-              <Image
-                src="/hero-illustration.7100a376.jpg"
-                alt="Hero Image"
-                width={2048}
-                height={1138}
-                className="w-full h-full object-contain object-top"
-                priority
-              />
-              
-              {/* Glow effect */}
-              <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
+              {/* Hero Image - Positioned to match video black box */}
+              <div className="absolute bottom-0 left-[3%] z-10 w-[53%] h-[55%]">
+                <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
+                  <BorderBeam
+                    size={100}
+                    duration={12}
+                    borderWidth={2}
+                    colorFrom="#ff00aa"
+                    colorTo="#00FFF1"
+                    delay={0}
+                  />
+                  <Image
+                    src="/hero-illustration.7100a376.jpg"
+                    alt="Hero Image"
+                    width={2048}
+                    height={1138}
+                    className="w-full h-full object-contain object-top"
+                    priority
+                  />
+                  
+                  {/* Glow effect */}
+                  <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>

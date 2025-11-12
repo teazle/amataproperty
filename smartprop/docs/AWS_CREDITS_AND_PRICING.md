@@ -118,3 +118,6 @@ aws ec2 start-instances --instance-ids i-0b41277535712c09b --region ap-southeast
 
 **My Recommendation**: Upgrade to t4g.medium NOW while it's still free. You get 2x memory at no cost until Dec 31, 2025. After that, you can decide if the extra $12/month is worth it for better stability.
 
+
+
+

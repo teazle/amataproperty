@@ -247,3 +247,102 @@ body {
   user-select: none;
 }
 
+/* Fancy button with cursor tracking - Huly style */
+.cta {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  min-width: fit-content;
+  border-radius: 9999px;
+  background: #d1d1d1;
+  color: #5A250A;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: -0.015em;
+  text-transform: uppercase;
+  padding: 0 52px;
+  white-space: nowrap;
+}
+
+.cta .label {
+  position: relative;
+  z-index: 1;
+}
+
+/* Glow container - follows cursor horizontally */
+.glow-container {
+  position: absolute;
+  z-index: 0;
+  display: flex;
+  width: 204px;
+  height: 100%;
+  left: 0;
+  top: 0;
+  transform: translateX(0px) translateZ(0px);
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* Layer 1: Sharp circular gradient */
+.glow-layer-1 {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 121px;
+  height: 121px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    #FFFFF5 3.5%,
+    #FFAA81 26.5%,
+    #FFDA9F 37.5%,
+    rgba(255, 170, 129, 0.50) 49%,
+    rgba(210, 106, 58, 0.00) 92.5%
+  );
+  pointer-events: none;
+}
+
+/* Layer 2: Wider blurred gradient */
+.glow-layer-2 {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 204px;
+  height: 103px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    43.3% 44.23% at 50% 49.51%,
+    #FFFFF7 29%,
+    #FFFACD 48.5%,
+    #F4D2BF 60.71%,
+    rgba(214, 211, 210, 0.00) 100%
+  );
+  filter: blur(5px);
+  pointer-events: none;
+}
+
+/* Show glow on hover/focus - CSS fallback */
+.cta:hover .glow-container,
+.cta:focus-visible .glow-container {
+  opacity: 1 !important;
+}
+
+/* Hero page header link - white color */
+.hero-header-link {
+  color: white !important;
+}
+
+/* Hero page title - white color */
+.hero-title {
+  color: white !important;
+}
+

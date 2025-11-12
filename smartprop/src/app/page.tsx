@@ -3,22 +3,74 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
-import { Particles } from "@/components/ui/particles";
+import { useEffect, useRef } from "react";
 
 export default function Home() {
+  const buttonRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+
+  useEffect(() => {
+    const btns = buttonRefs.current.filter(Boolean) as HTMLAnchorElement[];
+    const cleanupFunctions: (() => void)[] = [];
+    
+    btns.forEach((btn) => {
+      let raf = 0;
+      const glowContainer = btn.querySelector('.glow-container') as HTMLElement;
+      
+      if (!glowContainer) return;
+      
+      const update = (e: MouseEvent) => {
+        const r = btn.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        // Center the 204px glow container on the cursor position
+        // The container starts centered (left: 50% with -102px offset)
+        // We need to move it so its center (102px from left edge) aligns with cursor
+        const offset = x - 102;
+        glowContainer.style.transform = `translateX(${offset}px) translateZ(0px)`;
+      };
+
+      const onMove = (e: MouseEvent) => {
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => update(e));
+      };
+
+      const onEnter = (e: MouseEvent) => {
+        glowContainer.style.opacity = '1';
+        onMove(e);
+      };
+
+      const onLeave = () => {
+        glowContainer.style.opacity = '0';
+      };
+
+      btn.addEventListener('pointerenter', onEnter as any);
+      btn.addEventListener('pointermove', onMove as any);
+      btn.addEventListener('pointerleave', onLeave);
+
+      cleanupFunctions.push(() => {
+        cancelAnimationFrame(raf);
+        btn.removeEventListener('pointerenter', onEnter as any);
+        btn.removeEventListener('pointermove', onMove as any);
+        btn.removeEventListener('pointerleave', onLeave);
+      });
+    });
+
+    return () => {
+      cleanupFunctions.forEach(cleanup => cleanup());
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-background font-sans antialiased">
       {/* Navigation */}
       <header className="fixed left-0 top-0 z-50 w-full px-4 animate-fade-in border-b opacity-0 backdrop-blur-[12px] [--animation-delay:600ms]">
         <div className="container mx-auto flex h-[var(--navigation-height)] w-full items-center justify-between">
-          <Link className="text-md flex items-center justify-center" href="/">
+          <Link className="text-md flex items-center justify-center hero-header-link" href="/">
             SmartProp
           </Link>
           <div className="ml-auto flex h-full items-center">
             <Link href="/admin">
-              <Button variant="ghost" size="sm" className="text-sm">
+              <Button variant="ghost" size="sm" className="text-sm text-white">
                 Log in
               </Button>
             </Link>
@@ -31,123 +83,79 @@ export default function Home() {
 
       <main>
         {/* Hero Section */}
-        <section className="relative flex flex-col items-center justify-center px-4 py-32 text-center">
-          {/* Particle Background */}
-          <div className="absolute inset-0">
-            <Particles
-              className="absolute inset-0"
-              quantity={100}
-              ease={80}
-              color="#ffffff"
-              size={0.5}
-              vx={0}
-              vy={0}
-            />
+        <section className="relative h-[1438px] overflow-x-hidden overflow-y-visible bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
+          {/* Video Background Wrapper */}
+          <div className="absolute -left-[344px] bottom-0 z-0 aspect-[1.335187] w-[1920px] max-w-none lg:bottom-0 lg:left-[-253px] lg:w-[1620px] md:bottom-[-2.1%] md:left-[-27%] md:w-[147%] sm:bottom-[5.4%] sm:left-[-34.95%] sm:w-[189%]">
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="absolute inset-0 w-full h-full object-contain"
+            >
+              <source src="/hero.mp4" type="video/mp4" />
+            </video>
           </div>
           
-          <div className="container mx-auto max-w-5xl relative z-10">
-
-            <div className="relative mb-6">
-              <h1 className="text-5xl font-bold tracking-tight text-foreground sm:text-6xl lg:text-7xl">
+          {/* Content Container */}
+          <div className="container relative flex h-full flex-col px-8 z-10">
+            {/* Title */}
+            <div className="relative mb-32 z-30">
+              <h1 className="hero-title text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight text-white leading-[0.9] max-w-[616px] lg:max-w-[528px] md:max-w-[441px] md:text-5xl sm:max-w-64 sm:text-3xl">
                 SmartProp
               </h1>
-              {/* Glow effect behind title */}
-              <div className="absolute inset-0 blur-3xl opacity-30">
-                <h1 className="text-5xl font-bold tracking-tight text-white sm:text-6xl lg:text-7xl">
-                  SmartProp
-                </h1>
-              </div>
             </div>
 
-
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-16">
-              <Link href="/admin">
-                <ShimmerButton
-                  className="bg-white text-black px-8 py-3 text-lg font-medium rounded-lg shadow-[0_1px_2px_rgba(0,0,0,0.06),0_4px_8px_rgba(0,0,0,0.05),0_12px_24px_rgba(0,0,0,0.04)] hover:shadow-[0_2px_4px_rgba(0,0,0,0.08),0_8px_16px_rgba(0,0,0,0.06),0_16px_32px_rgba(0,0,0,0.05)]"
-                  shimmerColor="#ffffff"
-                  shimmerSize="0.05em"
-                  shimmerDuration="3s"
-                  borderRadius="8px"
-                  background="rgba(255, 255, 255, 1)"
-                >
-                  Admin Dashboard
-                </ShimmerButton>
+            {/* Button */}
+            <div className="flex flex-col sm:flex-row gap-4 items-start mb-12 z-30 relative ml-8">
+              <Link 
+                href="/admin"
+                className="cta"
+                ref={(el) => {
+                  if (el) buttonRefs.current[0] = el;
+                }}
+              >
+                <div className="glow-container">
+                  <div className="glow-layer-1"></div>
+                  <div className="glow-layer-2"></div>
+                </div>
+                <span className="label">Admin Dashboard</span>
               </Link>
             </div>
-
-            {/* Hero Image */}
-            <div className="relative mx-auto max-w-4xl">
-              <div className="relative rounded-2xl overflow-hidden shadow-2xl">
-                <BorderBeam
-                  size={100}
-                  duration={12}
-                  borderWidth={2}
-                  colorFrom="#ff00aa"
-                  colorTo="#00FFF1"
-                  delay={0}
-                />
-                <Image
-                  src="/hero-dark.png"
-                  alt="Hero Image"
-                  width={800}
-                  height={560}
-                  className="w-full h-auto"
-                  priority
-                />
-                
-                {/* Glow effect */}
-                <div className="absolute inset-0 rounded-2xl opacity-40 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
-              </div>
-            </div>
           </div>
-        </section>
 
-        {/* Trusted By Section */}
-        <section className="py-16">
-          <div className="container mx-auto text-center">
-            <p className="text-sm text-muted-foreground mb-8 uppercase tracking-wide">
-              TRUSTED BY TEAMS FROM AROUND THE WORLD
-            </p>
+          {/* Hero Image - Positioned at left bottom to match video black box */}
+          <div className="absolute bottom-0 left-[45px] z-30 w-[862px] lg:w-[862px] md:w-[750px] sm:w-[600px] h-[600px] lg:h-[600px] md:h-[520px] sm:h-[450px]">
+            <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
+              <BorderBeam
+                size={100}
+                duration={12}
+                borderWidth={2}
+                colorFrom="#ff00aa"
+                colorTo="#00FFF1"
+                delay={0}
+              />
+              <Image
+                src="/hero-illustration.7100a376.jpg"
+                alt="Hero Image"
+                width={2048}
+                height={1138}
+                className="w-full h-full object-contain object-top"
+                priority
+              />
+              
+              {/* Glow effect */}
+              <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
+            </div>
           </div>
         </section>
 
       </main>
 
       {/* Footer */}
-      <footer className="border-t py-16">
+      <footer className="bg-black text-white py-8">
         <div className="container mx-auto px-4">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <h3 className="font-semibold text-foreground mb-4">SmartProp</h3>
-              <p className="text-sm text-muted-foreground">
-                UI Library for Design Engineers
-              </p>
-            </div>
-            <div>
-              <h4 className="font-medium text-foreground mb-4">Product</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Email Collection</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Pricing</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">FAQ</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-foreground mb-4">Community</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Discord</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Twitter</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Email</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-foreground mb-4">Legal</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Terms</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Privacy</a></li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t mt-12 pt-8 text-center text-sm text-muted-foreground">
+          <div className="text-center text-sm">
             <p>Copyright © 2025 SmartProp. All Rights Reserved.</p>
           </div>
         </div>

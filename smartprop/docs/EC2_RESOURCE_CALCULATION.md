@@ -80,3 +80,6 @@ docker stats --format "table {{.Container}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPU
 
 These settings provide good performance while staying within t4g.small limits.
 
+
+
+

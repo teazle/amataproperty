@@ -175,21 +175,72 @@ fi
 
 # Install dependencies
 echo "Installing dependencies with Bun..."
-bun install --frozen-lockfile
+bun install
 
-# Build the application (without turbopack for production)
+# Build the application (uses package.json script with --turbopack)
 echo "Building application..."
-NODE_ENV=production bunx next build
+bun run build
 
-# Stop existing PM2 process if running
-pm2 stop smartprop || true
-pm2 delete smartprop || true
+# Create PM2 ecosystem file to load environment variables from .env.local
+echo "Creating PM2 ecosystem file..."
+cat > ecosystem.config.js << 'ECOSYSTEM'
+const fs = require('fs');
+const path = require('path');
 
-# Start application with PM2
-echo "Starting application with PM2..."
-PORT=3000 NODE_ENV=production pm2 start bun --name smartprop -- start
-pm2 save
-pm2 startup || true
+// Load .env.local file
+const envPath = path.join(__dirname, '.env.local');
+const envVars = {};
+
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split('\n').forEach(line => {
+    const trimmedLine = line.trim();
+    if (trimmedLine && !trimmedLine.startsWith('#')) {
+      const equalIndex = trimmedLine.indexOf('=');
+      if (equalIndex > 0) {
+        const key = trimmedLine.substring(0, equalIndex).trim();
+        const value = trimmedLine.substring(equalIndex + 1).trim();
+        // Remove quotes if present
+        const cleanValue = value.replace(/^["']|["']$/g, '');
+        envVars[key] = cleanValue;
+      }
+    }
+  });
+}
+
+module.exports = {
+  apps: [{
+    name: 'smartprop',
+    script: 'bun',
+    args: 'start',
+    cwd: '/opt/smartprop/app/smartprop',
+    interpreter: 'none',
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3000,
+      ...envVars
+    },
+    error_file: '/home/ec2-user/.pm2/logs/smartprop-error.log',
+    out_file: '/home/ec2-user/.pm2/logs/smartprop-out.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: true,
+    autorestart: true,
+    max_memory_restart: '1G'
+  }]
+};
+ECOSYSTEM
+
+# Restart application with PM2 (for updates, use restart instead of stop/delete/start)
+echo "Restarting application with PM2..."
+if pm2 list | grep -q smartprop; then
+    # App already exists, just restart it
+    pm2 restart smartprop
+else
+    # First time setup, start with ecosystem file
+    pm2 start ecosystem.config.js
+    pm2 save
+    pm2 startup || true
+fi
 
 echo "✅ Deployment complete!"
 echo ""

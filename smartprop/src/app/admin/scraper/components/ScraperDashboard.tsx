@@ -7,7 +7,7 @@ import { ScraperConfigForm } from './ScraperConfigForm';
 import { LiveProgressPanel } from './LiveProgressPanel';
 import { RecentListingsPreview } from './RecentListingsPreview';
 import { HistoryTable } from './HistoryTable';
-import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob } from '../actions';
+import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob, syncCompletedJobs } from '../actions';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 
@@ -90,6 +90,7 @@ export function ScraperDashboard({
   const [districts, setDistricts] = useState(initialDistricts);
   const [lastJobId, setLastJobId] = useState<string | null | undefined>(initialActiveJob?.id);
   const [isResetting, setIsResetting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [stuckJobInfo, setStuckJobInfo] = useState<any[] | null>(null);
 
   const handleForceReset = async () => {
@@ -133,6 +134,32 @@ export function ScraperDashboard({
       toast.error('Failed to reset stuck jobs');
       console.error('Error resetting stuck jobs:', error);
       setIsResetting(false);
+    }
+  };
+
+  const handleSyncCompleted = async () => {
+    setIsSyncing(true);
+    try {
+      const result = await syncCompletedJobs();
+      if (result.success) {
+        if (result.synced && result.synced > 0) {
+          toast.success(result.message || `Synced ${result.synced} completed job(s)`);
+          // Reload page to show updated status
+          setTimeout(() => {
+            window.location.reload();
+          }, 1000);
+        } else {
+          toast.info(result.message || 'No jobs needed syncing');
+          setIsSyncing(false);
+        }
+      } else {
+        toast.error(result.error || 'Failed to sync completed jobs');
+        setIsSyncing(false);
+      }
+    } catch (error) {
+      toast.error('Failed to sync completed jobs');
+      console.error('Error syncing completed jobs:', error);
+      setIsSyncing(false);
     }
   };
 
@@ -250,7 +277,16 @@ export function ScraperDashboard({
     <div className="space-y-6">
       {/* Force Reset Button and Stuck Job Info - Always visible */}
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={handleSyncCompleted}
+              disabled={isSyncing}
+              variant="outline"
+              size="sm"
+              className="border-blue-500 text-blue-700 hover:bg-blue-50"
+            >
+              {isSyncing ? 'Syncing...' : 'Sync Completed Jobs'}
+            </Button>
             <Button
               onClick={handleForceReset}
               disabled={isResetting}

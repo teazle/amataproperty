@@ -361,6 +361,56 @@ async function isProcessRunning(pid: number): Promise<boolean> {
  */
 export async function getActiveJob(): Promise<ScraperJobStatus | null> {
   try {
+    // Auto-sync completed.json files with database
+    const platforms = ['propertyguru', 'edgeprop'] as const;
+    for (const platform of platforms) {
+      const lockFile = path.join(process.cwd(), 'storage', 
+        platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      const completedFile = lockFile.replace('.lock', '.completed.json');
+      
+      // Check for completed.json files and sync them automatically
+      if (fs.existsSync(completedFile) && !fs.existsSync(lockFile)) {
+        try {
+          const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
+          if (completedData.status === 'completed') {
+            // Find matching job by platform and started_at time (within 1 hour window)
+            const startedAt = new Date(completedData.startedAt);
+            const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
+            const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
+
+            const { data: matchingJobs } = await supabase
+              .from('scraper_jobs')
+              .select('id, status')
+              .eq('platform', platform)
+              .in('status', ['running', 'queued'])
+              .gte('started_at', windowStart.toISOString())
+              .lte('started_at', windowEnd.toISOString())
+              .order('started_at', { ascending: false })
+              .limit(1);
+
+            if (matchingJobs && matchingJobs.length > 0) {
+              const job = matchingJobs[0];
+              // Auto-sync: Update database to completed status
+              await supabase
+                .from('scraper_jobs')
+                .update({
+                  status: 'completed',
+                  completed_at: completedData.completedAt || new Date().toISOString(),
+                  listings_processed: completedData.progress?.listingsProcessed || completedData.stats?.totalSuccess || 0,
+                  stats: completedData.stats || null,
+                  current_page: completedData.progress?.currentPage || null,
+                  current_district: completedData.progress?.currentDistrict || null
+                })
+                .eq('id', job.id);
+              console.log(`✅ getActiveJob: Auto-synced completed job ${job.id} for ${platform}`);
+            }
+          }
+        } catch (error) {
+          console.error(`Error auto-syncing completed job for ${platform}:`, error);
+        }
+      }
+    }
+    
     const { data: job } = await supabase
       .from('scraper_jobs')
       .select('*')
@@ -1421,6 +1471,129 @@ export async function forceFixStuckJob(jobId: string) {
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * Sync completed.json files with database
+ * This fixes cases where scraper completed successfully but database update failed
+ */
+export async function syncCompletedJobs() {
+  try {
+    const storageDir = path.join(process.cwd(), 'storage');
+    const completedFiles: Array<{ platform: 'propertyguru' | 'edgeprop'; data: any }> = [];
+
+    // Check for completed.json files
+    const pgCompletedFile = path.join(storageDir, 'pg-scraper.completed.json');
+    const epCompletedFile = path.join(storageDir, 'ep-scraper.completed.json');
+
+    if (fs.existsSync(pgCompletedFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(pgCompletedFile, 'utf-8'));
+        if (data.status === 'completed') {
+          completedFiles.push({ platform: 'propertyguru', data });
+        }
+      } catch (error) {
+        console.error('Error reading pg-scraper.completed.json:', error);
+      }
+    }
+
+    if (fs.existsSync(epCompletedFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(epCompletedFile, 'utf-8'));
+        if (data.status === 'completed') {
+          completedFiles.push({ platform: 'edgeprop', data });
+        }
+      } catch (error) {
+        console.error('Error reading ep-scraper.completed.json:', error);
+      }
+    }
+
+    if (completedFiles.length === 0) {
+      return {
+        success: true,
+        message: 'No completed.json files found',
+        synced: 0
+      };
+    }
+
+    let syncedCount = 0;
+    const errors: string[] = [];
+
+    for (const { platform, data } of completedFiles) {
+      try {
+        // Find matching job by platform and started_at time (within 1 hour window)
+        const startedAt = new Date(data.startedAt);
+        const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
+        const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
+
+        const { data: matchingJobs, error: queryError } = await supabase
+          .from('scraper_jobs')
+          .select('id, status, started_at')
+          .eq('platform', platform)
+          .in('status', ['running', 'queued'])
+          .gte('started_at', windowStart.toISOString())
+          .lte('started_at', windowEnd.toISOString())
+          .order('started_at', { ascending: false })
+          .limit(1);
+
+        if (queryError) {
+          errors.push(`Error querying jobs for ${platform}: ${queryError.message}`);
+          continue;
+        }
+
+        if (!matchingJobs || matchingJobs.length === 0) {
+          // No matching job found - might already be updated or job ID mismatch
+          console.log(`No matching running job found for ${platform} completed.json (started: ${data.startedAt})`);
+          continue;
+        }
+
+        const job = matchingJobs[0];
+        
+        // Update job to completed status
+        const updateData: any = {
+          status: 'completed',
+          completed_at: data.completedAt || new Date().toISOString(),
+          listings_processed: data.progress?.listingsProcessed || data.stats?.totalSuccess || 0,
+          stats: data.stats || null,
+          current_page: data.progress?.currentPage || null,
+          current_district: data.progress?.currentDistrict || null
+        };
+
+        const { error: updateError } = await supabase
+          .from('scraper_jobs')
+          .update(updateData)
+          .eq('id', job.id);
+
+        if (updateError) {
+          errors.push(`Error updating job ${job.id} for ${platform}: ${updateError.message}`);
+        } else {
+          syncedCount++;
+          console.log(`✅ Synced completed job ${job.id} for ${platform}`);
+        }
+      } catch (error) {
+        errors.push(`Error processing ${platform} completed.json: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    revalidatePath('/admin/scraper');
+
+    return {
+      success: syncedCount > 0 || errors.length === 0,
+      message: syncedCount > 0 
+        ? `Synced ${syncedCount} completed job(s) from completed.json files`
+        : 'No jobs needed syncing',
+      synced: syncedCount,
+      errors: errors.length > 0 ? errors : undefined
+    };
+
+  } catch (error) {
+    console.error('Error syncing completed jobs:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      synced: 0
     };
   }
 }

@@ -37,12 +37,56 @@ export async function GET(request: NextRequest) {
       // Send initial status
       const sendStatus = async () => {
         try {
-          // Check for stale locks first
+          // Check for stale locks and sync completed jobs
           const platforms = ['propertyguru', 'edgeprop'] as const;
           for (const platform of platforms) {
             const lockFile = path.join(process.cwd(), 'storage', 
               platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+            const completedFile = lockFile.replace('.lock', '.completed.json');
             
+            // First, check for completed.json files and sync them automatically
+            if (fs.existsSync(completedFile) && !fs.existsSync(lockFile)) {
+              try {
+                const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
+                if (completedData.status === 'completed') {
+                  // Find matching job by platform and started_at time (within 1 hour window)
+                  const startedAt = new Date(completedData.startedAt);
+                  const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
+                  const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
+
+                  const { data: matchingJobs } = await supabase
+                    .from('scraper_jobs')
+                    .select('id, status')
+                    .eq('platform', platform)
+                    .in('status', ['running', 'queued'])
+                    .gte('started_at', windowStart.toISOString())
+                    .lte('started_at', windowEnd.toISOString())
+                    .order('started_at', { ascending: false })
+                    .limit(1);
+
+                  if (matchingJobs && matchingJobs.length > 0) {
+                    const job = matchingJobs[0];
+                    // Auto-sync: Update database to completed status
+                    await supabase
+                      .from('scraper_jobs')
+                      .update({
+                        status: 'completed',
+                        completed_at: completedData.completedAt || new Date().toISOString(),
+                        listings_processed: completedData.progress?.listingsProcessed || completedData.stats?.totalSuccess || 0,
+                        stats: completedData.stats || null,
+                        current_page: completedData.progress?.currentPage || null,
+                        current_district: completedData.progress?.currentDistrict || null
+                      })
+                      .eq('id', job.id);
+                    console.log(`✅ Status API: Auto-synced completed job ${job.id} for ${platform}`);
+                  }
+                }
+              } catch (error) {
+                console.error(`Error auto-syncing completed job for ${platform}:`, error);
+              }
+            }
+            
+            // Then check for stale locks
             if (fs.existsSync(lockFile)) {
               try {
                 const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));

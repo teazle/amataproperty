@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Black Box Inspector</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #000;
+            color: #fff;
+            font-family: monospace;
+        }
+        video {
+            width: 100%;
+            max-width: 1200px;
+            border: 2px solid #fff;
+        }
+        #info {
+            margin-top: 20px;
+            padding: 20px;
+            background: #222;
+            border-radius: 8px;
+        }
+        canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Video Black Box Inspector</h1>
+    <video id="video" autoplay loop muted playsinline>
+        <source src="/hero.mp4" type="video/mp4">
+    </video>
+    <div id="info">
+        <p>Loading video...</p>
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const info = document.getElementById('info');
+
+        video.addEventListener('loadeddata', () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            const analyzeFrame = () => {
+                ctx.drawImage(video, 0, 0);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const pixels = imageData.data;
+                
+                // Find darkest area in bottom-left quadrant (where black box likely is)
+                let darkestX = 0;
+                let darkestY = 0;
+                let darkestValue = 255;
+                const searchWidth = Math.floor(canvas.width * 0.4); // Left 40% of video
+                const searchHeightStart = Math.floor(canvas.height * 0.6); // Bottom 40% of video
+                
+                for (let y = searchHeightStart; y < canvas.height; y++) {
+                    for (let x = 0; x < searchWidth; x++) {
+                        const idx = (y * canvas.width + x) * 4;
+                        const r = pixels[idx];
+                        const g = pixels[idx + 1];
+                        const b = pixels[idx + 2];
+                        const brightness = (r + g + b) / 3;
+                        
+                        if (brightness < darkestValue) {
+                            darkestValue = brightness;
+                            darkestX = x;
+                            darkestY = y;
+                        }
+                    }
+                }
+                
+                // Calculate relative position (assuming video is scaled to 1620px width in lg breakpoint)
+                const videoDisplayWidth = 1620; // lg:w-[1620px]
+                const sectionWidth = 1200;
+                const videoOffset = -253; // lg:left-[-253px]
+                
+                // Convert video coordinates to display coordinates
+                const relativeX = (darkestX / canvas.width) * videoDisplayWidth;
+                const displayX = relativeX + videoOffset; // Position relative to section
+                
+                // Estimate black box size (sample area around darkest point)
+                let boxWidth = 0;
+                let boxHeight = 0;
+                const threshold = darkestValue + 30; // Allow some variance
+                
+                // Find width
+                for (let x = darkestX; x < canvas.width; x++) {
+                    const idx = (darkestY * canvas.width + x) * 4;
+                    const brightness = (pixels[idx] + pixels[idx + 1] + pixels[idx + 2]) / 3;
+                    if (brightness > threshold) break;
+                    boxWidth = x - darkestX;
+                }
+                
+                // Find height
+                for (let y = darkestY; y < canvas.height; y++) {
+                    const idx = (y * canvas.width + darkestX) * 4;
+                    const brightness = (pixels[idx] + pixels[idx + 1] + pixels[idx + 2]) / 3;
+                    if (brightness > threshold) break;
+                    boxHeight = y - darkestY;
+                }
+                
+                const boxDisplayWidth = (boxWidth / canvas.width) * videoDisplayWidth;
+                const boxDisplayHeight = (boxHeight / canvas.height) * videoDisplayWidth * (canvas.height / canvas.width);
+                
+                info.innerHTML = `
+                    <h2>Black Box Analysis</h2>
+                    <p><strong>Video dimensions:</strong> ${canvas.width} x ${canvas.height}</p>
+                    <p><strong>Darkest point in bottom-left:</strong> (${darkestX}, ${darkestY})</p>
+                    <p><strong>Brightness:</strong> ${darkestValue.toFixed(1)}</p>
+                    <p><strong>Estimated box size:</strong> ${boxWidth} x ${boxHeight} pixels</p>
+                    <hr>
+                    <h3>Recommended CSS Positioning:</h3>
+                    <p><strong>Left position:</strong> ${Math.max(0, Math.round(displayX))}px</p>
+                    <p><strong>Max width:</strong> ${Math.round(boxDisplayWidth)}px</p>
+                    <p><strong>Max height:</strong> ${Math.round(boxDisplayHeight)}px</p>
+                    <p><strong>CSS:</strong></p>
+                    <pre style="background: #000; padding: 10px; border: 1px solid #444;">
+&lt;div className="absolute bottom-0 left-[${Math.max(0, Math.round(displayX))}px] z-30 max-w-[${Math.round(boxDisplayWidth)}px]"&gt;
+</pre>
+                `;
+            };
+            
+            analyzeFrame();
+            setInterval(analyzeFrame, 1000); // Analyze every second
+        });
+    </script>
+</body>
+</html>
+

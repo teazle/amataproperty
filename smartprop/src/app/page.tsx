@@ -83,25 +83,22 @@ export default function Home() {
 
       <main>
         {/* Hero Section */}
-        <section className="relative h-[1438px] overflow-hidden bg-background pt-[184px] lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
-          {/* Video + Image Wrapper - Grouped together for responsive behavior */}
-          <div className="absolute bottom-0 left-0 right-0 z-0 flex items-end justify-start">
-            {/* Video Background Wrapper */}
-            <div className="absolute -left-[344px] bottom-0 z-0 aspect-[1.335187] w-[1920px] max-w-none lg:bottom-0 lg:left-[-253px] lg:w-[1620px] md:bottom-[-2.1%] md:left-[-27%] md:w-[147%] sm:bottom-[5.4%] sm:left-[-34.95%] sm:w-[189%]">
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="absolute inset-0 w-full h-full object-contain"
-              >
-                <source src="/hero.mp4" type="video/mp4" />
-              </video>
-            </div>
+        <section className="relative h-[1438px] overflow-hidden bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
+          {/* Full-bleed media wrapper (video + overlay image together) */}
+          <div className="absolute inset-0 z-0 overflow-hidden">
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="absolute inset-0 h-full w-full object-cover"
+            >
+              <source src="/hero.mp4" type="video/mp4" />
+            </video>
 
-            {/* Hero Image - Positioned within video's black box */}
-            <div className="absolute bottom-0 z-10 aspect-[1.437] max-w-none left-[45px] w-[862px] lg:left-[30px] lg:w-[700px] md:relative md:left-0 md:mx-auto md:mb-6 md:w-[90%] sm:w-[85%]">
-              <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
+            {/* Overlay image positioned relative to the video using percentages for responsiveness */}
+            <div className="absolute bottom-0 left-[18.4%] w-[53.2%] z-10">
+              <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full">
                 <BorderBeam
                   size={100}
                   duration={12}
@@ -115,10 +112,10 @@ export default function Home() {
                   alt="Hero Image"
                   width={2048}
                   height={1138}
-                  className="w-full h-full object-contain object-top"
+                  className="w-full h-auto object-contain object-top"
                   priority
                 />
-                
+
                 {/* Glow effect */}
                 <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
               </div>
@@ -126,7 +123,7 @@ export default function Home() {
           </div>
           
           {/* Content Container */}
-          <div className="container relative mx-auto flex h-full flex-col px-8 z-20 max-w-7xl">
+          <div className="container relative flex h-full flex-col px-8 z-10">
             {/* Title */}
             <div className="relative mb-32 z-30">
               <h1 className="hero-title text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight text-white leading-[0.9] max-w-[616px] lg:max-w-[528px] md:max-w-[441px] md:text-5xl sm:max-w-64 sm:text-3xl">
@@ -151,6 +148,8 @@ export default function Home() {
               </Link>
             </div>
           </div>
+
+          {/* overlay moved into media wrapper above */}
         </section>
 
       </main>

@@ -26,6 +26,11 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Force app chrome to black to avoid white gutters/gaps around hero */
+html, body, #__next, main {
+  background-color: #000 !important;
+}
+
 /* Ensure headings are always dark */
 h1, h2, h3, h4, h5, h6 {
   color: #111827 !important;

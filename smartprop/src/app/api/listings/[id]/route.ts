@@ -118,48 +118,141 @@ export async function PUT(
       console.log('Current agent ID:', agentId);
       
       if (agentId) {
-        // Update existing agent
-        const { data: updatedAgent, error: agentError } = await supabase
+        // First, fetch the current agent to get its source and other required fields
+        const { data: currentAgent, error: fetchAgentError } = await supabase
           .from('agents')
-          .update(agentUpdates)
+          .select('id, name, phone, source')
           .eq('id', agentId)
-          .select()
           .single();
 
-        if (agentError) {
-          console.error('Error updating agent:', agentError);
+        if (fetchAgentError || !currentAgent) {
+          console.error('Error fetching current agent:', fetchAgentError);
           return NextResponse.json(
-            { error: 'Failed to update agent', details: agentError.message },
+            { error: 'Failed to fetch agent details', details: fetchAgentError?.message },
             { status: 500 }
           );
         }
-        console.log('Agent updated successfully:', updatedAgent);
+
+        // Check if updating phone would violate unique constraint (source, phone)
+        if (agentUpdates.phone && agentUpdates.phone !== currentAgent.phone) {
+          const { data: existingAgent } = await supabase
+            .from('agents')
+            .select('id')
+            .eq('source', currentAgent.source)
+            .eq('phone', agentUpdates.phone)
+            .neq('id', agentId)
+            .maybeSingle();
+
+          if (existingAgent) {
+            // Phone number already exists for this source, use that agent instead
+            console.log('Phone number already exists, using existing agent:', existingAgent.id);
+            agentId = existingAgent.id;
+            // Update the listing to use the existing agent
+            updates.agent_id = agentId;
+            // Also update the existing agent with other fields if provided
+            if (Object.keys(agentUpdates).filter(k => k !== 'phone').length > 0) {
+              const otherUpdates = { ...agentUpdates };
+              delete otherUpdates.phone;
+              const { error: updateOtherError } = await supabase
+                .from('agents')
+                .update(otherUpdates)
+                .eq('id', agentId);
+
+              if (updateOtherError) {
+                console.error('Error updating existing agent with other fields:', updateOtherError);
+                // Don't fail, just log - the agent ID update is the important part
+              }
+            }
+          } else {
+            // Safe to update phone number
+            const { data: updatedAgent, error: agentError } = await supabase
+              .from('agents')
+              .update(agentUpdates)
+              .eq('id', agentId)
+              .select()
+              .single();
+
+            if (agentError) {
+              console.error('Error updating agent:', agentError);
+              return NextResponse.json(
+                { error: 'Failed to update agent', details: agentError.message },
+                { status: 500 }
+              );
+            }
+            console.log('Agent updated successfully:', updatedAgent);
+          }
+        } else {
+          // No phone change, safe to update other fields
+          const { data: updatedAgent, error: agentError } = await supabase
+            .from('agents')
+            .update(agentUpdates)
+            .eq('id', agentId)
+            .select()
+            .single();
+
+          if (agentError) {
+            console.error('Error updating agent:', agentError);
+            return NextResponse.json(
+              { error: 'Failed to update agent', details: agentError.message },
+              { status: 500 }
+            );
+          }
+          console.log('Agent updated successfully:', updatedAgent);
+        }
       } else if (body.agent_name && body.agent_phone) {
         // Create new agent if no existing agent
-        const { data: newAgent, error: createAgentError } = await supabase
+        // Check if agent with this phone already exists (for any source)
+        const { data: existingAgent } = await supabase
           .from('agents')
-          .insert({
-            name: body.agent_name,
-            phone: body.agent_phone,
-            email: body.agent_email,
-            agency: body.agent_agency,
-            cea_reg_no: body.agent_cea_reg_no,
-            source: 'propertyguru', // Use default source for manually created agents
-            last_seen_at: new Date().toISOString()
-          })
-          .select()
-          .single();
+          .select('id, source')
+          .eq('phone', body.agent_phone)
+          .maybeSingle();
 
-        if (createAgentError) {
-          console.error('Error creating agent:', createAgentError);
-          return NextResponse.json(
-            { error: 'Failed to create agent' },
-            { status: 500 }
-          );
+        if (existingAgent) {
+          // Use existing agent and update it
+          agentId = existingAgent.id;
+          const { data: updatedAgent, error: agentError } = await supabase
+            .from('agents')
+            .update(agentUpdates)
+            .eq('id', agentId)
+            .select()
+            .single();
+
+          if (agentError) {
+            console.error('Error updating existing agent:', agentError);
+            return NextResponse.json(
+              { error: 'Failed to update agent', details: agentError.message },
+              { status: 500 }
+            );
+          }
+          updates.agent_id = agentId;
+        } else {
+          // Create new agent
+          const { data: newAgent, error: createAgentError } = await supabase
+            .from('agents')
+            .insert({
+              name: body.agent_name,
+              phone: body.agent_phone,
+              email: body.agent_email,
+              agency: body.agent_agency,
+              cea_reg_no: body.agent_cea_reg_no,
+              source: 'propertyguru', // Use default source for manually created agents
+              last_seen_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+          if (createAgentError) {
+            console.error('Error creating agent:', createAgentError);
+            return NextResponse.json(
+              { error: 'Failed to create agent', details: createAgentError.message },
+              { status: 500 }
+            );
+          }
+
+          agentId = newAgent.id;
+          updates.agent_id = agentId;
         }
-
-        agentId = newAgent.id;
-        updates.agent_id = agentId;
       }
     }
 

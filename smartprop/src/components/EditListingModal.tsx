@@ -148,7 +148,7 @@ export default function EditListingModal({ listing, isOpen, onClose, onSave }: E
 
     setIsLoading(true);
     try {
-      const updateData = {
+      const updateData: any = {
         // Only include fields that have values
         ...(formData.title && { title: formData.title }),
         ...(formData.price && { price: parseInt(formData.price) }),
@@ -161,14 +161,17 @@ export default function EditListingModal({ listing, isOpen, onClose, onSave }: E
         ...(formData.price_psf && { price_psf: parseFloat(formData.price_psf) }),
         ...(formData.year_built && { year_built: parseInt(formData.year_built) }),
         ...(formData.tenure && { tenure: formData.tenure }),
-        
-        // Agent details
-        ...(formData.agent_name && { agent_name: formData.agent_name }),
-        ...(formData.agent_phone && { agent_phone: formData.agent_phone }),
-        ...(formData.agent_email && { agent_email: formData.agent_email }),
-        ...(formData.agent_agency && { agent_agency: formData.agent_agency }),
-        ...(formData.agent_cea_reg_no && { agent_cea_reg_no: formData.agent_cea_reg_no })
       };
+
+      // Agent details - send if listing has an agent or if any agent field has a value
+      // This ensures we can update agent details when they exist
+      if (listing.agents || formData.agent_name || formData.agent_phone) {
+        if (formData.agent_name) updateData.agent_name = formData.agent_name;
+        if (formData.agent_phone) updateData.agent_phone = formData.agent_phone;
+        if (formData.agent_email) updateData.agent_email = formData.agent_email;
+        if (formData.agent_agency) updateData.agent_agency = formData.agent_agency;
+        if (formData.agent_cea_reg_no) updateData.agent_cea_reg_no = formData.agent_cea_reg_no;
+      }
 
       const response = await fetch(`/api/listings/${listing.id}`, {
         method: 'PUT',

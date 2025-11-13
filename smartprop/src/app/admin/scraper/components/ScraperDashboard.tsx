@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AuthStatusCard } from './AuthStatusCard';
 import { DataQualityDashboard } from './DataQualityDashboard';
 import { ScraperConfigForm } from './ScraperConfigForm';
@@ -190,6 +190,19 @@ export function ScraperDashboard({
   };
 
   // Connect to SSE for real-time updates
+  // Use refs to avoid stale closures and prevent unnecessary reconnections
+  const activeJobRef = useRef(activeJob);
+  const lastJobIdRef = useRef(lastJobId);
+  
+  // Keep refs in sync with state
+  useEffect(() => {
+    activeJobRef.current = activeJob;
+  }, [activeJob]);
+  
+  useEffect(() => {
+    lastJobIdRef.current = lastJobId;
+  }, [lastJobId]);
+
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let reconnectTimeout: NodeJS.Timeout | null = null;
@@ -207,24 +220,32 @@ export function ScraperDashboard({
             const data = JSON.parse(event.data);
             
             if (data.status === 'active' && data.job) {
+              // Always update active job with latest data from SSE
               setActiveJob(data.job);
+              // Update lastJobId when we receive a job update
+              if (data.job.id) {
+                setLastJobId(data.job.id);
+              }
               // Clear completed job when new job starts
               setCompletedJob(null);
             } else if (data.status === 'idle') {
               // Job just completed! Refresh district metadata
-              const refreshDistricts = async () => {
-                const result = await getDistrictMetadata();
-                if (result.success) {
-                  setDistricts(result.districts);
-                  toast.success('✅ Scrape complete! District data refreshed');
-                }
-              };
+              const currentActiveJob = activeJobRef.current;
+              const currentLastJobId = lastJobIdRef.current;
               
               // Only refresh if we had a job running
-              if (lastJobId && activeJob) {
+              if (currentLastJobId && currentActiveJob) {
+                const refreshDistricts = async () => {
+                  const result = await getDistrictMetadata();
+                  if (result.success) {
+                    setDistricts(result.districts);
+                    toast.success('✅ Scrape complete! District data refreshed');
+                  }
+                };
+                
                 refreshDistricts();
                 // Keep the completed job visible for log review
-                setCompletedJob(activeJob);
+                setCompletedJob(currentActiveJob);
               }
               
               setActiveJob(null);
@@ -271,7 +292,7 @@ export function ScraperDashboard({
         eventSource.close();
       }
     };
-  }, [lastJobId]);
+  }, []); // Empty dependency array - SSE should persist for the component lifetime
 
   return (
     <div className="space-y-6">
@@ -349,6 +370,7 @@ export function ScraperDashboard({
       {/* Live Progress (show if active job or completed job) */}
       {(activeJob || completedJob) && (
         <LiveProgressPanel 
+          key={(activeJob || completedJob)?.id || 'progress'} // Force re-render when job changes
           job={activeJob || completedJob!} 
           isCompleted={!!completedJob && !activeJob}
           onJobStopped={() => {

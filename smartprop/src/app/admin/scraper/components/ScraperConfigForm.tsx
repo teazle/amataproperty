@@ -32,6 +32,7 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
   const [platform, setPlatform] = useState<'propertyguru' | 'edgeprop'>('propertyguru');
   const [selectedDistrict, setSelectedDistrict] = useState<string | null>(null);
   const [pages, setPages] = useState<number>(2);
+  const [maxListings, setMaxListings] = useState<number | undefined>(undefined);
   const [isStarting, setIsStarting] = useState(false);
 
   const handleStart = async () => {
@@ -46,6 +47,11 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
       return;
     }
 
+    if (maxListings !== undefined && (maxListings < 1 || maxListings > 1000)) {
+      toast.error('Max listings must be between 1 and 1000');
+      return;
+    }
+
     setIsStarting(true);
 
     const config = {
@@ -53,7 +59,8 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
       district: platform === 'propertyguru' ? selectedDistrict! : undefined,
       pages,
       minPrice: 1000000,
-      maxPrice: 3000000
+      maxPrice: 3000000,
+      maxListings: maxListings || undefined
     };
 
     const result = await startScrapeJob(config);
@@ -142,6 +149,29 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
           </div>
           <p className="text-xs text-gray-800">
             Each page contains ~20 listings
+          </p>
+        </div>
+
+        {/* Max Listings Input (Optional) */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Label htmlFor="maxListings" className="text-gray-900">
+              Max Listings (Optional)
+            </Label>
+            <Input
+              id="maxListings"
+              type="number"
+              min={1}
+              max={1000}
+              value={maxListings || ''}
+              onChange={(e) => setMaxListings(e.target.value ? parseInt(e.target.value) || undefined : undefined)}
+              placeholder="Unlimited"
+              disabled={disabled}
+              className="w-32 text-gray-900"
+            />
+          </div>
+          <p className="text-xs text-gray-800">
+            Stop scraping after reaching this many listings (leave empty for unlimited)
           </p>
         </div>
 

@@ -75,13 +75,20 @@ export default function Home() {
       const height = section.clientHeight;
       // For object-cover: displayed video width is the max of container width and height*aspect
       const displayedVideoWidth = Math.max(width, height * videoAspectRatio);
-      // Clamp to a maximum baseline (observed desktop baseline ~1620px)
-      const maxBaselineWidth = 1620;
-      const baselineWidth = Math.min(displayedVideoWidth, maxBaselineWidth);
-      // Center the clamped baseline within the section
-      const baselineLeft = (width - baselineWidth) / 2;
-      const left = baselineLeft + overlayLeftRatio * baselineWidth;
-      const overlayWidth = overlayWidthRatio * baselineWidth;
+      const videoLeft = (width - displayedVideoWidth) / 2;
+      // Base overlay size from video width using measured ratios
+      let overlayWidth = overlayWidthRatio * displayedVideoWidth;
+      let left = videoLeft + overlayLeftRatio * displayedVideoWidth;
+      // Keep overlay height within the section height (avoid overflow on ultrawide)
+      const overlayAspect = 600 / 862; // height / width
+      const expectedHeight = overlayWidth * overlayAspect;
+      const maxHeight = height; // bottom anchored; keep within section
+      if (expectedHeight > maxHeight) {
+        const scale = maxHeight / expectedHeight;
+        overlayWidth = overlayWidth * scale;
+        // left anchors to left boundary of black box; keep same left edge
+        // no change to 'left' since it represents the left boundary position
+      }
       setOverlayStyle({ left: left, width: overlayWidth });
     };
 

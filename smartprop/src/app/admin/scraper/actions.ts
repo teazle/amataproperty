@@ -19,6 +19,7 @@ export interface ScraperConfig {
   pages: number;
   minPrice?: number;
   maxPrice?: number;
+  maxListings?: number; // Optional: stop after scraping this many listings
 }
 
 export interface ScraperJobStatus {
@@ -266,6 +267,7 @@ export async function startScrapeJob(config: ScraperConfig) {
         PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
         PG_DISTRICTS: district,
         PG_MAX_PAGES: config.pages.toString(),
+        ...(config.maxListings && { PG_MAX_LISTINGS: config.maxListings.toString() }),
         PG_JOB_ID: job.id,
         HOME: homeDir,
         HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments
@@ -297,6 +299,7 @@ export async function startScrapeJob(config: ScraperConfig) {
         ...process.env,
         PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
         EP_MAX_PAGES: config.pages.toString(),
+        ...(config.maxListings && { EP_MAX_LISTINGS: config.maxListings.toString() }),
         EP_JOB_ID: job.id,
         HOME: homeDir,
         HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments

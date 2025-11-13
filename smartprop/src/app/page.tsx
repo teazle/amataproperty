@@ -4,11 +4,31 @@ import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { BorderBeam } from "@/components/ui/border-beam";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const buttonRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const sectionRef = useRef<HTMLElement | null>(null);
+  const [frameWidth, setFrameWidth] = useState<number>(0);
+  useEffect(() => {
+    const videoAspectRatio = 1.335187;
+    const compute = () => {
+      const section = sectionRef.current;
+      if (!section) return;
+      const width = section.clientWidth;
+      const height = section.clientHeight;
+      const maxWidth = 1620;
+      const constrainedByHeight = height * videoAspectRatio;
+      const w = Math.min(width, maxWidth, constrainedByHeight);
+      setFrameWidth(w);
+    };
+    compute();
+    const onResize = () => compute();
+    window.addEventListener('resize', onResize);
+    const ro = new ResizeObserver(() => compute());
+    if (sectionRef.current) ro.observe(sectionRef.current);
+    return () => { window.removeEventListener('resize', onResize); ro.disconnect(); };
+  }, []);
   // No dynamic overlay positioning needed when using a centered, max-width media frame
 
   useEffect(() => {
@@ -87,10 +107,10 @@ export default function Home() {
 
       <main>
         {/* Hero Section */}
-        <section ref={sectionRef} className="relative h-[1438px] overflow-hidden bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
+        <section ref={sectionRef} className="relative min-h-[100svh] overflow-hidden bg-black pt-0 px-safe">
           {/* Centered media frame (adds black side gutters on ultrawide) */}
           <div className="absolute inset-0 z-0 flex items-end justify-center">
-            <div className="relative w-full max-w-[1620px] aspect-[1.335187]">
+            <div className="relative" data-media-frame style={{ width: frameWidth, aspectRatio: '1.335187' }}>
               <video
                 autoPlay
                 loop
@@ -125,35 +145,28 @@ export default function Home() {
                   <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
                 </div>
               </div>
+
+              {/* Title + CTA grouped with media frame */}
+              <div className="absolute z-20 left-[4%] top-[10%] w-[40%] max-w-[600px] pointer-events-auto">
+                <h1 className="hero-title text-white text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight leading-[0.9]">SmartProp</h1>
+                <div className="mt-6">
+                  <Link 
+                    href="/admin"
+                    className="cta"
+                    ref={(el) => { if (el) buttonRefs.current[0] = el; }}
+                  >
+                    <div className="glow-container">
+                      <div className="glow-layer-1"></div>
+                      <div className="glow-layer-2"></div>
+                    </div>
+                    <span className="label">Admin Dashboard</span>
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
           
-          {/* Content Container */}
-          <div className="container relative flex h-full flex-col px-8 z-10">
-            {/* Title */}
-            <div className="relative mb-32 z-30">
-              <h1 className="hero-title text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight text-white leading-[0.9] max-w-[616px] lg:max-w-[528px] md:max-w-[441px] md:text-5xl sm:max-w-64 sm:text-3xl">
-                SmartProp
-              </h1>
-            </div>
-
-            {/* Button */}
-            <div className="flex flex-col sm:flex-row gap-4 items-start mb-12 z-30 relative ml-8">
-              <Link 
-                href="/admin"
-                className="cta"
-                ref={(el) => {
-                  if (el) buttonRefs.current[0] = el;
-                }}
-              >
-                <div className="glow-container">
-                  <div className="glow-layer-1"></div>
-                  <div className="glow-layer-2"></div>
-                </div>
-                <span className="label">Admin Dashboard</span>
-              </Link>
-            </div>
-          </div>
+          {/* Content band removed; content is inside the media frame */}
 
           {/* overlay moved into media wrapper above */}
         </section>

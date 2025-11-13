@@ -75,9 +75,13 @@ export default function Home() {
       const height = section.clientHeight;
       // For object-cover: displayed video width is the max of container width and height*aspect
       const displayedVideoWidth = Math.max(width, height * videoAspectRatio);
-      const videoLeft = (width - displayedVideoWidth) / 2; // can be negative when video wider than container
-      const left = videoLeft + overlayLeftRatio * displayedVideoWidth;
-      const overlayWidth = overlayWidthRatio * displayedVideoWidth;
+      // Clamp to a maximum baseline (observed desktop baseline ~1620px)
+      const maxBaselineWidth = 1620;
+      const baselineWidth = Math.min(displayedVideoWidth, maxBaselineWidth);
+      // Center the clamped baseline within the section
+      const baselineLeft = (width - baselineWidth) / 2;
+      const left = baselineLeft + overlayLeftRatio * baselineWidth;
+      const overlayWidth = overlayWidthRatio * baselineWidth;
       setOverlayStyle({ left: left, width: overlayWidth });
     };
 

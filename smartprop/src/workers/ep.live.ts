@@ -93,6 +93,7 @@ async function scrapeEdgePropFinal() {
   console.log('🚀 Starting Final EdgeProp Scraper...');
   
   const maxPages = parseInt(process.env.EP_MAX_PAGES || '10'); // Default to 10 pages
+  const maxListings = process.env.EP_MAX_LISTINGS ? parseInt(process.env.EP_MAX_LISTINGS, 10) : undefined;
   const jobId = process.env.EP_JOB_ID;
   const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
   const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
@@ -207,8 +208,11 @@ async function scrapeEdgePropFinal() {
   console.log(`📍 Districts: ALL`);
   console.log(`💰 Price range: $1,000,000 - $3,000,000`);
   console.log(`📄 Max pages: ${maxPages}`);
+  if (maxListings) {
+    console.log(`📊 Max listings to scrape: ${maxListings}`);
+  }
   console.log(`📁 Storage state: ${hasStorageState ? 'Found' : 'Not found'}`);
-  console.log(`🔧 Job ID: ${jobId || 'Not provided'}`);
+  console.log(`🔧 Job ID: ${jobId || 'Not provided'}, EP_MAX_LISTINGS=${process.env.EP_MAX_LISTINGS || 'unlimited'}`);
   
   // Create initial lock file for progress tracking
   const jobStatus = {
@@ -1484,6 +1488,14 @@ async function scrapeEdgePropFinal() {
               
               console.log(`💾 Saved to database: ${agentName} (${cleanPhone})`);
               totalSuccess++;
+              
+              // Check if we've reached max listings
+              if (maxListings && totalSuccess >= maxListings) {
+                console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
+                shouldStop = true;
+                break;
+              }
+              
               await updateProgress();
             } catch (dbError: unknown) {
               // Check if it's a duplicate error (unique constraint violation)
@@ -1576,6 +1588,12 @@ async function scrapeEdgePropFinal() {
       } // End of property loop
       
       console.log(`\n✅ Page ${currentPage} completed: ${propertyListings.length} properties processed`);
+      
+      // Check if we've reached max listings after processing this page
+      if (maxListings && totalSuccess >= maxListings) {
+        console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
+        break;
+      }
       
       // Wait before going to next page (reduced for speed)
       if (currentPage < maxPages) {

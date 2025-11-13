@@ -517,6 +517,7 @@ async function scrapePropertyGuruByDistrict() {
   const minPrice = parseInt(process.env.PG_MIN_PRICE || '1000000', 10);
   const maxPrice = parseInt(process.env.PG_MAX_PRICE || '3000000', 10);
   const maxPagesPerDistrict = parseInt(process.env.PG_MAX_PAGES || '3', 10);
+  const maxListings = process.env.PG_MAX_LISTINGS ? parseInt(process.env.PG_MAX_LISTINGS, 10) : undefined;
 
   // Build district list
   let districts: string[] = [];
@@ -643,7 +644,10 @@ async function scrapePropertyGuruByDistrict() {
   console.log(`📍 Districts to scrape: ${districts.join(', ')}`);
   console.log(`💰 Price range: $${minPrice.toLocaleString()} - $${maxPrice.toLocaleString()}`);
   console.log(`📄 Max pages per district: ${maxPagesPerDistrict}`);
-  console.log(`🔧 Environment: PG_DISTRICTS=${process.env.PG_DISTRICTS}, PG_MAX_PAGES=${process.env.PG_MAX_PAGES}, PG_JOB_ID=${process.env.PG_JOB_ID}`);
+  if (maxListings) {
+    console.log(`📊 Max listings to scrape: ${maxListings}`);
+  }
+  console.log(`🔧 Environment: PG_DISTRICTS=${process.env.PG_DISTRICTS}, PG_MAX_PAGES=${process.env.PG_MAX_PAGES}, PG_MAX_LISTINGS=${process.env.PG_MAX_LISTINGS || 'unlimited'}, PG_JOB_ID=${process.env.PG_JOB_ID}`);
   console.log('');
 
   const stateFilePath = path.join(process.cwd(), 'storage', 'pg.state.json');
@@ -1367,6 +1371,14 @@ async function scrapePropertyGuruByDistrict() {
                   console.log(`✅ Saved: ${agentName} - ${cleanPhone}`);
                   overallStats.totalSuccess++;
                   
+                  // Check if we've reached max listings
+                  if (maxListings && overallStats.totalSuccess >= maxListings) {
+                    console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
+                    await newListingPage.close();
+                    shouldStop = true;
+                    break;
+                  }
+                  
                   await newListingPage.close();
                   continue; // Skip to next listing
                 } catch (retryError) {
@@ -1590,6 +1602,13 @@ async function scrapePropertyGuruByDistrict() {
             console.log(`   📍 District: ${districtValue}`);
             overallStats.totalSuccess++;
             
+            // Check if we've reached max listings
+            if (maxListings && overallStats.totalSuccess >= maxListings) {
+              console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
+              shouldStop = true;
+              break;
+            }
+            
             // Update stats and progress in lock file for real-time display
             jobStatus.stats = overallStats;
             jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
@@ -1617,6 +1636,16 @@ async function scrapePropertyGuruByDistrict() {
             await listingPage.close().catch(() => {});
           }
         }
+        
+        // Check if we should stop after processing all listings on this page
+        if (shouldStop) {
+          break;
+        }
+      }
+      
+      // Check if we should stop after processing all pages in this district
+      if (shouldStop) {
+        break;
       }
 
     } catch (_error) {
@@ -1624,6 +1653,11 @@ async function scrapePropertyGuruByDistrict() {
     } finally {
       // Always close page for this district
       await page.close().catch(() => {});
+    }
+    
+    // Check if we should stop after processing this district
+    if (shouldStop) {
+      break;
     }
   }
 

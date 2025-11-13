@@ -275,8 +275,12 @@ export async function startScrapeJob(config: ScraperConfig) {
         // xvfb-run will handle DISPLAY automatically
       };
       
-      // Use xvfb-run to ensure Xvfb is available (consistent with how auth.pg.ts is called)
-      const child = spawn('xvfb-run', ['-a', bunPath, 'src/workers/pg.districts.ts'], {
+      // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
+      const isLinux = process.platform === 'linux';
+      const command = isLinux ? 'xvfb-run' : bunPath;
+      const args = isLinux ? ['-a', bunPath, 'src/workers/pg.districts.ts'] : ['src/workers/pg.districts.ts'];
+      
+      const child = spawn(command, args, {
         cwd,
         env,
         detached: true,
@@ -307,8 +311,12 @@ export async function startScrapeJob(config: ScraperConfig) {
         // xvfb-run will handle DISPLAY automatically
       };
       
-      // Use xvfb-run for consistency (same as ep.live.ts uses for auth.ep.ts)
-      const child = spawn('xvfb-run', ['-a', bunPath, 'src/workers/ep.live.ts'], {
+      // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
+      const isLinux = process.platform === 'linux';
+      const command = isLinux ? 'xvfb-run' : bunPath;
+      const args = isLinux ? ['-a', bunPath, 'src/workers/ep.live.ts'] : ['src/workers/ep.live.ts'];
+      
+      const child = spawn(command, args, {
         cwd,
         env,
         detached: true,

@@ -4,20 +4,24 @@ import path from 'path';
 // Load environment variables from .env.local only
 config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { chromium, type BrowserContextOptions } from 'playwright';
+import { chromium, type BrowserContextOptions } from 'playwright-ghost';
+import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
 import { execSync } from 'child_process';
 import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
-import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to EdgeProp...');
   try {
-    // Use xvfb-run for headless environments (EC2)
-    execSync('xvfb-run -a bun src/workers/auth.ep.ts', { 
+    // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
+    const isLinux = process.platform === 'linux';
+    const command = isLinux ? 'xvfb-run -a bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
+    
+    execSync(command, { 
       cwd: process.cwd(),
       stdio: 'inherit' 
     });
@@ -378,8 +382,21 @@ async function scrapeEdgePropFinal() {
     process.exit(1);
   }
   
+  // Use playwright-ghost with recommended plugins for best stealth (same as PG scraper)
   const browser = await chromium.launch({
     headless: true, // Run in headless mode for production
+    plugins: [
+      ...plugins.recommended({
+        humanize: {
+          click: { delay: { min: 200, max: 600 } },
+          cursor: false,
+          dialog: { delay: { min: 800, max: 2000 } }
+        }
+      }),
+      // Additional plugins for better Cloudflare bypass
+      plugins.utils.fingerprint(), // Randomize browser fingerprint
+      plugins.polyfill.webGL(), // Mask WebGL fingerprinting
+    ],
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
@@ -416,45 +433,12 @@ async function scrapeEdgePropFinal() {
 
   const context = await browser.newContext(contextOptions);
   
-  // Enhanced stealth script to avoid Cloudflare detection
+  // playwright-ghost handles most stealth automatically via plugins
+  // Just add a minimal script to ensure webdriver is undefined (plugins handle the rest)
   await context.addInitScript(() => {
-    // Remove webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-    
-    // Mock chrome object
-    (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
-      runtime: {},
-    };
-    
-    // Override permissions API
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
-      (parameters as PermissionDescriptor & { name: string }).name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission } as PermissionStatus) :
-        originalQuery(parameters)
-    );
-    
-    // Mock plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
-    });
-    
-    // Mock mimeTypes
-    Object.defineProperty(navigator, 'mimeTypes', {
-      get: () => [1, 2, 3, 4, 5],
-    });
-    
-    // Override getBattery
-    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
-      (navigator as any).getBattery = () => Promise.resolve({
-        charging: true,
-        chargingTime: 0,
-        dischargingTime: Infinity,
-        level: 1
-      });
-    }
     
     // Fix __name error that EdgeProp's JavaScript expects
     if (typeof (window as any).__name === 'undefined') {
@@ -594,11 +578,9 @@ async function scrapeEdgePropFinal() {
       
       // Trigger re-authentication
       try {
-        // Use xvfb-run for headless environments (EC2), fallback to direct bun for local
-        const hasDisplay = !!process.env.DISPLAY;
-        const authCommand = hasDisplay 
-          ? `bun src/workers/auth.ep.ts`
-          : `xvfb-run -a bun src/workers/auth.ep.ts`;
+        // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
+        const isLinux = process.platform === 'linux';
+        const authCommand = isLinux ? 'xvfb-run -a bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
         
         execSync(authCommand, { 
           cwd: process.cwd(),
@@ -665,6 +647,21 @@ async function scrapeEdgePropFinal() {
     // Base URL (page will be appended in the loop)
     const baseUrl = 'https://www.edgeprop.sg/property-search?listing_type=sale&property_type=9%252C103%252C107%252C105%252C106%252C104&district=&bedroom_min=&asking_price_min=1000000&asking_price_max=3000000&floor_area_min=&floor_area_max=&land_area_min=&land_area_max=&tenure=&bathroom=&furnishing=&completed=&level=&completion_year_min=&completion_year_max=&rental_yield=&high_rental_volume=&high_sales_volume=&deals=&nearby_amenities=&amenities_distance=500&rental_type=&keyword_features=&keyword=&mrt_keywords=&school_keywords=&hdbtowns_keywords=&areas_keywords=&district_keywords=&asset_id=&resource_type=&x=&y=&radius=1000&search_by=&search_by_distance=&search_by_location=&search_by_showmap=true&below_valuation=&map_zoom=&asset_lat=&asset_lng=&pageSize=20&order_by=recommended&fittings=&with_new_launches=0&area=&region=&subzone=&subzone_keywords=';
     
+    // CRITICAL: Create a Flaresolverr session at the start to maintain cookies across all requests
+    // Sessions retain cookies until destroyed, which is essential for Cloudflare bypass across multiple pages
+    console.log('\n🔧 Creating Flaresolverr session for persistent cookie management...');
+    const flaresolverrSessionId = await createFlaresolverrSession();
+    if (flaresolverrSessionId) {
+      console.log(`✅ Flaresolverr session created: ${flaresolverrSessionId}`);
+      console.log('   ℹ️  This session will be reused for all requests to maintain Cloudflare cookies');
+    } else {
+      console.log('⚠️  Failed to create Flaresolverr session - will use temporary sessions (may cause cookie issues)');
+    }
+    
+    // Track cookie saves to avoid excessive disk writes
+    let listingsSinceLastCookieSave = 0;
+    const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
+    
     // Loop through pages
     while (currentPage <= maxPages && !shouldStop) {
       // Check if we should stop before processing each page
@@ -703,8 +700,8 @@ async function scrapeEdgePropFinal() {
               console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
             }
             
-            // Use useSession: false to prevent multiple Chrome instances and OOM kills
-            const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
+            // Use the persistent session for search page
+            const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true, flaresolverrSessionId || undefined);
             
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
@@ -714,6 +711,7 @@ async function scrapeEdgePropFinal() {
               try {
                 await context.storageState({ path: stateFilePath });
                 console.log(`   💾 Saved fresh Cloudflare cookies to storage state (search page)`);
+                listingsSinceLastCookieSave = 0; // Reset counter after saving
               } catch (saveError) {
                 console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
               }
@@ -902,6 +900,7 @@ async function scrapeEdgePropFinal() {
         console.log(`⚠️  Found ${propertyListings.length} listings but EdgeProp shows only 20 per page. Taking first 20.`);
       }
       
+      
       for (let i = 0; i < processCount; i++) {
         const { element, text: propertyName } = propertyListings[i];
         const propertyStartTime = Date.now();
@@ -925,6 +924,38 @@ async function scrapeEdgePropFinal() {
             : `https://www.edgeprop.sg/${href.startsWith('/') ? href.slice(1) : href}`;
           
           console.log(`   🔗 Property URL: ${propertyUrl}`);
+          
+          // CRITICAL: Use Flaresolverr on EACH property URL to get URL-specific cookies
+          // Cloudflare cookies are URL-path specific - cookies from one property URL don't work for another
+          // Using the same Flaresolverr session ensures cookies persist across requests
+          console.log(`   🔄 Solving Cloudflare for this property URL...`);
+          
+          // Use Flaresolverr on the ACTUAL property URL with the same session to maintain cookies
+          const flaresolverrResult = await solveCloudflareWithFlaresolverr(propertyUrl, true, flaresolverrSessionId || undefined);
+          
+          if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+            // Apply cookies to context BEFORE creating new page
+            await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
+            
+            // Save fresh cookies periodically (every 5 listings to avoid too many writes)
+            if (listingsSinceLastCookieSave >= COOKIE_SAVE_INTERVAL) {
+              const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+              try {
+                await context.storageState({ path: stateFilePath });
+                console.log(`   💾 Saved Cloudflare cookies`);
+                listingsSinceLastCookieSave = 0;
+              } catch (saveError) {
+                console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
+              }
+            } else {
+              listingsSinceLastCookieSave++;
+            }
+            
+            // Wait for cookies to be fully applied to context
+            await humanPause(2000, 3000);
+          } else {
+            console.log(`   ⚠️  Flaresolverr returned no cookies, continuing with existing cookies...`);
+          }
           
           // Use a more reliable method: wait for new page event on context level
           // This works better than page.waitForEvent('popup') for target="_blank" links
@@ -951,8 +982,13 @@ async function scrapeEdgePropFinal() {
           } catch (e) {
             // If click fails, try navigating directly
             console.log(`   ⚠️  Click failed, navigating directly to URL...`);
-            popup = await context.newPage();
-            await popup.goto(propertyUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            popup = await context.newPage(); // Cookies are already in context from Flaresolverr above
+            
+            await popup.goto(propertyUrl, { 
+              waitUntil: 'domcontentloaded', 
+              timeout: 30000,
+              referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
+            });
             console.log(`   ✅ Navigated directly to property page`);
           }
           
@@ -982,8 +1018,13 @@ async function scrapeEdgePropFinal() {
               } else {
                 // Still on search page - navigate directly
                 console.log(`   ⚠️  Still on search page, navigating directly...`);
-                popup = await context.newPage();
-                await popup.goto(propertyUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                popup = await context.newPage(); // Cookies are already in context from Flaresolverr above
+                
+                await popup.goto(propertyUrl, { 
+                  waitUntil: 'domcontentloaded', 
+                  timeout: 30000,
+                  referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
+                });
                 console.log(`   ✅ Opened new page and navigated directly`);
               }
             }
@@ -1050,7 +1091,12 @@ async function scrapeEdgePropFinal() {
                     console.log(`   🔄 Reload failed, navigating to URL directly...`);
                     const popupUrl = popup.url() || propertyUrl;
                     try {
-                      await popup.goto(popupUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                    // Cookies are already in context from Flaresolverr above
+                    await popup.goto(popupUrl, { 
+                      waitUntil: 'domcontentloaded', 
+                      timeout: 20000,
+                      referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
+                    });
                       await humanPause(3000, 5000);
                     } catch (navError) {
                       console.log(`   ⚠️  Navigation also failed, will retry...`);

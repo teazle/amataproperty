@@ -30,200 +30,9 @@ import { supabase } from './supa.js';
 import { 
   solveCloudflareWithFlaresolverr, 
   applyFlaresolverrToContext, 
-  FLARESOLVERR_UA 
+  FLARESOLVERR_UA,
+  createFlaresolverrSession
 } from './flaresolverr.js';
-
-// Helper function to detect and interact with Cloudflare challenge
-async function handleCloudflareChallenge(page: Page): Promise<boolean> {
-  try {
-    // Wait longer for Cloudflare challenge to appear (datacenter IPs need more time)
-    await humanPause(5000, 8000);
-    
-    // Check if we're on a Cloudflare challenge page
-    const pageText = await page.textContent('body').catch(() => null) || '';
-    const isCloudflarePage = pageText.includes('Pardon Our Interruption') || 
-                             pageText.includes('Verify you are human') ||
-                             pageText.includes('Just a moment') ||
-                             pageText.includes('Enable JavaScript and cookies');
-    
-    if (!isCloudflarePage) {
-      return true; // Not a Cloudflare page, continue
-    }
-    
-    console.log('   🔍 Cloudflare challenge detected, attempting to solve...');
-    
-    // Try multiple selectors for Cloudflare checkbox
-    const checkboxSelectors = [
-      'input[type="checkbox"][name="cf-turnstile-response"]',
-      'input[type="checkbox"]',
-      'label:has-text("I\'m not a robot")',
-      'label:has-text("Verify")',
-      '[data-ray]', // Cloudflare turnstile
-      '.cb-lb', // Cloudflare checkbox label
-      '#challenge-form input[type="checkbox"]',
-      'iframe[src*="challenges.cloudflare.com"]',
-    ];
-    
-    let challengeSolved = false;
-    
-    // Method 1: Try clicking checkbox directly
-    for (const selector of checkboxSelectors) {
-      try {
-        const checkbox = page.locator(selector).first();
-        const isVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false);
-        
-        if (isVisible) {
-          console.log(`   ✅ Found Cloudflare checkbox with selector: ${selector}`);
-          await checkbox.click();
-          await humanPause(2000, 3000);
-          
-          // Wait for challenge to resolve
-          for (let i = 0; i < 10; i++) {
-            await humanPause(1000, 1500);
-            const newPageText = await page.textContent('body').catch(() => null) || '';
-            const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
-                                newPageText.includes('Verify you are human') ||
-                                newPageText.includes('Just a moment');
-            
-            // Check if content loaded
-            const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
-            
-            if (!stillBlocked || hasContent) {
-              console.log(`   ✅ Cloudflare challenge resolved!`);
-              challengeSolved = true;
-              break;
-            }
-          }
-          
-          if (challengeSolved) break;
-        }
-      } catch (e) {
-        // Try next selector
-        continue;
-      }
-    }
-    
-    // Method 2: Wait for Cloudflare Turnstile iframe to load (it loads dynamically)
-    if (!challengeSolved) {
-      try {
-        console.log('   ⏳ Waiting for Cloudflare Turnstile iframe to load...');
-        // Wait for iframe to appear (Cloudflare loads it dynamically)
-        for (let waitAttempt = 0; waitAttempt < 15; waitAttempt++) {
-          await humanPause(1000, 1500);
-          
-          // Try to find iframe by multiple methods
-          const iframeSelectors = [
-            'iframe[src*="challenges.cloudflare.com"]',
-            'iframe[src*="turnstile"]',
-            'iframe[title*="challenge"]',
-            'iframe[title*="Cloudflare"]',
-            'iframe[id*="cf-"]',
-          ];
-          
-          let iframeFound = false;
-          for (const iframeSelector of iframeSelectors) {
-            try {
-              const iframeCount = await page.locator(iframeSelector).count();
-              if (iframeCount > 0) {
-                console.log(`   ✅ Found Cloudflare iframe with selector: ${iframeSelector}`);
-                iframeFound = true;
-                
-                // Get the iframe element and try to access its content
-                const iframe = page.frameLocator(iframeSelector).first();
-                
-                // Try multiple checkbox selectors inside iframe
-                const checkboxSelectors = [
-                  'input[type="checkbox"]',
-                  '[role="checkbox"]',
-                  '.cb-lb',
-                  'label',
-                  'span[class*="checkbox"]',
-                  'div[class*="checkbox"]',
-                ];
-                
-                for (const cbSelector of checkboxSelectors) {
-                  try {
-                    const checkbox = iframe.locator(cbSelector).first();
-                    const isVisible = await checkbox.isVisible({ timeout: 2000 }).catch(() => false);
-                    
-                    if (isVisible) {
-                      console.log(`   ✅ Found checkbox in iframe with selector: ${cbSelector}, clicking...`);
-                      await checkbox.click({ force: true });
-                      await humanPause(2000, 3000);
-                      break;
-                    }
-                  } catch (e) {
-                    continue;
-                  }
-                }
-                
-                // Also try clicking the iframe itself
-                try {
-                  const iframeElement = page.locator(iframeSelector).first();
-                  await iframeElement.click({ force: true });
-                  await humanPause(1000, 2000);
-                } catch (e) {
-                  // Ignore
-                }
-                
-                break;
-              }
-            } catch (e) {
-              continue;
-            }
-          }
-          
-          if (iframeFound) {
-            // Wait for resolution after interacting
-            for (let i = 0; i < 20; i++) {
-              await humanPause(1000, 1500);
-              const newPageText = await page.textContent('body').catch(() => null) || '';
-              const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
-                                  newPageText.includes('Verify you are human') ||
-                                  newPageText.includes('Just a moment');
-              const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
-              
-              if (!stillBlocked || hasContent) {
-                console.log(`   ✅ Cloudflare challenge resolved via Turnstile!`);
-                challengeSolved = true;
-                break;
-              }
-            }
-            
-            if (challengeSolved) break;
-          }
-        }
-      } catch (e) {
-        // Iframe method failed
-        console.log(`   ⚠️  Iframe interaction failed:`, e);
-      }
-    }
-    
-    // Method 3: Wait for auto-resolution (datacenter IPs need longer - up to 60s)
-    if (!challengeSolved) {
-      console.log('   ⏳ Waiting for Cloudflare to auto-resolve (up to 60s for datacenter IPs)...');
-      for (let i = 0; i < 60; i++) {
-        await humanPause(1000, 1500);
-        const newPageText = await page.textContent('body').catch(() => null) || '';
-        const stillBlocked = newPageText.includes('Pardon Our Interruption') || 
-                            newPageText.includes('Verify you are human') ||
-                            newPageText.includes('Just a moment');
-        const hasContent = await page.locator('div.listing-card-v2').count().catch(() => 0) > 0;
-        
-        if (!stillBlocked || hasContent) {
-          console.log(`   ✅ Cloudflare auto-resolved after ${i + 1}s!`);
-          challengeSolved = true;
-          break;
-        }
-      }
-    }
-    
-    return challengeSolved;
-  } catch (error) {
-    console.log(`   ⚠️  Error handling Cloudflare challenge:`, error);
-    return false;
-  }
-}
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate() {
@@ -798,6 +607,17 @@ async function scrapePropertyGuruByDistrict() {
   }
   
 
+  // CRITICAL: Create a Flaresolverr session at the start to maintain cookies across all requests
+  // Sessions retain cookies until destroyed, which is essential for Cloudflare bypass across multiple pages
+  console.log('\n🔧 Creating Flaresolverr session for persistent cookie management...');
+  const flaresolverrSessionId = await createFlaresolverrSession();
+  if (flaresolverrSessionId) {
+    console.log(`✅ Flaresolverr session created: ${flaresolverrSessionId}`);
+    console.log('   ℹ️  This session will be reused for all requests to maintain Cloudflare cookies');
+  } else {
+    console.log('⚠️  Failed to create Flaresolverr session - will use temporary sessions (may cause cookie issues)');
+  }
+
   // Launch browser once for all districts
   // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
   const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
@@ -930,8 +750,8 @@ async function scrapePropertyGuruByDistrict() {
 
     overallStats.totalDistricts++;
 
-    // Track if Flaresolverr has been called for this district
-    let flaresolverrCalledForDistrict = false;
+    // Track if Flaresolverr has been called for search page (to avoid multiple calls)
+    let flaresolverrCalledForSearchPage = false;
 
     const page = await context.newPage();
 
@@ -966,9 +786,9 @@ async function scrapePropertyGuruByDistrict() {
         
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
-            // Try Flaresolverr first if this is the first attempt
-            // Use useSession: false to prevent multiple Chrome instances and OOM kills
-            if (navRetryCount === 0) {
+              // Try Flaresolverr first if this is the first attempt for search page
+              // Use useSession: false to prevent multiple Chrome instances and OOM kills
+              if (navRetryCount === 0 && !flaresolverrCalledForSearchPage) {
               // IMPORTANT: Navigate to PropertyGuru domain first to ensure cookies from storageState are active
               // This ensures login cookies are properly loaded before applying Flaresolverr cookies
               try {
@@ -979,7 +799,8 @@ async function scrapePropertyGuruByDistrict() {
                 console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
               }
               
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, false);
+              // Use the persistent session for search page
+              const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true, flaresolverrSessionId || undefined);
               
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies and user-agent from Flaresolverr
@@ -996,6 +817,7 @@ async function scrapePropertyGuruByDistrict() {
                 
                 // Small delay to ensure cookies are set before navigation
                 await humanPause(500, 1000);
+                flaresolverrCalledForSearchPage = true;
               }
             }
             
@@ -1147,7 +969,40 @@ async function scrapePropertyGuruByDistrict() {
           console.log(`🏠 [D${district} - ${i + 1}/${listingUrls.length}] Processing...`);
           console.log(`   🔗 ${listingUrl}`);
 
-          const listingPage = await context.newPage();
+          // CRITICAL: Use Flaresolverr on EACH listing URL to get URL-specific cookies
+          // Cloudflare cookies are URL-path specific - cookies from one listing URL don't work for another
+          // Using the same Flaresolverr session ensures cookies persist across requests
+          // We MUST use Flaresolverr on each listing URL to get fresh cookies for that specific URL
+          console.log(`   🔄 Solving Cloudflare for this listing URL...`);
+          
+          // Use Flaresolverr on the ACTUAL listing URL with the same session to maintain cookies
+          const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, true, flaresolverrSessionId || undefined);
+          
+          if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+            // Apply cookies to context BEFORE creating new page
+            await applyFlaresolverrToContext(context, flaresolverrResult);
+            
+            // Save fresh cookies periodically (every 5 listings to avoid too many writes)
+            if (listingsSinceLastCookieSave >= 5) {
+              try {
+                await context.storageState({ path: stateFilePath });
+                console.log(`   💾 Saved Cloudflare cookies`);
+                listingsSinceLastCookieSave = 0;
+              } catch (saveError) {
+                console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
+              }
+            } else {
+              listingsSinceLastCookieSave++;
+            }
+            
+            // Wait for cookies to be fully applied to context
+            await humanPause(2000, 3000);
+          } else {
+            console.log(`   ⚠️  Flaresolverr returned no cookies, continuing with existing cookies...`);
+          }
+
+          // NOW create the page - cookies are already applied to context and will be inherited
+          let listingPage = await context.newPage();
           
           // Declare timeout variable outside try block so it's accessible in finally
           let listingTimeout: NodeJS.Timeout | null = null;
@@ -1161,23 +1016,37 @@ async function scrapePropertyGuruByDistrict() {
               listingPage.close().catch(() => {});
             }, 120000); // 120 seconds for page processing
 
-            // Try loading listing with existing cookies first (no Flaresolverr call)
-            await listingPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            // Navigate directly to listing page - cookies are already in context and will be sent automatically
+            // Playwright automatically sends cookies with the first request, no need to navigate to domain root first
+            await listingPage.goto(listingUrl, { 
+              waitUntil: 'domcontentloaded', // Use domcontentloaded - faster and more reliable than networkidle
+              timeout: 60000,
+              referer: 'https://www.propertyguru.com.sg/' // Add referer to make navigation look natural
+            });
             
             // Check if timed out during navigation
             if (listingTimedOut) {
               throw new Error('Listing navigation timed out');
             }
             
-            await humanPause(600, 1400);
+            // Wait for page to fully load and any Cloudflare checks to complete
+            // Give time for Cloudflare JavaScript to verify cookies (usually 2-5 seconds)
+            await humanPause(3000, 5000);
             
-            if (listingTimedOut) {
-              throw new Error('Listing processing timed out');
+            // Try to wait for key content elements to appear (more reliable than networkidle)
+            // This ensures the page actually loaded content, not just Cloudflare challenge
+            try {
+              await Promise.race([
+                listingPage.waitForSelector('div.property-snapshot-section, div.agent-section-desktop', { timeout: 15000 }).catch(() => null),
+                listingPage.waitForSelector('body', { timeout: 5000 }).catch(() => null) // Fallback to body
+              ]);
+            } catch {
+              // Continue anyway - page might have loaded or selectors might be different
             }
-
-            // Scroll down
+            
+            // Scroll down to trigger lazy-loaded content and ensure all scripts execute
             await listingPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-            await humanPause(500, 1000);
+            await humanPause(2000, 3000); // Give time for content to load after scroll
             
             if (listingTimedOut) {
               throw new Error('Listing processing timed out');
@@ -1193,216 +1062,27 @@ async function scrapePropertyGuruByDistrict() {
             // Define selectors for reuse
             const ceaSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-header > a > div.details-wrapper > span > div';
             const otherWaysButtonSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-body > div > div.extended-view-root > div.actionable-link.contact-button-root.extend-view-trigger-point';
-
-            // Check for Cloudflare on listing page - but verify if content actually loaded
+            
+            // Check if we have actual property content FIRST (more reliable than checking for Cloudflare text)
+            // Property content means the page loaded successfully, regardless of Cloudflare text in comments/cache
             const listingPageText = await listingPage.textContent('body').catch(() => null) || '';
-            const hasCloudflareText = listingPageText.includes('Pardon Our Interruption') || 
-                                      listingPageText.includes('Verify you are human') ||
-                                      listingPageText.includes('Enable JavaScript and cookies');
+            const hasPropertyContent = title && title !== 'Untitled' && title.length > 10 && 
+                                      (priceText || listingPageText.includes('Bed') || listingPageText.includes('Bath') || listingPageText.length > 5000);
             
-            // Check if we have actual property content (title, price, etc.)
-            const hasPropertyContent = title && title !== 'Untitled' && title.length > 10;
+            // Only check for Cloudflare if we DON'T have property content
+            // If content is available, ignore Cloudflare text (might be in comments, old cache, or transient)
+            const hasCloudflareText = !hasPropertyContent && (
+              listingPageText.includes('Pardon Our Interruption') || 
+              listingPageText.includes('Verify you are human') ||
+              listingPageText.includes('Enable JavaScript and cookies') ||
+              (listingPageText.includes('Just a moment') && listingPageText.length < 1000) // Short page = challenge page
+            );
             
-            // If Cloudflare blocks AND we haven't called Flaresolverr for this district, try solving it
-            if (hasCloudflareText && !hasPropertyContent && !flaresolverrCalledForDistrict) {
-              console.log(`   🛡️  Cloudflare detected - calling Flaresolverr to solve...`);
-              
-              // Close current page before calling Flaresolverr
-              await listingPage.close();
-              if (listingTimeout) {
-                clearTimeout(listingTimeout);
-              }
-              
-              // Call Flaresolverr to solve Cloudflare
-              const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, false);
-              
-              if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-                // Apply cookies and user-agent from Flaresolverr (preserves login cookies)
-                await applyFlaresolverrToContext(context, flaresolverrResult);
-                
-                // Save fresh Cloudflare cookies immediately
-                try {
-                  await context.storageState({ path: stateFilePath });
-                  console.log(`   💾 Saved fresh Cloudflare cookies to storage state`);
-                  listingsSinceLastCookieSave = 0; // Reset counter
-                } catch (saveError) {
-                  console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
-                }
-                
-                flaresolverrCalledForDistrict = true; // Mark as called for this district
-                await humanPause(1000, 2000);
-                
-                // Retry loading the listing with fresh cookies
-                const retryPage = await context.newPage();
-                try {
-                  await retryPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-                  await humanPause(600, 1400);
-                  
-                  // Re-check for Cloudflare after retry
-                  const retryPageText = await retryPage.textContent('body').catch(() => null) || '';
-                  const retryTitle = await retryPage.title().catch(() => 'Untitled');
-                  const retryHasCloudflare = retryPageText.includes('Pardon Our Interruption') || 
-                                            retryPageText.includes('Verify you are human');
-                  const retryHasContent = retryTitle && retryTitle !== 'Untitled' && retryTitle.length > 10;
-                  
-                  if (retryHasCloudflare && !retryHasContent) {
-                    console.log(`   ❌ Cloudflare still blocking after Flaresolverr. Skipping listing...`);
-                    overallStats.totalErrors++;
-                    await retryPage.close();
-                    continue;
-                  }
-                  
-                  // Success - use retryPage for processing
-                  await retryPage.close();
-                  // Recreate listing page and continue processing
-                  const newListingPage = await context.newPage();
-                  await newListingPage.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-                  await humanPause(600, 1400);
-                  
-                  // Update title and other variables for the new page
-                  const newTitle = await newListingPage.title().catch(() => 'Untitled');
-                  const newPriceText = await newListingPage.locator(priceSelector).textContent().catch(() => '');
-                  const newPrice = newPriceText ? parsePrice(newPriceText) : undefined;
-                  
-                  // Continue with extraction using newListingPage
-                  const agentName = await newListingPage.locator('.agent-section-desktop .card-header .details-wrapper .agent-name, div.agent-info div.details-wrapper div:first-child').first().textContent().catch(() => null);
-                  const propertyDetails = await extractPropertyDetails(newListingPage, newTitle);
-                  const agency = await newListingPage.locator('.agent-section-desktop .card-header .details-wrapper .agency-name, [class*="agency"]').first().textContent().catch(() => null);
-                  const ceaText = await newListingPage.locator(ceaSelector).textContent().catch(() => null);
-                  
-                  // Extract phone number
-                  let agentPhone = null;
-                  try {
-                    await humanPause(1000, 1500);
-                    const directPhoneLink = await newListingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 2000 }).catch(() => null);
-                    if (directPhoneLink) {
-                      agentPhone = directPhoneLink;
-                    } else {
-                      const otherWaysButton = newListingPage.locator(otherWaysButtonSelector).first();
-                      const otherWaysVisible = await otherWaysButton.isVisible({ timeout: 5000 }).catch(() => false);
-                      if (otherWaysVisible) {
-                        await otherWaysButton.click();
-                        await humanPause(1500, 2000);
-                        const viewPhoneButton = newListingPage.locator('text=View Phone Number').first();
-                        const viewPhoneVisible = await viewPhoneButton.isVisible({ timeout: 5000 }).catch(() => false);
-                        if (viewPhoneVisible) {
-                          await viewPhoneButton.click();
-                          await humanPause(1500, 2500);
-                          agentPhone = await newListingPage.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
-                        }
-                      }
-                    }
-                  } catch (_error) {
-                    // Phone extraction failed
-                  }
-                  
-                  // Clean phone number
-                  let cleanPhone = '';
-                  if (agentPhone) {
-                    cleanPhone = agentPhone.replace(/[^\d]/g, '');
-                    if (cleanPhone && !cleanPhone.startsWith('65')) {
-                      if (cleanPhone.length === 8) {
-                        cleanPhone = '65' + cleanPhone;
-                      }
-                    }
-                  }
-                  
-                  // Skip if no agent name
-                  if (!agentName) {
-                    console.log(`   ⚠️  Skipping - missing agent name`);
-                    overallStats.totalErrors++;
-                    await newListingPage.close();
-                    continue;
-                  }
-                  
-                  // Check for phone number
-                  if (!cleanPhone) {
-                    console.log(`   ⚠️  No phone number found - SKIPPING to maintain data integrity`);
-                    consecutiveNoPhone++;
-                    overallStats.totalSkippedNoPhone++;
-                    
-                    // Update stats in lock file immediately
-                    jobStatus.stats = overallStats;
-                    jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
-                    fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                    
-                    if (consecutiveNoPhone >= MAX_CONSECUTIVE_NO_PHONE) {
-                      console.log(`\n🚨 ${consecutiveNoPhone} consecutive listings without phone numbers!`);
-                      console.log(`🔄 Authentication may have expired. Triggering re-login...\n`);
-                      jobStatus.statusMessage = '🔄 Re-authenticating...';
-                      fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                      await reAuthenticate();
-                      consecutiveNoPhone = 0;
-                    }
-                    
-                    await newListingPage.close();
-                    continue;
-                  }
-                  
-                  consecutiveNoPhone = 0; // Reset counter on success
-                  
-                  // Upsert data
-                  await upsertAgentAndListing({
-                    agent: {
-                      name: agentName.trim(),
-                      phone: cleanPhone,
-                      agency: agency?.trim(),
-                      cea_reg_no: ceaText?.trim(),
-                      source: 'propertyguru',
-                      source_url: listingUrl,
-                    },
-                    listing: {
-                      portal: 'propertyguru',
-                      url: listingUrl,
-                      title: newTitle?.trim(),
-                      price: newPrice,
-                      district: district || undefined,
-                      property_type: propertyDetails.property_type,
-                      beds: propertyDetails.beds,
-                      baths: propertyDetails.baths,
-                      size_sqft: propertyDetails.size_sqft,
-                      price_psf: propertyDetails.price_psf,
-                      year_built: propertyDetails.year_built,
-                      tenure: propertyDetails.tenure,
-                      address: propertyDetails.address,
-                    }
-                  });
-                  
-                  console.log(`✅ Saved: ${agentName} - ${cleanPhone}`);
-                  overallStats.totalSuccess++;
-                  
-                  // Check if we've reached max listings
-                  if (maxListings && overallStats.totalSuccess >= maxListings) {
-                    console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
-                    await newListingPage.close();
-                    shouldStop = true;
-                    break;
-                  }
-                  
-                  await newListingPage.close();
-                  continue; // Skip to next listing
-                } catch (retryError) {
-                  console.log(`   ⚠️  Retry failed: ${retryError}`);
-                  await retryPage.close();
-                  overallStats.totalErrors++;
-                  // Update stats in lock file immediately
-                  jobStatus.stats = overallStats;
-                  jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
-                  fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                  continue;
-                }
-              } else {
-                console.log(`   ❌ Flaresolverr failed to solve Cloudflare. Skipping listing...`);
-                overallStats.totalErrors++;
-                // Update stats in lock file immediately
-                jobStatus.stats = overallStats;
-                jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
-                fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                continue;
-              }
-            } else if (hasCloudflareText && !hasPropertyContent) {
-              // Cloudflare blocks but we already tried Flaresolverr - skip
-              console.log(`   🛡️  Cloudflare detected (already tried Flaresolverr). Skipping...`);
+            // If Cloudflare blocks AND we don't have content, skip this listing
+            // Note: We already use Flaresolverr proactively on each listing URL, so this should rarely happen
+            // If it does happen, it means Flaresolverr failed or Cloudflare detected something suspicious
+            if (hasCloudflareText) {
+              console.log(`   🛡️  Cloudflare detected on listing page (despite proactive refresh). Skipping...`);
               overallStats.totalErrors++;
               // Update stats in lock file immediately
               jobStatus.stats = overallStats;
@@ -1413,10 +1093,9 @@ async function scrapePropertyGuruByDistrict() {
                 clearTimeout(listingTimeout);
               }
               continue;
-            } else if (hasCloudflareText && hasPropertyContent) {
-              // Cloudflare warning but content loaded - continue
-              console.log(`   ⚠️  Cloudflare warning on listing but content available. Continuing...`);
             }
+            // If we reach here, content loaded successfully (hasPropertyContent is true)
+            // Cloudflare text might appear in comments or old cached content, but if content loads, we're fine
 
             // Extract agent name
             const agentName = await listingPage.locator('.agent-section-desktop .card-header .details-wrapper .agent-name, div.agent-info div.details-wrapper div:first-child').first().textContent().catch(() => null);

@@ -65,27 +65,31 @@ export async function createFlaresolverrSession(): Promise<string | null> {
 
 /**
  * Solve Cloudflare challenge using Flaresolverr
- * NOTE: Sessions disabled by default to prevent Chrome OOM kills (see commit 8c60007)
- * Flaresolverr creates temporary sessions automatically and cleans them up
+ * @param url - The URL to solve Cloudflare for
+ * @param useSession - Whether to use a persistent session (recommended for multiple requests)
+ * @param sessionId - Optional session ID to use (if provided, will use this session instead of creating new one)
  */
 export async function solveCloudflareWithFlaresolverr(
   url: string, 
-  useSession: boolean = false // Default to false - prevents multiple Chrome instances and OOM kills
+  useSession: boolean = false, // Default to false for backward compatibility
+  sessionId?: string // Optional: pass existing session ID
 ): Promise<FlaresolverrResult | null> {
   try {
     console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
     
-    // Skip session creation by default - Flaresolverr creates temporary sessions automatically
-    // Sessions can cause Chrome connection issues and OOM kills (see CHROME_PROCESS_OPTIMIZATION.md)
-    let session = null;
-    if (useSession) {
+    // Use provided session ID, or create/get session if useSession is true
+    let session = sessionId || null;
+    if (useSession && !session) {
       session = flaresolverrSession || await createFlaresolverrSession();
       if (session) {
         flaresolverrSession = session;
+        console.log(`   🔗 Using Flaresolverr session: ${session}`);
       } else {
         // If session creation fails, continue without session (Flaresolverr will create temporary session)
         console.log(`   ℹ️  Continuing without persistent session (Flaresolverr will use temporary session)`);
       }
+    } else if (session) {
+      console.log(`   🔗 Using provided Flaresolverr session: ${session}`);
     }
     
     const requestBody: any = {
@@ -235,27 +239,118 @@ export async function applyFlaresolverrToContext(
   }
   
   // Apply cookies from Flaresolverr (these will overwrite Cloudflare cookies)
-  const flaresolverrCookies = flaresolverrResult.cookies.map((cookie: any) => ({
-    name: cookie.name,
-    value: cookie.value,
-    domain: cookie.domain || defaultDomain || '.propertyguru.com.sg',
-    path: cookie.path || '/',
-    expires: cookie.expires ? cookie.expires : undefined,
-    httpOnly: cookie.httpOnly || false,
-    secure: cookie.secure !== false, // Default to true for HTTPS sites
-    sameSite: (cookie.sameSite === 'None' || cookie.sameSite === 'Lax' || cookie.sameSite === 'Strict') 
-      ? cookie.sameSite as 'None' | 'Lax' | 'Strict'
-      : 'Lax' as const,
-  }));
-  
-  await context.addCookies(flaresolverrCookies);
-  
-  // Update user-agent to match Flaresolverr's browser exactly
-  await context.setExtraHTTPHeaders({
-    'User-Agent': flaresolverrResult.userAgent || FLARESOLVERR_UA,
+  // IMPORTANT: Preserve original domain from Flaresolverr - don't override unless missing
+  // Some cookies might be domain-specific (www.propertyguru.com.sg vs .propertyguru.com.sg)
+  const flaresolverrCookies = flaresolverrResult.cookies.map((cookie: any) => {
+    // Use original domain if present, otherwise use default
+    let domain = cookie.domain;
+    if (!domain) {
+      domain = defaultDomain || '.propertyguru.com.sg';
+    } else {
+      // Normalize domain - ensure it starts with . for subdomain matching
+      if (!domain.startsWith('.') && !domain.startsWith('www.')) {
+        domain = '.' + domain;
+      }
+    }
+    
+    return {
+      name: cookie.name,
+      value: cookie.value,
+      domain: domain,
+      path: cookie.path || '/',
+      expires: cookie.expires ? cookie.expires : undefined,
+      httpOnly: cookie.httpOnly || false,
+      secure: cookie.secure !== false, // Default to true for HTTPS sites
+      sameSite: (cookie.sameSite === 'None' || cookie.sameSite === 'Lax' || cookie.sameSite === 'Strict') 
+        ? cookie.sameSite as 'None' | 'Lax' | 'Strict'
+        : 'Lax' as const,
+    };
   });
   
-  console.log(`   ✅ Applied ${flaresolverrCookies.length} cookies from Flaresolverr`);
-  console.log(`   ✅ User-Agent matched to Flaresolverr's browser`);
+  try {
+    await context.addCookies(flaresolverrCookies);
+    // Silent success - since we're calling Flaresolverr on every listing, verbose logging is too noisy
+  } catch (cookieError: any) {
+    console.log(`   ⚠️  Error applying some cookies: ${cookieError.message}`);
+    // Try applying cookies one by one to see which ones fail
+    let successCount = 0;
+    for (const cookie of flaresolverrCookies) {
+      try {
+        await context.addCookies([cookie]);
+        successCount++;
+      } catch (err: any) {
+        console.log(`      ❌ Failed to apply ${cookie.name}: ${err.message}`);
+      }
+    }
+    console.log(`   ✅ Applied ${successCount}/${flaresolverrCookies.length} cookies`);
+  }
+  
+  // NOTE: User-Agent is already set in context creation (FLARESOLVERR_UA)
+  // Don't override via setExtraHTTPHeaders as it may conflict with playwright-ghost stealth plugins
+  // The context was created with FLARESOLVERR_UA, so it's already matching Flaresolverr's browser
+  
+  // Only verify and log if Cloudflare cookies are missing (this is important to know)
+  const verifyCookies = await context.cookies();
+  const cfCookies = verifyCookies.filter((c: any) => 
+    ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
+  );
+  
+  // Only log warning if Cloudflare cookies are missing (this is important to know)
+  if (cfCookies.length === 0) {
+    console.log(`   ⚠️  Warning: No Cloudflare cookies found after applying!`);
+  }
+}
+
+/**
+ * Check if Cloudflare cookies are expired or about to expire
+ * Returns true if cookies need refresh (expired or expiring within 5 minutes)
+ */
+export async function shouldRefreshCloudflareCookies(context: any): Promise<boolean> {
+  try {
+    const cookies = await context.cookies();
+    const cloudflareCookieNames = ['__cf_bm', 'cf_clearance', '__cfduid'];
+    
+    // Check if we have any Cloudflare cookies
+    const cfCookies = cookies.filter((cookie: any) => 
+      cloudflareCookieNames.some(cfName => cookie.name.toLowerCase().includes(cfName.toLowerCase()))
+    );
+    
+    if (cfCookies.length === 0) {
+      // No Cloudflare cookies - need to get them
+      return true;
+    }
+    
+    // Check if any Cloudflare cookie is expired or expiring soon (within 5 minutes)
+    const now = Date.now() / 1000; // Current time in seconds
+    const refreshThreshold = 5 * 60; // 5 minutes in seconds
+    
+    for (const cookie of cfCookies) {
+      if (!cookie.expires || cookie.expires === -1) {
+        // Session cookie (no expiration) - assume it's valid
+        continue;
+      }
+      
+      const timeUntilExpiry = cookie.expires - now;
+      
+      if (timeUntilExpiry <= 0) {
+        // Cookie expired
+        console.log(`   ⏰ Cloudflare cookie ${cookie.name} expired (expired ${Math.abs(timeUntilExpiry)}s ago)`);
+        return true;
+      }
+      
+      if (timeUntilExpiry <= refreshThreshold) {
+        // Cookie expiring soon
+        console.log(`   ⏰ Cloudflare cookie ${cookie.name} expiring soon (${Math.floor(timeUntilExpiry / 60)}m remaining)`);
+        return true;
+      }
+    }
+    
+    // All cookies are valid
+    return false;
+  } catch (error) {
+    console.log(`   ⚠️  Error checking cookie expiration: ${error}`);
+    // If we can't check, assume we need refresh (better safe than sorry)
+    return true;
+  }
 }
 

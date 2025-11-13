@@ -1,4 +1,5 @@
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-ghost';
+import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr.js';
@@ -10,10 +11,23 @@ async function authenticatePropertyGuru() {
   const isAutomated = email && password;
 
   // Detect if we should use headless mode
-  // Use headless if: DISPLAY is not set, or explicitly set HEADLESS env var, or running in CI/server environment
+  // Priority: HEADLESS env var > DISPLAY > CI/production defaults
   const hasDisplay = !!process.env.DISPLAY;
   const forceHeadless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
-  const isHeadless = !hasDisplay || forceHeadless || process.env.CI === 'true' || process.env.NODE_ENV === 'production';
+  const forceHeaded = process.env.HEADLESS === 'false' || process.env.HEADLESS === '0';
+  
+  // If explicitly set to headed, use headed mode
+  // Otherwise, if explicitly set to headless, use headless mode
+  // Otherwise, check DISPLAY and environment
+  let isHeadless: boolean;
+  if (forceHeaded) {
+    isHeadless = false;
+  } else if (forceHeadless) {
+    isHeadless = true;
+  } else {
+    // Default: headless if no DISPLAY or in CI/production
+    isHeadless = !hasDisplay || process.env.CI === 'true' || process.env.NODE_ENV === 'production';
+  }
   
   if (isAutomated) {
     console.log(`🚀 Launching Chromium browser for automated login (${isHeadless ? 'headless' : 'headed'} mode)...`);
@@ -26,12 +40,26 @@ async function authenticatePropertyGuru() {
     console.log('⚠️  DISPLAY not set - using headless mode. Set DISPLAY=:99 if Xvfb is running.');
   }
   
+  // Use playwright-ghost with recommended plugins for best stealth (same as main scraper)
   const browser = await chromium.launch({
     headless: isHeadless,
+    plugins: plugins.recommended({
+      humanize: {
+        click: { delay: { min: 200, max: 600 } },
+        cursor: false,
+        dialog: { delay: { min: 800, max: 2000 } }
+      }
+    }),
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
       '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-site-isolation-trials',
+      // macOS headless mode requires --disable-gpu
+      ...(isHeadless ? ['--disable-gpu'] : []),
     ]
   });
 
@@ -59,45 +87,12 @@ async function authenticatePropertyGuru() {
     }
   });
 
-  // Enhanced stealth script matching EdgeProp scraper (works on EC2)
+  // playwright-ghost handles most stealth automatically via plugins
+  // Just add a minimal script to ensure webdriver is undefined (plugins handle the rest)
   await context.addInitScript(() => {
-    // Override the navigator.webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-    
-    // Mock chrome object
-    (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
-      runtime: {},
-    };
-    
-    // Mock permissions
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
-      (parameters as PermissionDescriptor & { name: string }).name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission } as PermissionStatus) :
-        originalQuery(parameters)
-    );
-    
-    // Mock plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
-    });
-    
-    // Mock mimeTypes
-    Object.defineProperty(navigator, 'mimeTypes', {
-      get: () => [1, 2, 3, 4, 5],
-    });
-    
-    // Override getBattery
-    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
-      (navigator as any).getBattery = () => Promise.resolve({
-        charging: true,
-        chargingTime: 0,
-        dischargingTime: Infinity,
-        level: 1
-      });
-    }
   });
 
   const page = await context.newPage();
@@ -153,27 +148,57 @@ async function authenticatePropertyGuru() {
     // Wait for login form to load
     await page.waitForTimeout(2000);
     
-    // Step 1: Fill in email
+    // Step 1: Fill in email with human-like typing
     console.log('   📧 Entering email...');
-    await page.fill('input[type="email"], input[name="email"], input[placeholder*="email" i]', email);
+    const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').first();
+    await emailInput.click();
+    await humanPause(200, 400);
+    await emailInput.fill(email, { delay: 50 + Math.random() * 50 }); // Human-like typing speed
     console.log('   ✅ Email entered');
-    await page.waitForTimeout(800);
+    await humanPause(500, 1000);
     
     // Click Continue button to go to password page
     console.log('   🔄 Clicking Continue...');
-    await page.click('button:has-text("Continue"), button[type="submit"]');
+    const continueButton = page.locator('button:has-text("Continue"), button[type="submit"]').first();
+    await continueButton.click();
     console.log('   ⏳ Waiting for password page...');
-    await page.waitForTimeout(3000);
     
-    // Step 2: Fill in password
+    // Wait for password field with longer timeout and better error handling
+    try {
+      await page.waitForSelector('input[type="password"], input[name="password"]', { 
+        timeout: 60000, // Increased from default 30s to 60s
+        state: 'visible' 
+      });
+      await page.waitForTimeout(1000); // Small delay after field appears
+    } catch (error) {
+      console.log('   ⚠️  Password field not found, checking page state...');
+      const pageContent = await page.textContent('body').catch(() => '') || '';
+      const pageUrl = page.url();
+      console.log(`   📄 Current URL: ${pageUrl}`);
+      console.log(`   📄 Page content length: ${pageContent.length}`);
+      
+      // Check if Cloudflare challenge is present
+      if (pageContent.includes('Checking your browser') || pageContent.includes('Just a moment')) {
+        console.log('   🛡️  Cloudflare challenge detected on password page!');
+        throw new Error('Cloudflare challenge detected - page not loading properly');
+      }
+      
+      throw error; // Re-throw if it's a different error
+    }
+    
+    // Step 2: Fill in password with human-like typing
     console.log('   🔑 Entering password...');
-    await page.fill('input[type="password"], input[name="password"]', password);
+    const passwordInput = page.locator('input[type="password"], input[name="password"]').first();
+    await passwordInput.click();
+    await humanPause(200, 400);
+    await passwordInput.fill(password, { delay: 50 + Math.random() * 50 }); // Human-like typing speed
     console.log('   ✅ Password entered');
-    await page.waitForTimeout(800);
+    await humanPause(500, 1000);
     
     // Click login/submit button
     console.log('   🔄 Submitting login...');
-    await page.click('button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")');
+    const submitButton = page.locator('button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")').first();
+    await submitButton.click();
     console.log('   ⏳ Waiting for login to complete...');
     
   } else {

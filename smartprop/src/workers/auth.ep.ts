@@ -5,10 +5,11 @@ import path from 'path';
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-ghost';
+import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
 import { CHROME_UA, humanPause } from './stealth';
-import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext } from './flaresolverr';
 
 async function authenticateEdgeProp() {
   // Get credentials from environment variables
@@ -20,10 +21,23 @@ async function authenticateEdgeProp() {
   }
   
   // Detect if we should use headless mode
-  // Use headless if: DISPLAY is not set, or explicitly set HEADLESS env var, or running in CI/server environment
+  // Priority: HEADLESS env var > DISPLAY > CI/production defaults
   const hasDisplay = !!process.env.DISPLAY;
   const forceHeadless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
-  const isHeadless = !hasDisplay || forceHeadless || process.env.CI === 'true' || process.env.NODE_ENV === 'production';
+  const forceHeaded = process.env.HEADLESS === 'false' || process.env.HEADLESS === '0';
+  
+  // If explicitly set to headed, use headed mode
+  // Otherwise, if explicitly set to headless, use headless mode
+  // Otherwise, check DISPLAY and environment
+  let isHeadless: boolean;
+  if (forceHeaded) {
+    isHeadless = false;
+  } else if (forceHeadless) {
+    isHeadless = true;
+  } else {
+    // Default: headless if no DISPLAY or in CI/production
+    isHeadless = !hasDisplay || process.env.CI === 'true' || process.env.NODE_ENV === 'production';
+  }
   
   console.log(`🚀 Launching Chromium browser for automated login (${isHeadless ? 'headless' : 'headed'} mode)...`);
   console.log(`📧 Logging in as: ${email}`);
@@ -32,17 +46,31 @@ async function authenticateEdgeProp() {
     console.log('⚠️  DISPLAY not set - using headless mode. Set DISPLAY=:99 if Xvfb is running.');
   }
   
+  // Use playwright-ghost with recommended plugins for best stealth (same as main scraper)
   const browser = await chromium.launch({
     headless: isHeadless,
+    plugins: plugins.recommended({
+      humanize: {
+        click: { delay: { min: 200, max: 600 } },
+        cursor: false,
+        dialog: { delay: { min: 800, max: 2000 } }
+      }
+    }),
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
       '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-site-isolation-trials',
+      // macOS headless mode requires --disable-gpu
+      ...(isHeadless ? ['--disable-gpu'] : []),
     ]
   });
 
   const context = await browser.newContext({
-    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
+    // Don't set userAgent - let playwright-ghost handle it for better stealth
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -64,25 +92,12 @@ async function authenticateEdgeProp() {
     }
   });
 
-  // Remove automation indicators
+  // playwright-ghost handles most stealth automatically via plugins
+  // Just add a minimal script to ensure webdriver is undefined (plugins handle the rest)
   await context.addInitScript(() => {
-    // Override the navigator.webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-    
-    // Mock chrome object
-    (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
-      runtime: {},
-    };
-    
-    // Mock permissions
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
-      (parameters as PermissionDescriptor & { name: string }).name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission } as PermissionStatus) :
-        originalQuery(parameters)
-    );
   });
 
   const page = await context.newPage();
@@ -114,8 +129,28 @@ async function authenticateEdgeProp() {
 
     // Navigate to EdgeProp homepage
     console.log('📄 Navigating to EdgeProp homepage...');
-    await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await humanPause(3000, 5000);
+    try {
+      await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      
+      // Wait for page to be interactive - check for body or main content
+      await Promise.race([
+        page.waitForSelector('body', { state: 'visible', timeout: 10000 }).catch(() => null),
+        page.waitForSelector('main, [role="main"], header', { timeout: 10000 }).catch(() => null),
+        new Promise(resolve => setTimeout(resolve, 5000)) // Fallback timeout
+      ]);
+      
+      await humanPause(2000, 3000);
+    } catch (error) {
+      console.error(`⚠️  Navigation timeout, but continuing... Error: ${error instanceof Error ? error.message : String(error)}`);
+      // Try to check if page loaded anyway
+      const currentUrl = page.url();
+      if (currentUrl.includes('edgeprop.sg')) {
+        console.log('✅ Page appears to have loaded (URL check passed)');
+        await humanPause(2000, 3000);
+      } else {
+        throw error;
+      }
+    }
 
     // Check if already logged in
     const bookmarksLink = page.locator('[href="/bookmarks"]');
@@ -380,11 +415,39 @@ async function authenticateEdgeProp() {
   // Save the storage state - navigate to homepage first to ensure all cookies are set
   console.log('💾 Saving authentication state...');
   
-  // Navigate to homepage to ensure all cookies are properly set
-  // Use 'domcontentloaded' instead of 'networkidle' to avoid timeout issues
-  // EdgeProp may have long-running connections that never finish
-  await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await humanPause(2000, 3000);
+  // Check if we're already on the homepage - if so, skip navigation
+  const currentUrl = page.url();
+  if (!currentUrl.includes('edgeprop.sg') || currentUrl.includes('/user/login')) {
+    // Navigate to homepage to ensure all cookies are properly set
+    // Use 'domcontentloaded' instead of 'networkidle' to avoid timeout issues
+    // EdgeProp may have long-running connections that never finish
+    try {
+      await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      
+      // Wait for page to be interactive
+      await Promise.race([
+        page.waitForSelector('body', { state: 'visible', timeout: 10000 }).catch(() => null),
+        page.waitForSelector('main, [role="main"], header', { timeout: 10000 }).catch(() => null),
+        new Promise(resolve => setTimeout(resolve, 5000)) // Fallback timeout
+      ]);
+      
+      await humanPause(2000, 3000);
+    } catch (error) {
+      console.error(`⚠️  Final navigation timeout, but continuing to save state... Error: ${error instanceof Error ? error.message : String(error)}`);
+      // Check if we're on a valid page anyway
+      const finalUrl = page.url();
+      if (finalUrl.includes('edgeprop.sg') && !finalUrl.includes('/user/login')) {
+        console.log('✅ Page appears to have loaded (URL check passed)');
+        await humanPause(2000, 3000);
+      } else {
+        // If navigation failed but we're logged in, still try to save state
+        console.log('⚠️  Navigation failed, but attempting to save state anyway...');
+      }
+    }
+  } else {
+    console.log('✅ Already on homepage, skipping navigation');
+    await humanPause(1000, 2000);
+  }
   
   // Verify we're still logged in before saving - check multiple indicators
   const finalBookmarkCheck = page.locator('[href*="/bookmarks"], a:has-text("Bookmarks")').first();

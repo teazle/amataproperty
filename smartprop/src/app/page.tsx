@@ -4,12 +4,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { BorderBeam } from "@/components/ui/border-beam";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 export default function Home() {
   const buttonRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const sectionRef = useRef<HTMLElement | null>(null);
-  const [overlayStyle, setOverlayStyle] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
+  // No dynamic overlay positioning needed when using a centered, max-width media frame
 
   useEffect(() => {
     const btns = buttonRefs.current.filter(Boolean) as HTMLAnchorElement[];
@@ -62,46 +62,7 @@ export default function Home() {
     };
   }, []);
 
-  // Keep overlay aligned with the video's black box across breakpoints
-  useEffect(() => {
-    const videoAspectRatio = 1.335187; // width / height of hero.mp4 (derived from earlier measurements)
-    const overlayLeftRatio = 0.184;    // black box left offset as fraction of video width
-    const overlayWidthRatio = 0.5321;  // black box width as fraction of video width (862 / 1620)
-
-    const compute = () => {
-      const section = sectionRef.current;
-      if (!section) return;
-      const width = section.clientWidth;
-      const height = section.clientHeight;
-      // For object-cover: displayed video width is the max of container width and height*aspect
-      const displayedVideoWidth = Math.max(width, height * videoAspectRatio);
-      const videoLeft = (width - displayedVideoWidth) / 2;
-      // Base overlay size from video width using measured ratios
-      let overlayWidth = overlayWidthRatio * displayedVideoWidth;
-      let left = videoLeft + overlayLeftRatio * displayedVideoWidth;
-      // Keep overlay height within the section height (avoid overflow on ultrawide)
-      const overlayAspect = 600 / 862; // height / width
-      const expectedHeight = overlayWidth * overlayAspect;
-      const maxHeight = height; // bottom anchored; keep within section
-      if (expectedHeight > maxHeight) {
-        const scale = maxHeight / expectedHeight;
-        overlayWidth = overlayWidth * scale;
-        // left anchors to left boundary of black box; keep same left edge
-        // no change to 'left' since it represents the left boundary position
-      }
-      setOverlayStyle({ left: left, width: overlayWidth });
-    };
-
-    compute();
-    const onResize = () => compute();
-    window.addEventListener('resize', onResize);
-    const observer = new ResizeObserver(() => compute());
-    if (sectionRef.current) observer.observe(sectionRef.current);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      observer.disconnect();
-    };
-  }, []);
+  // No dynamic overlay positioning needed when using a centered, max-width media frame
 
   return (
     <div className="min-h-screen bg-background font-sans antialiased">
@@ -127,40 +88,42 @@ export default function Home() {
       <main>
         {/* Hero Section */}
         <section ref={sectionRef} className="relative h-[1438px] overflow-hidden bg-background pt-[184px] px-safe lg:h-[1078px] lg:pt-28 md:h-auto md:pt-24 sm:pt-[92px]">
-          {/* Full-bleed media wrapper (video + overlay image together) */}
-          <div className="absolute inset-0 z-0 overflow-hidden">
-            <video
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="absolute inset-0 h-full w-full object-cover"
-            >
-              <source src="/hero.mp4" type="video/mp4" />
-            </video>
+          {/* Centered media frame (adds black side gutters on ultrawide) */}
+          <div className="absolute inset-0 z-0 flex items-end justify-center">
+            <div className="relative w-full max-w-[1620px] aspect-[1.335187]">
+              <video
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="absolute inset-0 h-full w-full object-contain"
+              >
+                <source src="/hero.mp4" type="video/mp4" />
+              </video>
 
-            {/* Overlay image positioned relative to the video using percentages for responsiveness */}
-            <div className="absolute bottom-0 z-10" style={{ left: overlayStyle.left, width: overlayStyle.width, aspectRatio: '862 / 600' }}>
-              <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full h-full">
-                <BorderBeam
-                  size={100}
-                  duration={12}
-                  borderWidth={2}
-                  colorFrom="#ff00aa"
-                  colorTo="#00FFF1"
-                  delay={0}
-                />
-                <Image
-                  src="/hero-illustration.7100a376.jpg"
-                  alt="Hero Image"
-                  width={2048}
-                  height={1138}
-                  className="w-full h-full object-contain object-top"
-                  priority
-                />
+              {/* Overlay image positioned by ratios within the frame */}
+              <div className="absolute bottom-0 left-[18.4%] w-[53.21%]">
+                <div className="relative rounded-lg overflow-hidden shadow-2xl bg-black/30 backdrop-blur-md border border-transparent w-full" style={{ aspectRatio: '862 / 600' }}>
+                  <BorderBeam
+                    size={100}
+                    duration={12}
+                    borderWidth={2}
+                    colorFrom="#ff00aa"
+                    colorTo="#00FFF1"
+                    delay={0}
+                  />
+                  <Image
+                    src="/hero-illustration.7100a376.jpg"
+                    alt="Hero Image"
+                    width={2048}
+                    height={1138}
+                    className="w-full h-full object-contain object-top"
+                    priority
+                  />
 
-                {/* Glow effect */}
-                <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
+                  {/* Glow effect */}
+                  <div className="absolute inset-0 rounded-lg opacity-30 blur-xl bg-gradient-to-br from-primary/20 via-transparent to-primary/20"></div>
+                </div>
               </div>
             </div>
           </div>

@@ -1,0 +1,82 @@
+{
+  "mcpServers": {
+    "n8n-mcp": {
+      "command": "npx",
+      "args": ["n8n-mcp"],
+      "env": {
+        "MCP_MODE": "stdio",
+        "LOG_LEVEL": "error",
+        "DISABLE_CONSOLE_OUTPUT": "true",
+        "N8N_API_URL": "http://localhost:5678/",
+        "N8N_API_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZGE4MTQzYS03ZTU3LTRlMDctOTUxMC03NDYyOTBlNjk3ZTIiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzU1MDIzMTEyfQ.QCWFzzQY-DWqkfXcfVqR-jboluuEuOuYePuWuQX9XAA"
+      }
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {}
+    },
+    "@magicuidesign/mcp": {
+      "command": "npx",
+      "args": ["-y", "@magicuidesign/mcp@latest"]
+    },
+    "Playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": [
+        "shadcn@latest",
+        "mcp"
+      ]
+    },
+    "shadcn-enhanced": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@jpisnice/shadcn-ui-mcp-server@latest"
+      ]
+    },
+    "starwind-ui": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@starwind-ui/mcp@latest"
+      ]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest"
+      ]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ]
+    },
+    "ref": {
+      "type": "http",
+      "url": "https://api.ref.tools/mcp",
+      "headers": {
+        "x-ref-api-key": "ref-65bf681019798de9f5de"
+      }
+    },
+    "exa-search": {
+      "command": "npx",
+      "args": ["-y", "exa-search-mcp"]
+    },
+    "pieces": {
+      "command": "npx",
+      "args": ["-y", "pieces-mcp"]
+    },
+    "semgrep": {
+      "command": "uvx",
+      "args": ["semgrep-mcp"]
+    }
+  }
+}
+

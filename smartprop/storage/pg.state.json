@@ -1,123 +1,131 @@
 {
   "cookies": [
     {
-      "name": "__cf_bm",
-      "value": "zGYLTHfIvm.Uhsb3ZMoAD0qkogIJfBzsi4ntOrfRGz4-1762427671-1.0.1.1-gF9KT2LKPgQZuPfy0IVWR7.HVdnTy3PjNGh52YWy0jDz.PYox2ZbDb7NR4WaxxX.J8VNlyjQvJRGHmp1SYckiF3F4BoJpVleGFXBAnGWlw5tUeVX2ehU1Mr5UcSMoRBK",
-      "domain": ".propertyguru.com.sg",
+      "name": "G_ENABLED_IDPS",
+      "value": "google",
+      "domain": ".www.propertyguru.com.sg",
       "path": "/",
-      "expires": 1762429471.902952,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "_cfuvid",
-      "value": "QOFp6pU3JQnAl53OHvTknuINUditgGudZxfRgAK6DKc-1762427671912-0.0.1.1-604800000",
-      "domain": ".propertyguru.com.sg",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "pgutid",
-      "value": "626130ee-1533-4df6-af80-7978ad577236",
-      "domain": "www.propertyguru.com.sg",
-      "path": "/",
-      "expires": 1793963672.204074,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "sixpack_client_id",
-      "value": "626130ee-1533-4df6-af80-7978ad577236",
-      "domain": "www.propertyguru.com.sg",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "Visitor",
-      "value": "9413fd6e-bdd5-4add-aad9-461fb1a93cd8",
-      "domain": ".propertyguru.com.sg",
-      "path": "/",
-      "expires": 1796987673.492724,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_ga4_au",
-      "value": "1.3.1462948650.1762427674",
-      "domain": ".propertyguru.com.sg",
-      "path": "/",
-      "expires": 1770203673,
+      "expires": 1797579049.797256,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_ga4_ga",
-      "value": "GA1.3.1000120845.1762427674",
+      "value": "GA1.3.591979245.1763019040",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1796987673.982133,
+      "expires": 1797579047.764484,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga4_au",
+      "value": "1.3.1859163065.1763019040",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": 1770795040,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "pgutid",
-      "value": "e73ee680-2486-40ec-95d2-02c318909a4c",
-      "domain": ".propertyguru.com.sg",
+      "value": "04184bf0-7468-47de-8c09-62f01b760600",
+      "domain": "www.propertyguru.com.sg",
       "path": "/",
-      "expires": 1793963674,
+      "expires": -1,
       "httpOnly": false,
       "secure": true,
       "sameSite": "Lax"
     },
     {
       "name": "cf_clearance",
-      "value": "_dI8IVz.wllMmIslrKh3DpsbLvAvkQ3GRB.pj58l9Yc-1762427677-1.2.1.1-r0ncWbU41xZqi2.JSJnXs.4VQ_Ld0TgoEFxQtNgpJiUtaEacMzwG_eEXG9hrlJ0QYAoaKe9uwh4TBQ76APWMQGQwxyXpobYn_pcxU79RpUUXS.z.R_1QzkwWxJD4U3JdxzRCRzGdR4p2NrGduqa1OHLTXPumY_iZ1uy.p_Hja2A8qLB2Y4Q3Bk7Ydoscj8S5MOspgOthbDk._QQxkXMFBaTQHfmOgNeHqhenpdEJpxQ",
+      "value": "P6SoktJtw3IX2CbBoG406TUmkDvEaXALLE6gB6NAY7A-1763019041-1.2.1.1-SXTymrNnZsPRdfrT8ngOW1JLTDuzwWphD4GAY6X2BEZ6P.nLDhVL4dmdYMfoCBUiUN0jhhpDKIoWLVZ7fLz5UmWHK4QVPaNE5tmsYKIBzeWR3PaQsAdChVhWGGelkH2jH7wa_2fq.pzAMM7QxXS7PaPAaxpOB9e4eVe2kqltRnE6nzqX2oYzkfvbKkjVky4FMsAbRRyJgeoFicmJkVqY_IkHVVZeEN5855pcCL6Qo.0",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1793963677.341985,
+      "expires": -1,
       "httpOnly": true,
       "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://propertyguru.com.sg",
-      "_crHasCrossSiteAncestor": false
+      "sameSite": "None"
     },
     {
-      "name": "G_ENABLED_IDPS",
-      "value": "google",
-      "domain": ".www.propertyguru.com.sg",
+      "name": "_fbp",
+      "value": "fb.2.1763019042600.638049977936274106",
+      "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1796987677.542376,
+      "expires": 1770795060,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
+      "name": "Visitor",
+      "value": "7d2b4901-084a-4dd6-b39d-5f7ea1bf0638",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__cf_bm",
+      "value": "SCt5ll8RMN2e51B9eA4RCEd.siqKKDXOeLsR76uiCpw-1763019038-1.0.1.1-6IRA84wXUOKNeDAPUipabYfQ9ohX5UA6_0hfgikH10eAXjHr2QoTHaQbyXV.U5rCA3gK3y_PdF1mnI5N6iZTyUhB7GrAEWYHf0hHkHWJclSJkPYo1gHBpp1qdKXFRxGR",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_cfuvid",
+      "value": "53lF3jPxDGEsjI4Q0SbivywLMvBglHdYTfSqOFMx47U-1763019038387-0.0.1.1-604800000",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sixpack_client_id",
+      "value": "04184bf0-7468-47de-8c09-62f01b760600",
+      "domain": "www.propertyguru.com.sg",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "pgutid",
+      "value": "f1257afa-1868-445a-8aa5-44cc57b935be",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": 1794555048,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
       "name": "UID",
-      "value": "1666f2ffed4a75a584aecab1762427677",
+      "value": "12E90f4693f3ffc187c1d611763019049",
       "domain": ".scorecardresearch.com",
       "path": "/",
-      "expires": 1796123677.717321,
+      "expires": 1796715049.726529,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
       "name": "XID",
-      "value": "1666f2ffed4a75a584aecab1762427677",
+      "value": "12E90f4693f3ffc187c1d611763019049",
       "domain": ".scorecardresearch.com",
       "path": "/",
-      "expires": 1796123677.717414,
+      "expires": 1796715049.726569,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None",
@@ -126,40 +134,40 @@
     },
     {
       "name": "ab.storage.sessionId.598492ca-0323-4cd6-a8dd-62e8595da78f",
-      "value": "%7B%22g%22%3A%224b103289-9c02-534f-160d-4f82d663feb8%22%2C%22e%22%3A1762429477784%2C%22c%22%3A1762427677784%2C%22l%22%3A1762427677784%7D",
+      "value": "%7B%22g%22%3A%22ded131ab-49b4-ea40-ea50-58fa560e41eb%22%2C%22e%22%3A1763020849770%2C%22c%22%3A1763019042315%2C%22l%22%3A1763019049770%7D",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1796987677,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_fbp",
-      "value": "fb.2.1762427679047.456666114179755324",
-      "domain": ".propertyguru.com.sg",
-      "path": "/",
-      "expires": 1770203685,
+      "expires": 1797579049,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "NID",
-      "value": "526=QDAwZT5JdjTIhy59jM_pewk3URIJ2gUbMDSWvwfuOHv30dVVxQj10fuHBqtAIgVOi5XJTLZxKnz3UF93PGf2J8oGwN4LYReOBnlULhRk5d2BJ7oQhJ2Iag67QSvnylJCcco4cyQh5AQRjNW4J2oGb8zZ0xGOLS9mObjnR-A7wLv45AbUtSHpAbZ13T5k20q4",
+      "value": "526=q51rr9WStm1iG_xw3RO4T8wyQGKu-GmnGrbGZ-c5Plr-1dzMg9_-WybfQrDj5FlRKsOjnVEziItsrCe7fWlqF2uwf3ZXI-9ZqYmOujexKzrT812pvkhPGBMoB2Gi_hUKepS60LM4_B-f1GtoqoQCSCkhAiuOa7a7D0PXzPOvXdBsYqC91nINkLJGRLK2vyjaOQ",
       "domain": ".google.com",
       "path": "/",
-      "expires": 1778238879.30264,
+      "expires": 1778830252.529762,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "_gcl_au",
-      "value": "1.1.237035572.1762427682.597981472.1762427682.1762427685",
+      "name": "ab.storage.deviceId.598492ca-0323-4cd6-a8dd-62e8595da78f",
+      "value": "%7B%22g%22%3A%224b9858d8-7ab6-7e17-a1ac-352173830951%22%2C%22c%22%3A1763019059788%2C%22l%22%3A1763019059788%7D",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1770203682,
+      "expires": 1797579059,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.1073494709.1763019057.2100495546.1763019057.1763019060",
+      "domain": ".propertyguru.com.sg",
+      "path": "/",
+      "expires": 1770795057,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -169,17 +177,17 @@
       "value": "vintester01%40gmail.com",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1777979686.880013,
+      "expires": 1778571061.804847,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Lax"
     },
     {
       "name": "PG_T",
-      "value": "cG-fceiZ9m4lvDfITpS4EBa57l0XRlVrcspoS33zWd4",
+      "value": "aK3YcTv4kJjF6F7FftxHshS8A4msw8xF",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1777979686.88007,
+      "expires": 1778571061.805015,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Lax"
@@ -189,14 +197,14 @@
       "value": "900937551",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1777979686.880085,
+      "expires": 1778571061.805046,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Lax"
     },
     {
       "name": "PHPSESSID2",
-      "value": "e84cc044c5bd08ff4434dc8b923a562e",
+      "value": "ae18fd96d6b142051a329c809a7878e7",
       "domain": ".propertyguru.com.sg",
       "path": "/",
       "expires": -1,
@@ -206,10 +214,10 @@
     },
     {
       "name": "_ga4_ga_0HGK3QZS7D",
-      "value": "GS2.3.s1762427673$o1$g1$t1762427686$j47$l0$h0",
+      "value": "GS2.3.s1763019040$o1$g1$t1763019061$j39$l0$h0",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1796987686.893722,
+      "expires": 1797579061.835001,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -219,7 +227,7 @@
       "value": "900937551",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1777979687.268164,
+      "expires": 1778571062.238978,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Lax"
@@ -229,17 +237,17 @@
       "value": "vintester01%40gmail.com",
       "domain": ".propertyguru.com.sg",
       "path": "/",
-      "expires": 1777979687.268188,
+      "expires": 1778571062.239006,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Lax"
     },
     {
       "name": "AWSALBCORS",
-      "value": "wcgNJ1uibarKQu9jjwTbV/hGEP0HCL85cx69eNKG3fjlGVhMIzQ9BLTXSC9aWS1huoRhLiC5LCgRN6vycZvIIDIB/nuWkRRmrr6HNFaej4KcZ/a6TE+APsJZXfAA",
+      "value": "5sfZm0C8GW30iERh3GQLLIs7hC5ED74GSWPyuOisRCA7jT1X5uHlUbQH5YSNbDQmSnhnEIDeNV6gDkYBYDbXV/C0tCb7tMxqHga5PcpXAbGmANUXaeSXROWJlW1p",
       "domain": "sentry.propertyguru.com",
       "path": "/",
-      "expires": 1763032487.449399,
+      "expires": 1763623862.504857,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -250,24 +258,52 @@
       "origin": "https://www.propertyguru.com.sg",
       "localStorage": [
         {
+          "name": "ab.storage.events.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":[{\"t\":\"uae\",\"ts\":1763019049771,\"s\":\"ded131ab-49b4-ea40-ea50-58fa560e41eb\",\"d\":{\"a\":\"f1257afa-1868-445a-8aa5-44cc57b935be\",\"l\":\"sg_anonymous_id\"}}]}"
+        },
+        {
+          "name": "ab.storage.sessionId.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":{\"g\":\"ded131ab-49b4-ea40-ea50-58fa560e41eb\",\"e\":1763020849770,\"c\":1763019042315,\"l\":1763019049770}}"
+        },
+        {
+          "name": "ab.storage.lastReqToEndpoint.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":{\"d\":1763019059831}}"
+        },
+        {
+          "name": "topicsLastReferenceTime",
+          "value": "1763019060926"
+        },
+        {
+          "name": "_gcl_ls",
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"creationTimeMs\":1763019057238},\"expires\":1770795057238}}"
+        },
+        {
+          "name": "ab.storage.brazeSyncRetryCount.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":0}"
+        },
+        {
           "name": "isSetBrazeAlias",
           "value": "true"
         },
         {
-          "name": "ab.storage.events.598492ca-0323-4cd6-a8dd-62e8595da78f",
-          "value": "{\"v\":[{\"u\":null,\"t\":\"ss\",\"ts\":1762427677784,\"s\":\"4b103289-9c02-534f-160d-4f82d663feb8\"},{\"u\":null,\"t\":\"uae\",\"ts\":1762427677786,\"s\":\"4b103289-9c02-534f-160d-4f82d663feb8\",\"d\":{\"a\":\"e73ee680-2486-40ec-95d2-02c318909a4c\",\"l\":\"sg_anonymous_id\"}}]}"
+          "name": "ab.storage.messagingSessionStart.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":1763019059784}"
         },
         {
-          "name": "ab.storage.sessionId.598492ca-0323-4cd6-a8dd-62e8595da78f",
-          "value": "{\"v\":{\"g\":\"4b103289-9c02-534f-160d-4f82d663feb8\",\"e\":1762429477784,\"c\":1762427677784,\"l\":1762427677784}}"
+          "name": "pgutid",
+          "value": "04184bf0-7468-47de-8c09-62f01b760600"
+        },
+        {
+          "name": "ab.storage.requestAttempts.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":{\"d\":2}}"
         },
         {
           "name": "lastExternalReferrerTime",
-          "value": "1762427679038"
+          "value": "1763019052551"
         },
         {
-          "name": "topicsLastReferenceTime",
-          "value": "1762427685934"
+          "name": "ab.storage.deviceId.598492ca-0323-4cd6-a8dd-62e8595da78f",
+          "value": "{\"v\":{\"g\":\"4b9858d8-7ab6-7e17-a1ac-352173830951\",\"c\":1763019059788,\"l\":1763019059788}}"
         },
         {
           "name": "customDimension20ForPageViewHit",
@@ -278,32 +314,16 @@
           "value": "empty"
         },
         {
-          "name": "_gcl_ls",
-          "value": "{\"schema\":\"gcl\",\"version\":1,\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"creationTimeMs\":1762427681896},\"expires\":1770203681896}}"
-        },
-        {
-          "name": "ab.storage.brazeSyncRetryCount.598492ca-0323-4cd6-a8dd-62e8595da78f",
-          "value": "{\"v\":0}"
-        },
-        {
           "name": "isSegmentIdentified",
           "value": "true"
         },
         {
           "name": "li_adsId",
-          "value": "7ce4c5bc-00c3-43c5-9a75-a0f4fd6f8de2"
+          "value": "213bdd3e-468a-4778-adaa-8a2f33c74ffc"
         },
         {
           "name": "shortlistItems",
           "value": "[]"
-        },
-        {
-          "name": "ab.storage.messagingSessionStart.598492ca-0323-4cd6-a8dd-62e8595da78f",
-          "value": "{\"v\":1762427677784}"
-        },
-        {
-          "name": "pgutid",
-          "value": "626130ee-1533-4df6-af80-7978ad577236"
         }
       ]
     }

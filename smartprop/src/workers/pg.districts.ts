@@ -1457,17 +1457,42 @@ async function scrapePropertyGuruByDistrict() {
     }
 
     // Update district metadata for each scraped district
-    if (typeof overallStats !== 'undefined') {
-      for (const district of districts) {
+    // Note: districts is defined in outer scope, so it should be accessible here
+    // Fallback: try to get districts from jobStatus if not accessible
+    let districtsToUpdate = districts;
+    if (!districtsToUpdate || districtsToUpdate.length === 0) {
+      // Try to get from jobStatus (stored in completed file)
+      try {
+        const completedFile = lockFile.replace('.lock', '.completed.json');
+        if (fs.existsSync(completedFile)) {
+          const lockDataStr = fs.readFileSync(completedFile, 'utf-8');
+          const lockData = JSON.parse(lockDataStr);
+          if (lockData.districts) {
+            districtsToUpdate = lockData.districts.split(',').map((d: string) => d.trim().padStart(2, '0'));
+            console.log(`📋 Retrieved districts from completed file: ${districtsToUpdate.join(', ')}`);
+          }
+        }
+      } catch (e) {
+        console.log(`⚠️  Could not retrieve districts from completed file: ${e}`);
+      }
+    }
+    
+    if (typeof overallStats !== 'undefined' && districtsToUpdate && districtsToUpdate.length > 0) {
+      console.log(`\n🔄 Updating district metadata for ${districtsToUpdate.length} district(s)...`);
+      for (const district of districtsToUpdate) {
         const districtCode = `D${district}`;
         try {
           // Get count of listings for this district
-          const { count } = await supabase
+          const { count, error: countError } = await supabase
             .from('listings')
             .select('*', { count: 'exact', head: true })
             .eq('district', district);
 
-          await supabase
+          if (countError) {
+            console.error(`⚠️  Error counting listings for district ${districtCode}:`, countError);
+          }
+
+          const { error: upsertError } = await supabase
             .from('district_metadata')
             .upsert({
               district: districtCode,
@@ -1478,9 +1503,14 @@ async function scrapePropertyGuruByDistrict() {
               onConflict: 'district'
             });
           
-          console.log(`✅ Updated metadata for district ${districtCode}`);
+          if (upsertError) {
+            console.error(`⚠️  Failed to update district metadata for ${districtCode}:`, upsertError);
+          } else {
+            console.log(`✅ Updated metadata for district ${districtCode} (${count || 0} listings)`);
+          }
         } catch (_error) {
           console.error(`⚠️  Failed to update district metadata for ${districtCode}:`, _error);
+          console.error(`   Error details:`, _error instanceof Error ? _error.message : String(_error));
         }
       }
 
@@ -1494,6 +1524,8 @@ async function scrapePropertyGuruByDistrict() {
       console.log(`Skipped (no phone): ${overallStats.totalSkippedNoPhone}`);
       console.log(`Errors: ${overallStats.totalErrors}`);
       console.log(`${'='.repeat(60)}\n`);
+    } else {
+      console.log(`⚠️  Skipping district metadata update: overallStats=${typeof overallStats}, districts=${districts ? districts.length : 'undefined'}`);
     }
   }
 }

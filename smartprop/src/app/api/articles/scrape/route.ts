@@ -50,22 +50,27 @@ export async function GET(request: NextRequest) {
   let sessionId: string | undefined;
   try {
     console.log('Creating scrape session...');
+    console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'MISSING');
+    console.log('Service Role Key:', process.env.SUPABASE_SERVICE_ROLE ? 'SET' : 'MISSING');
     
-    // Add timeout to database session creation
+    // Add timeout to database session creation (increased to 10 seconds)
     const sessionPromise = db.createScrapeSession();
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Database session creation timeout')), 5000)
+      setTimeout(() => reject(new Error('Database session creation timeout after 10 seconds')), 10000)
     );
     
     sessionId = await Promise.race([sessionPromise, timeoutPromise]) as string;
     console.log('Scrape session created:', sessionId);
   } catch (error: unknown) {
     console.error('Failed to create scrape session:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown database error';
+    console.error('Error details:', errorMessage);
+    
     // Return error immediately if database connection fails
     return new Response(`data: ${JSON.stringify({
       status: 'error',
       message: 'Database connection failed. Please check your Supabase configuration.',
-      details: error instanceof Error ? error.message : 'Unknown database error'
+      details: errorMessage
     })}\n\n`, {
       status: 500,
       headers: {

@@ -5,9 +5,21 @@
 import { createClient } from '@supabase/supabase-js';
 import type { ArticleContent } from '../scraper/edgeprop-content-scraper';
 
+// Validate environment variables before creating client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE;
+
+if (!supabaseUrl) {
+  throw new Error('NEXT_PUBLIC_SUPABASE_URL environment variable is required');
+}
+
+if (!supabaseServiceRole) {
+  throw new Error('SUPABASE_SERVICE_ROLE environment variable is required');
+}
+
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE!
+  supabaseUrl,
+  supabaseServiceRole
 );
 
 /**

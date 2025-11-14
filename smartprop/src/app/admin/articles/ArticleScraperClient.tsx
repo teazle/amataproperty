@@ -231,10 +231,20 @@ export default function ArticleScraperClient({
       console.error('SSE error:', error);
       console.error('EventSource readyState:', eventSource.readyState);
       console.error('EventSource url:', eventSource.url);
+      
+      // Check if we received any data before the error
+      // If readyState is CLOSED (2) and we haven't received any progress, it's a connection issue
+      // If readyState is CONNECTING (0) or OPEN (1), it might be a temporary network issue
+      const errorMessage = eventSource.readyState === EventSource.CLOSED && progress.articlesDiscovered === 0
+        ? 'Connection failed. Please check your network connection and try again.'
+        : progress.status === 'running' && progress.articlesDiscovered > 0
+        ? 'Connection interrupted. Scraping may have completed in the background.'
+        : 'Connection error. Please try again.';
+      
       setProgress(prev => ({
         ...prev,
         status: 'error',
-        message: 'Connection failed. Please check your Supabase configuration and try again.'
+        message: errorMessage
       }));
       setIsRunning(false);
       eventSource.close();

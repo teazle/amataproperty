@@ -87,6 +87,22 @@ export async function GET(request: NextRequest) {
     async start(controller) {
       let isClosed = false;
       
+      // Helper function to safely enqueue data
+      const safeEnqueue = (data: string) => {
+        if (!isClosed) {
+          try {
+            controller.enqueue(encoder.encode(data));
+          } catch (error: any) {
+            if (error.message?.includes('closed') || error.name === 'InvalidStateError') {
+              console.log('⚠️ Controller closed, stopping updates');
+              isClosed = true;
+            } else {
+              throw error;
+            }
+          }
+        }
+      };
+      
       try {
         console.log('Starting scraper with maxPages:', maxPages);
         
@@ -102,7 +118,7 @@ export async function GET(request: NextRequest) {
           message: 'Initializing scraper...',
           sessionId
         })}\n\n`;
-        controller.enqueue(encoder.encode(initialData));
+        safeEnqueue(initialData);
         
         // Send browser launch progress
         const browserData = `data: ${JSON.stringify({
@@ -116,7 +132,7 @@ export async function GET(request: NextRequest) {
           message: 'Launching browser...',
           sessionId
         })}\n\n`;
-        controller.enqueue(encoder.encode(browserData));
+        safeEnqueue(browserData);
         
         // Choose scraper method
         const scraperPromise = method === 'combined'
@@ -125,7 +141,7 @@ export async function GET(request: NextRequest) {
                 try {
                   console.log('Sending progress:', progress);
                   const data = `data: ${JSON.stringify({...progress, sessionId})}\n\n`;
-                  controller.enqueue(encoder.encode(data));
+                  safeEnqueue(data);
                 } catch (e) {
                   console.error('Failed to send SSE update:', e);
                   // Don't set isClosed here - let the error propagate and be handled by the outer catch
@@ -139,7 +155,7 @@ export async function GET(request: NextRequest) {
                 try {
                   console.log('Sending progress:', progress);
                   const data = `data: ${JSON.stringify({...progress, sessionId})}\n\n`;
-                  controller.enqueue(encoder.encode(data));
+                  safeEnqueue(data);
                 } catch (e) {
                   console.error('Failed to send SSE update:', e);
                   // Don't set isClosed here - let the error propagate and be handled by the outer catch
@@ -153,7 +169,7 @@ export async function GET(request: NextRequest) {
                 try {
                   console.log('Sending progress:', progress);
                   const data = `data: ${JSON.stringify({...progress, sessionId})}\n\n`;
-                  controller.enqueue(encoder.encode(data));
+                  safeEnqueue(data);
                 } catch (e) {
                   console.error('Failed to send SSE update:', e);
                   // Don't set isClosed here - let the error propagate and be handled by the outer catch
@@ -166,7 +182,7 @@ export async function GET(request: NextRequest) {
                 try {
                   console.log('Sending progress:', progress);
                   const data = `data: ${JSON.stringify({...progress, sessionId})}\n\n`;
-                  controller.enqueue(encoder.encode(data));
+                  safeEnqueue(data);
                 } catch (e) {
                   console.error('Failed to send SSE update:', e);
                   // Don't set isClosed here - let the error propagate and be handled by the outer catch
@@ -195,7 +211,7 @@ export async function GET(request: NextRequest) {
                 message: `Scraper failed: ${scraperError?.message || 'Unknown error'}`,
                 sessionId
               })}\n\n`;
-              controller.enqueue(encoder.encode(errorData));
+              safeEnqueue(errorData);
               controller.close();
               isClosed = true;
             } catch (enqueueError) {
@@ -232,7 +248,7 @@ export async function GET(request: NextRequest) {
                 message: `Scraping completed successfully! ${scrapedArticles.length} articles were saved immediately to database.`,
                 sessionId
               })}\n\n`;
-              controller.enqueue(encoder.encode(completionData));
+              safeEnqueue(completionData);
             } else {
               // For other methods, save articles now
               try {
@@ -268,7 +284,7 @@ export async function GET(request: NextRequest) {
                   message: `Scraping completed successfully! Saved ${savedArticles.newArticles} new articles and ${savedArticles.duplicates} duplicates to database.`,
                   sessionId
                 })}\n\n`;
-                controller.enqueue(encoder.encode(completionData));
+                safeEnqueue(completionData);
                 
               } catch (dbError: any) {
                 console.error('Database save error:', dbError);
@@ -285,7 +301,7 @@ export async function GET(request: NextRequest) {
                       message: `Scraping completed but failed to save to database: ${dbError?.message || 'Unknown error'}`,
                       sessionId
                     })}\n\n`;
-                    controller.enqueue(encoder.encode(errorData));
+                    safeEnqueue(errorData);
                   } catch (enqueueError) {
                     console.error('Failed to send database error message (controller already closed):', enqueueError);
                     isClosed = true;
@@ -311,7 +327,7 @@ export async function GET(request: NextRequest) {
               message: 'Scraping completed but no articles were found.',
               sessionId
             })}\n\n`;
-            controller.enqueue(encoder.encode(completionData));
+            safeEnqueue(completionData);
             
             // Mark session as completed
             await db.completeScrapeSession(sessionId, 'completed');
@@ -346,7 +362,7 @@ export async function GET(request: NextRequest) {
               message: error instanceof Error ? error.message : String(error),
               sessionId
             })}\n\n`;
-            controller.enqueue(encoder.encode(errorData));
+            safeEnqueue(errorData);
             controller.close();
             isClosed = true;
             console.log(`🔒 API: Controller closed (error) for session ${sessionId}`);
@@ -360,6 +376,8 @@ export async function GET(request: NextRequest) {
       }
     },
     cancel() {
+      console.log('⚠️ Client disconnected, cancelling scraper');
+      isClosed = true;
       stopUnifiedScraper();
       isScraperRunning = false;
       if (sessionId) {

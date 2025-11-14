@@ -98,6 +98,7 @@ interface ScraperProgress {
   status: 'running' | 'completed' | 'error' | 'stopped';
   message?: string;
   sessionId?: string;
+  logMessage?: string;               // Console log message
 }
 
 interface Props {
@@ -134,6 +135,10 @@ export default function ArticleScraperClient({
   });
   const [startTime, setStartTime] = useState<number | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
   
   // Library tab state
   const [articles, setArticles] = useState<Article[]>(initialArticles);
@@ -169,6 +174,8 @@ export default function ArticleScraperClient({
     
     setIsRunning(true);
     setStartTime(Date.now());
+    setLogs([]); // Clear previous logs
+    shouldAutoScrollRef.current = true;
     setProgress({
       currentPage: 0,
       totalPages: maxPages,
@@ -205,6 +212,25 @@ export default function ArticleScraperClient({
         const data: ScraperProgress = JSON.parse(event.data);
         console.log('Received SSE message:', data);
         setProgress(data);
+        
+        // Handle log messages
+        if (data.logMessage) {
+          const timestamp = new Date().toLocaleTimeString();
+          setLogs(prevLogs => {
+            const updated = [...prevLogs, `[${timestamp}] ${data.logMessage}`];
+            // Keep only last 1000 lines to prevent memory issues
+            return updated.slice(-1000);
+          });
+          
+          // Auto-scroll to bottom if user hasn't scrolled up
+          if (shouldAutoScrollRef.current && logsContainerRef.current) {
+            setTimeout(() => {
+              if (logsContainerRef.current) {
+                logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+              }
+            }, 50);
+          }
+        }
         
         // Update max pages if API provides it
         if (data.maxPagesAvailable && data.maxPagesAvailable > 0) {
@@ -744,6 +770,46 @@ export default function ArticleScraperClient({
                 </div>
               </div>
             )}
+
+            {/* Console Logs Section */}
+            <div className="pt-4 border-t mt-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-gray-700">
+                  Console Logs {showLogs && isRunning && <span className="text-green-500 text-xs">● Live</span>}
+                  {showLogs && !isRunning && progress.status === 'completed' && <span className="text-gray-500 text-xs">● Completed</span>}
+                </span>
+                <Button
+                  onClick={() => setShowLogs(!showLogs)}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs"
+                >
+                  {showLogs ? 'Hide Logs' : 'Show Logs'}
+                </Button>
+              </div>
+              {showLogs && (
+                <div 
+                  ref={logsContainerRef}
+                  className="bg-gray-900 p-4 rounded-lg font-mono text-xs overflow-auto max-h-96"
+                  onScroll={() => {
+                    // Track if user scrolled up
+                    if (logsContainerRef.current) {
+                      const isNearBottom = 
+                        logsContainerRef.current.scrollHeight - logsContainerRef.current.scrollTop - logsContainerRef.current.clientHeight < 100;
+                      shouldAutoScrollRef.current = isNearBottom;
+                    }
+                  }}
+                >
+                  {logs.length === 0 ? (
+                    <div className="text-white">No logs yet. Logs will appear here as scraping progresses...</div>
+                  ) : (
+                    <pre className="whitespace-pre-wrap text-white">
+                      {logs.join('\n')}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
           </Card>
         )}
 

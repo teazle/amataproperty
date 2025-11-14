@@ -8,6 +8,7 @@ import { getActivePrompt } from './prompt-manager';
 import { coBrokingAnalysisBreaker, timeslotDetectionBreaker, responseGenerationBreaker } from './circuit-breaker';
 import { AI_CONFIG, CONVERSATION, BUSINESS_RULES, ERROR_MESSAGES, SUCCESS_MESSAGES } from './config';
 import { logger, measurePerformance } from './logger';
+import { cleanQuotes, hasQuotes } from './quote-cleaner';
 
 // Lazy initialization
 let groq: Groq | null = null;
@@ -1076,81 +1077,24 @@ Return the message text directly without extra quotes or JSON encoding.`;
         return '';
       }
       
-      // Aggressively clean up any unwanted quotation marks from the reply message
+      // Use the centralized quote cleaner for consistent quote removal
       if (replyMessage && typeof replyMessage === 'string') {
         const originalMessage = replyMessage;
+        replyMessage = cleanQuotes(replyMessage);
         
-        // First, handle JSON-encoded strings (the AI might return the message as a JSON string)
-        // Try to parse it as JSON if it looks like a JSON string
-        if (replyMessage.trim().startsWith('"') && replyMessage.trim().endsWith('"')) {
-          try {
-            const parsed = JSON.parse(replyMessage);
-            if (typeof parsed === 'string') {
-              replyMessage = parsed;
-              console.log('✅ Stripped JSON quotes from replyMessage');
-            }
-          } catch (e) {
-            // Not valid JSON, continue with normal cleaning
-          }
-        }
-        
-        // Remove all escaped quotes (both double and single)
-        replyMessage = replyMessage.replace(/\\"/g, '"').replace(/\\'/g, "'");
-        
-        // Remove quotes at the very start and end (handle multiple layers)
-        replyMessage = replyMessage.trim();
-        
-        // Remove leading/trailing quotes (single or double, multiple layers) - more aggressive loop
-        let iterations = 0;
-        const maxIterations = 10; // Prevent infinite loops
-        while (iterations < maxIterations) {
-          const before = replyMessage;
+        // Validate that quotes were removed
+        if (hasQuotes(replyMessage)) {
+          console.warn('⚠️ [QUOTE CLEANER] Quotes still detected after cleaning, attempting additional pass');
+          replyMessage = cleanQuotes(replyMessage); // Second pass
           
-          // Remove outer quotes if they match
-          if ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
-              (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
-          replyMessage = replyMessage.slice(1, -1).trim();
-        }
-        
-          // If no change, break
-          if (replyMessage === before) {
-            break;
+          if (hasQuotes(replyMessage)) {
+            console.error('❌ [QUOTE CLEANER] Failed to remove quotes after multiple attempts:', {
+              original: originalMessage.substring(0, 100),
+              cleaned: replyMessage.substring(0, 100)
+            });
+            // Force remove quotes one more time as last resort
+            replyMessage = replyMessage.replace(/^["']+|["']+$/g, '').trim();
           }
-          
-          iterations++;
-        }
-        
-        // Remove any remaining quotes at start/end with regex (more aggressive)
-        replyMessage = replyMessage.replace(/^["']+/g, '').replace(/["']+$/g, '');
-        
-        // Remove quotes that wrap the entire message using regex (multiline support)
-        const quotePattern = /^["']([\s\S]+)["']$/;
-        const match = replyMessage.match(quotePattern);
-        if (match) {
-          replyMessage = match[1];
-        }
-        
-        // Final trim
-        replyMessage = replyMessage.trim();
-        
-        // If still wrapped in quotes after all cleaning, force remove them one more time
-        // Also handle cases where quotes might be at different positions
-        while ((replyMessage.startsWith('"') && replyMessage.endsWith('"')) ||
-               (replyMessage.startsWith("'") && replyMessage.endsWith("'"))) {
-          const before = replyMessage;
-          replyMessage = replyMessage.slice(1, -1).trim();
-          if (replyMessage === before) break; // Prevent infinite loop
-        }
-        
-        // One more aggressive pass: remove any leading/trailing quote characters
-        replyMessage = replyMessage.replace(/^["']+|["']+$/g, '').trim();
-        
-        // Log if we actually cleaned something
-        if (originalMessage !== replyMessage) {
-          console.log('🧹 Cleaned quotes from replyMessage:', {
-            before: originalMessage.substring(0, 100),
-            after: replyMessage.substring(0, 100)
-          });
         }
       }
       
@@ -1166,32 +1110,15 @@ Return the message text directly without extra quotes or JSON encoding.`;
       // Don't use fallback message - return empty if no valid response
       let cleanResponse = aiResponse || '';
       
-      // Aggressively clean up quotes from raw responses
+      // Use centralized quote cleaner
       if (cleanResponse && typeof cleanResponse === 'string') {
-        // Remove all escaped quotes first
-        cleanResponse = cleanResponse.replace(/\\"/g, '"').replace(/\\'/g, "'");
+        cleanResponse = cleanQuotes(cleanResponse);
         
-        // Remove quotes at the very start and end (handle multiple quotes)
-        cleanResponse = cleanResponse.trim();
-        
-        // Remove leading quotes (single or double, multiple)
-        while ((cleanResponse.startsWith('"') || cleanResponse.startsWith("'")) && 
-               (cleanResponse.endsWith('"') || cleanResponse.endsWith("'"))) {
-          cleanResponse = cleanResponse.slice(1, -1).trim();
+        // Validate quotes were removed
+        if (hasQuotes(cleanResponse)) {
+          console.warn('⚠️ [QUOTE CLEANER] Quotes detected in raw response, cleaning again');
+          cleanResponse = cleanQuotes(cleanResponse);
         }
-        
-        // Remove any remaining quotes at start/end with regex
-        cleanResponse = cleanResponse.replace(/^["']+/g, '').replace(/["']+$/g, '');
-        
-        // Remove quotes that wrap the entire message
-        const quotePattern = /^["'](.+)["']$/;
-        const match = cleanResponse.match(quotePattern);
-        if (match) {
-          cleanResponse = match[1];
-        }
-        
-        // Final trim
-        cleanResponse = cleanResponse.trim();
       }
       
       return cleanResponse;

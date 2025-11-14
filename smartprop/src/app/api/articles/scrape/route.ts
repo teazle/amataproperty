@@ -168,7 +168,13 @@ export async function GET(request: NextRequest) {
               if (!isClosed) {
                 try {
                   console.log('Sending progress:', progress);
-                  const data = `data: ${JSON.stringify({...progress, sessionId})}\n\n`;
+                  // Include logMessage in progress data if it exists, otherwise use message
+                  const progressData = {
+                    ...progress,
+                    sessionId,
+                    logMessage: progress.logMessage || progress.message
+                  };
+                  const data = `data: ${JSON.stringify(progressData)}\n\n`;
                   safeEnqueue(data);
                 } catch (e) {
                   console.error('Failed to send SSE update:', e);

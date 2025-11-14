@@ -46,6 +46,7 @@ export interface MCPProgress {
   articlesFailed: number;
   status: 'running' | 'completed' | 'stopped' | 'error';
   message: string;
+  logMessage?: string; // Optional log message for console display
 }
 
 export type MCPProgressCallback = (progress: MCPProgress) => void;

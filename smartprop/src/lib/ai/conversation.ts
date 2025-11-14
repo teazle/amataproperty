@@ -16,6 +16,7 @@ import {
   analyzeConversationWithAdvancedAI, 
   ConversationContext as AdvancedConversationContext 
 } from './conversation-analyzer';
+import { cleanQuotes, hasQuotes } from './quote-cleaner';
 
 // Lazy initialization
 let groq: Groq | null = null;
@@ -240,11 +241,12 @@ export async function analyzeConversationWithAdvancedContext(
     
     // Convert back to legacy format
     // If recommendedResponse is empty, don't reply
-    const shouldReply = analysis.shouldContinue && analysis.recommendedResponse && analysis.recommendedResponse.trim().length > 0;
+    const hasValidResponse = analysis.recommendedResponse && analysis.recommendedResponse.trim().length > 0;
+    const shouldReply = analysis.shouldContinue && hasValidResponse;
     
     return {
       shouldReply,
-      replyMessage: analysis.recommendedResponse || '',
+      replyMessage: hasValidResponse ? analysis.recommendedResponse : undefined,
       newPhase: analysis.coBrokingAnalysis.conversationPhase,
       reason: `Advanced AI analysis: ${analysis.coBrokingAnalysis.reasoning}`,
       deflectionDetected: analysis.conversationTone === 'negative',
@@ -870,6 +872,39 @@ export async function sendAutoReply(
   context?: Partial<TimingContext>
 ): Promise<boolean> {
   try {
+    // CRITICAL: Never send empty messages
+    if (!replyMessage || replyMessage.trim().length === 0) {
+      console.error(`❌ [sendAutoReply] Attempted to send empty message to ${agentPhone} - BLOCKED`);
+      console.error(`   This should never happen - empty messages should be filtered earlier`);
+      return false;
+    }
+    
+    // CRITICAL: Remove any quotes before sending (final safety check)
+    const originalMessage = replyMessage;
+    replyMessage = cleanQuotes(replyMessage);
+    
+    // Validate quotes were removed
+    if (hasQuotes(replyMessage)) {
+      console.warn(`⚠️ [sendAutoReply] Quotes detected in message, cleaning again: "${replyMessage.substring(0, 50)}..."`);
+      replyMessage = cleanQuotes(replyMessage);
+      
+      if (hasQuotes(replyMessage)) {
+        console.error(`❌ [sendAutoReply] Failed to remove quotes after multiple attempts!`);
+        console.error(`   Original: "${originalMessage.substring(0, 100)}"`);
+        console.error(`   Cleaned: "${replyMessage.substring(0, 100)}"`);
+        // Force remove as last resort
+        replyMessage = replyMessage.replace(/^["']+|["']+$/g, '').trim();
+      }
+    }
+    
+    // Log if we cleaned quotes
+    if (originalMessage !== replyMessage) {
+      console.log(`🧹 [sendAutoReply] Cleaned quotes before sending:`, {
+        before: originalMessage.substring(0, 60),
+        after: replyMessage.substring(0, 60)
+      });
+    }
+    
     console.log(`📤 Preparing auto-reply #${currentAutoReplyCount + 1} to ${agentPhone}`);
     console.log(`   Message: "${replyMessage}"`);
     

@@ -132,16 +132,67 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       coBrokingStatus: decision.coBrokingStatus
     });
 
+    // Normalize conversation phase to valid database values
+    const normalizePhase = (phase: string): string => {
+      const validPhases = [
+        'initial_request',
+        'agent_engaging',
+        'agent_checking',
+        'agent_stalling',
+        'timeslots_received',
+        'gracefully_ended',
+        'property_unavailable'
+      ];
+      
+      // Map AI-returned phases to valid database phases
+      const phaseMap: Record<string, string> = {
+        'co-broking_agreed': 'agent_engaging',
+        'co-broking_agreement': 'agent_engaging',
+        'co_broking_agreed': 'agent_engaging',
+        'co_broking_agreement': 'agent_engaging',
+        'objectives_achieved': 'timeslots_received',
+        'awaiting_cobroking_confirmation': 'agent_engaging',
+        'awaiting_timeslots': 'agent_engaging',
+      };
+      
+      // Check if phase is already valid
+      if (validPhases.includes(phase)) {
+        return phase;
+      }
+      
+      // Check if we have a mapping
+      if (phaseMap[phase]) {
+        return phaseMap[phase];
+      }
+      
+      // Default fallback based on objectives
+      if (decision.timeslotsReceived && decision.coBrokingStatus === 'willing') {
+        return 'timeslots_received';
+      }
+      if (decision.gracefulExit) {
+        return 'gracefully_ended';
+      }
+      if (decision.coBrokingStatus === 'willing' || decision.coBrokingStatus === 'needs_discussion') {
+        return 'agent_engaging';
+      }
+      
+      // Default to current phase or initial_request
+      return context.currentPhase || 'initial_request';
+    };
+    
+    const normalizedPhase = normalizePhase(decision.newPhase);
+    
     // Always update conversation history with incoming message first
     const baseUpdateData: Record<string, unknown> = {
-      conversation_phase: decision.newPhase,
+      conversation_phase: normalizedPhase,
       conversation_history: conversationHistory,
       last_message_at: new Date().toISOString()
       // Note: reply_text and replied_at should only be set when we actually send a reply
     };
 
     console.log('📝 [ASYNC] Base update data prepared:', {
-      conversationPhase: decision.newPhase,
+      originalPhase: decision.newPhase,
+      normalizedPhase: normalizedPhase,
       historyLength: conversationHistory.length,
       lastMessage: conversationHistory[conversationHistory.length - 1]?.message?.substring(0, 50) + '...'
     });
@@ -165,8 +216,14 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
 
     // Handle the decision
     try {
-      if (decision.shouldReply && decision.replyMessage) {
+      // Ensure replyMessage is not empty - check both existence and non-empty content
+      const hasValidReply = decision.shouldReply && 
+                           decision.replyMessage && 
+                           decision.replyMessage.trim().length > 0;
+      
+      if (hasValidReply) {
       console.log(`✅ [ASYNC] Sending reply: ${decision.reason}`);
+      console.log(`📝 [ASYNC] Reply message: "${decision.replyMessage}"`);
       
       // Prepare timing context
       const timingContext = {
@@ -230,7 +287,12 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         console.log('❌ [ASYNC] Failed to send reply');
       }
     } else {
-      console.log(`ℹ️  [ASYNC] Not replying: ${decision.reason}`);
+      const reason = !decision.shouldReply 
+        ? decision.reason 
+        : (!decision.replyMessage || decision.replyMessage.trim().length === 0)
+          ? 'Empty reply message - skipping'
+          : decision.reason;
+      console.log(`ℹ️  [ASYNC] Not replying: ${reason}`);
       
       // Use base update data with additional fields for no-reply case
       const updateData = {

@@ -12,8 +12,6 @@ services:
     restart: unless-stopped
     environment:
       - WAHA_DASHBOARD_ENABLED=true
-      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}
-      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD:-admin}
       - WHATSAPP_HOOK_URL=${PUBLIC_BASE_URL}/api/wa/webhook
       - WHATSAPP_HOOK_EVENTS=message,message.any,state.change,group.join,presence.update
       - WAHA_SESSION_STORE_ENABLED=true

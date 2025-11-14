@@ -32,31 +32,59 @@ export interface FlaresolverrResult {
  */
 export async function createFlaresolverrSession(): Promise<string | null> {
   try {
-    const response = await fetch(FLARESOLVERR_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        cmd: 'sessions.create',
-      }),
-    });
+    // Add timeout to prevent hanging (30 seconds should be enough for session creation)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.log(`   ⚠️  Flaresolverr session creation timed out after 30s. Continuing without session...`);
+    }, 30000); // 30 seconds timeout for session creation
+    
+    try {
+      const response = await fetch(FLARESOLVERR_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          cmd: 'sessions.create',
+        }),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.log(`   ⚠️  Failed to create Flaresolverr session: ${response.status} - ${errorText.substring(0, 200)}`);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.log(`   ⚠️  Failed to create Flaresolverr session: ${response.status} - ${errorText.substring(0, 200)}`);
+        return null;
+      }
+
+      const data = await response.json();
+      if (data.status === 'ok' && data.session) {
+        console.log(`   ✅ Created Flaresolverr session: ${data.session}`);
+        return data.session;
+      } else if (data.status === 'ok' && !data.session) {
+        console.log(`   ℹ️  Session creation response: ${JSON.stringify(data)}`);
+        return null; // Will create session on-demand
+      }
       return null;
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      
+      // Handle AbortError (timeout)
+      if (fetchError?.name === 'AbortError' || fetchError?.message?.includes('aborted')) {
+        console.log(`   ⚠️  Flaresolverr session creation aborted (timeout). Continuing without session...`);
+        return null;
+      }
+      
+      // Handle network errors
+      if (fetchError?.code === 'ECONNREFUSED' || fetchError?.code === 'ETIMEDOUT') {
+        console.log(`   ⚠️  Flaresolverr connection error: ${fetchError.message}. Is Flaresolverr running?`);
+        return null;
+      }
+      
+      throw fetchError; // Re-throw other errors
     }
-
-    const data = await response.json();
-    if (data.status === 'ok' && data.session) {
-      console.log(`   ✅ Created Flaresolverr session: ${data.session}`);
-      return data.session;
-    } else if (data.status === 'ok' && !data.session) {
-      console.log(`   ℹ️  Session creation response: ${JSON.stringify(data)}`);
-      return null; // Will create session on-demand
-    }
-    return null;
   } catch (error) {
     console.log(`   ⚠️  Error creating Flaresolverr session:`, error);
     return null;

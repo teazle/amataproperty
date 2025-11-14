@@ -189,7 +189,11 @@ export default function ArticleScraperClient({
     
     // Create SSE connection
     console.log('Creating SSE connection to:', `/api/articles/scrape?pages=${maxPages}&method=${selectedMethod}`);
-    const eventSource = new EventSource(`/api/articles/scrape?pages=${maxPages}&method=${selectedMethod}`);
+    const eventSource = new EventSource(`/api/articles/scrape?pages=${maxPages}&method=${selectedMethod}`, {
+      withCredentials: false,
+      // Disable reconnection for better control
+      // The server will keep the connection open until the scraper completes
+    });
     eventSourceRef.current = eventSource;
     
     console.log('SSE connection created:', eventSource.readyState);
@@ -257,24 +261,35 @@ export default function ArticleScraperClient({
       console.error('SSE error:', error);
       console.error('EventSource readyState:', eventSource.readyState);
       console.error('EventSource url:', eventSource.url);
-      
-      // Check if we received any data before the error
-      // If readyState is CLOSED (2) and we haven't received any progress, it's a connection issue
-      // If readyState is CONNECTING (0) or OPEN (1), it might be a temporary network issue
-      const errorMessage = eventSource.readyState === EventSource.CLOSED && progress.articlesDiscovered === 0
-        ? 'Connection failed. Please check your network connection and try again.'
-        : progress.status === 'running' && progress.articlesDiscovered > 0
-        ? 'Connection interrupted. Scraping may have completed in the background.'
-        : 'Connection error. Please try again.';
-      
-      setProgress(prev => ({
-        ...prev,
-        status: 'error',
-        message: errorMessage
-      }));
-      setIsRunning(false);
-      eventSource.close();
-      eventSourceRef.current = null;
+
+      // Only show error if we haven't received any progress data yet
+      // If we're running and have received some progress, assume it's just a temporary disconnect
+      // and the scraper is continuing in the background
+      if (progress.articlesDiscovered === 0) {
+        // True connection failure - never received any data
+        const errorMessage = 'Connection failed. Please check your network connection and try again.';
+        setProgress(prev => ({
+          ...prev,
+          status: 'error',
+          message: errorMessage
+        }));
+        setIsRunning(false);
+        eventSource.close();
+        eventSourceRef.current = null;
+      } else if (progress.status === 'running') {
+        // Connection interrupted but scraper was running - assume it's continuing
+        console.log('Connection interrupted, but scraper appears to be continuing in background');
+        setProgress(prev => ({
+          ...prev,
+          message: 'Connection interrupted. Scraping may continue in the background. Please check back in a few minutes.'
+        }));
+        // Don't close the EventSource - let it try to reconnect
+        // Don't set isRunning to false - the scraper might still be running
+      } else {
+        // Other error states
+        eventSource.close();
+        eventSourceRef.current = null;
+      }
     };
     
     eventSource.onopen = () => {
@@ -287,8 +302,20 @@ export default function ArticleScraperClient({
         console.log('SSE connection is OPEN after delay');
       } else {
         console.log('SSE connection state after delay:', eventSource.readyState);
+        // If connection didn't open, this might be a connection issue
+        if (eventSource.readyState === 2 && progress.articlesDiscovered === 0) {
+          console.error('SSE connection failed to open - likely a network issue');
+          setProgress(prev => ({
+            ...prev,
+            status: 'error',
+            message: 'Failed to establish connection. Please check your network and try again.'
+          }));
+          setIsRunning(false);
+          eventSource.close();
+          eventSourceRef.current = null;
+        }
       }
-    }, 1000);
+    }, 2000); // Increased timeout to 2 seconds
   };
   
   const stopScraping = async () => {

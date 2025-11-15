@@ -16,25 +16,32 @@ export function cleanQuotes(message: string): string {
   let cleaned = message;
   const original = cleaned;
 
-  // Step 1: Handle JSON-encoded strings (the AI might return the message as a JSON string)
+  // Step 1: Handle escaped quotes FIRST (before JSON parsing)
+  // This handles cases where quotes are escaped like \"message\" or \'message\'
+  cleaned = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
+  
+  // Step 2: Handle JSON-encoded strings (the AI might return the message as a JSON string)
+  // Try parsing as JSON if it looks like a JSON string
   if (cleaned.trim().startsWith('"') && cleaned.trim().endsWith('"')) {
     try {
       const parsed = JSON.parse(cleaned);
       if (typeof parsed === 'string') {
         cleaned = parsed;
+        // After parsing, check again for escaped quotes that might have been unescaped
+        cleaned = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
       }
     } catch (e) {
       // Not valid JSON, continue with normal cleaning
     }
   }
-
-  // Step 2: Remove all escaped quotes (both double and single)
+  
+  // Step 3: Remove any remaining escaped quotes (double pass to be sure)
   cleaned = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
 
-  // Step 3: Remove quotes at the very start and end (handle multiple layers)
+  // Step 4: Remove quotes at the very start and end (handle multiple layers)
   cleaned = cleaned.trim();
 
-  // Step 4: Aggressive loop to remove all outer quote layers
+  // Step 5: Aggressive loop to remove all outer quote layers
   let iterations = 0;
   const maxIterations = 20; // Increased from 10 to handle deeply nested quotes
   while (iterations < maxIterations) {
@@ -61,17 +68,17 @@ export function cleanQuotes(message: string): string {
     iterations++;
   }
 
-  // Step 5: Remove any remaining quotes at start/end with regex (more aggressive)
+  // Step 6: Remove any remaining quotes at start/end with regex (more aggressive)
   cleaned = cleaned.replace(/^["']+/g, '').replace(/["']+$/g, '');
 
-  // Step 6: Remove quotes that wrap the entire message using regex (multiline support)
+  // Step 7: Remove quotes that wrap the entire message using regex (multiline support)
   const quotePattern = /^["']([\s\S]+)["']$/;
   const match = cleaned.match(quotePattern);
   if (match) {
     cleaned = match[1];
   }
 
-  // Step 7: Handle cases where quotes might be at different positions
+  // Step 8: Handle cases where quotes might be at different positions
   // Remove any leading/trailing quote characters one more time
   while ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
          (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
@@ -80,10 +87,10 @@ export function cleanQuotes(message: string): string {
     if (cleaned === before) break; // Prevent infinite loop
   }
 
-  // Step 8: Final aggressive pass: remove any leading/trailing quote characters
+  // Step 9: Final aggressive pass: remove any leading/trailing quote characters
   cleaned = cleaned.replace(/^["']+|["']+$/g, '').trim();
 
-  // Step 9: Check for common AI patterns that include quotes
+  // Step 10: Check for common AI patterns that include quotes
   // Pattern: "message" or 'message' at the start/end
   const startEndQuotePattern = /^["'](.+?)["']$/s;
   const startEndMatch = cleaned.match(startEndQuotePattern);
@@ -91,7 +98,7 @@ export function cleanQuotes(message: string): string {
     cleaned = startEndMatch[1].trim();
   }
 
-  // Step 10: Final trim and validation
+  // Step 11: Final trim and validation
   cleaned = cleaned.trim();
 
   // Log if we actually cleaned something (for debugging)

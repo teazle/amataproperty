@@ -245,10 +245,23 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       console.log('📤 [ASYNC] sendAutoReply result:', sent);
 
       if (sent) {
-        // Add our reply to conversation history
+        // IMPORTANT: Clean quotes again before storing in database (final safety check)
+        // This ensures no quotes are stored even if they somehow got through earlier
+        const { cleanQuotes } = await import('./quote-cleaner');
+        const cleanedReplyMessage = cleanQuotes(decision.replyMessage);
+        
+        // Log if we cleaned quotes at this stage (shouldn't happen, but good to know)
+        if (cleanedReplyMessage !== decision.replyMessage) {
+          console.log('🧹 [ASYNC] Cleaned quotes before storing in database:', {
+            before: decision.replyMessage.substring(0, 60),
+            after: cleanedReplyMessage.substring(0, 60)
+          });
+        }
+        
+        // Add our reply to conversation history (with cleaned message)
         conversationHistory.push({
           role: 'user',
-          message: decision.replyMessage,
+          message: cleanedReplyMessage,
           timestamp: new Date().toISOString()
         });
 
@@ -263,7 +276,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
             ? (outreach.deflection_count || 0) + 1 
             : outreach.deflection_count || 0,
           first_message_sent_at: outreach.first_message_sent_at || new Date().toISOString(),
-          reply_text: decision.replyMessage, // Set the actual AI reply message
+          reply_text: cleanedReplyMessage, // Set the cleaned AI reply message (no quotes)
           replied_at: new Date().toISOString() // Set when we actually replied
         };
 

@@ -560,27 +560,35 @@ function assessAgentEngagement(context: ConversationContext): 'high' | 'medium' 
  */
 function generateCompletionMessage(context: ConversationContext): string {
   // Check conversation history to see if we've already sent a completion message
+  // Check last 5 user messages to catch duplicates better
   const recentMessages = context.conversationHistory
     .filter(msg => msg.role === 'user')
-    .slice(-3); // Check last 3 user messages
+    .slice(-5); // Check last 5 user messages
   
-  // Check if we've already sent a completion message
+  // Check if we've already sent a completion message (clean quotes before checking)
   const completionPatterns = [
     'thank you for confirming',
     'coordinate with my buyer',
     'get back to you',
-    'appreciate your openness'
+    'appreciate your openness',
+    'looking forward to seeing',
+    'catch up',
+    'thanks for confirming',
+    'thanks' // But only if combined with confirm/coordinate
   ];
   
-  const hasAlreadySentCompletion = recentMessages.some(msg => 
-    completionPatterns.some(pattern => 
-      msg.message.toLowerCase().includes(pattern)
-    )
-  );
+  const hasAlreadySentCompletion = recentMessages.some(msg => {
+    const cleanedMsg = cleanQuotes(msg.message).toLowerCase();
+    return completionPatterns.some(pattern => 
+      cleanedMsg.includes(pattern) || 
+      (pattern === 'thanks' && (cleanedMsg.includes('confirm') || cleanedMsg.includes('coordinate')))
+    );
+  });
   
   if (hasAlreadySentCompletion) {
     // Don't send another completion message if we've already sent one
     console.log('⚠️ Completion message already sent, skipping duplicate');
+    console.log('   Recent messages checked:', recentMessages.map(m => cleanQuotes(m.message).substring(0, 50)));
     return '';
   }
   
@@ -855,22 +863,26 @@ async function generateNaturalResponse(
     }
     
     // Check if we've already sent a completion message recently
-    // Look at the LAST user message (most recent one we sent)
-    const lastUserMessage = context.conversationHistory
+    // Look at the LAST 5 user messages (most recent ones we sent) to catch duplicates
+    const recentUserMessages = context.conversationHistory
       .filter(msg => msg.role === 'user')
-      .slice(-1)[0];
+      .slice(-5); // Check last 5 messages
     
-    const hasRecentCompletion = lastUserMessage && (() => {
-      const msgLower = lastUserMessage.message.toLowerCase();
+    const hasRecentCompletion = recentUserMessages.some(msg => {
+      const msgLower = cleanQuotes(msg.message).toLowerCase(); // Clean quotes before checking
       return msgLower.includes('coordinate with my buyer') ||
              msgLower.includes('get back to you') ||
              msgLower.includes('confirming co-broking') ||
              msgLower.includes('viewing times') ||
-             msgLower.includes('thank you for confirming');
-    })();
+             msgLower.includes('thank you for confirming') ||
+             msgLower.includes('looking forward to seeing') ||
+             msgLower.includes('catch up') ||
+             (msgLower.includes('thanks') && msgLower.includes('confirm'));
+    });
     
     if (hasRecentCompletion) {
-      console.log('✅ Both objectives met + completion already sent in last message - NOT responding to:', context.agentMessage);
+      console.log('✅ Both objectives met + completion already sent in recent messages - NOT responding to:', context.agentMessage);
+      console.log('   Recent completion messages found:', recentUserMessages.map(m => cleanQuotes(m.message).substring(0, 50)));
       return '';
     }
     
@@ -913,21 +925,26 @@ async function generateNaturalResponse(
     return '';
     }
     
-    // Also check if we just sent a completion message
-    const lastUserMessage = context.conversationHistory
+    // Also check if we just sent a completion message (check last 5 to be safe)
+    const recentUserMessages = context.conversationHistory
       .filter(msg => msg.role === 'user')
-      .slice(-1)[0];
+      .slice(-5);
     
-    if (lastUserMessage) {
-      const msgLower = lastUserMessage.message.toLowerCase();
-      if (msgLower.includes('coordinate with my buyer') ||
-          msgLower.includes('get back to you') ||
-          msgLower.includes('confirming co-broking') ||
-          msgLower.includes('viewing times') ||
-          msgLower.includes('thank you for confirming')) {
-        console.log('🛑 SAFETY CHECK: Both objectives met + completion just sent - stopping before AI generation');
-        return '';
-      }
+    const hasRecentCompletion = recentUserMessages.some(msg => {
+      const msgLower = cleanQuotes(msg.message).toLowerCase(); // Clean quotes before checking
+      return msgLower.includes('coordinate with my buyer') ||
+             msgLower.includes('get back to you') ||
+             msgLower.includes('confirming co-broking') ||
+             msgLower.includes('viewing times') ||
+             msgLower.includes('thank you for confirming') ||
+             msgLower.includes('looking forward to seeing') ||
+             msgLower.includes('catch up') ||
+             (msgLower.includes('thanks') && msgLower.includes('confirm'));
+    });
+    
+    if (hasRecentCompletion) {
+      console.log('🛑 SAFETY CHECK: Both objectives met + completion already sent in recent messages - stopping before AI generation');
+      return '';
     }
   }
     

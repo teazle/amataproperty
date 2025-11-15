@@ -457,9 +457,62 @@ export async function analyzeConversationWithAdvancedAI(
     console.log('⚠️ Empty response generated, setting shouldContinue to false');
   }
   
-  // Only stop conversation if both objectives are met AND (it's not a direct question OR it's a simple acknowledgment)
-  // Also stop if response is empty
-  const finalShouldContinue = isEmptyResponse ? false : (bothObjectivesMet && (!isDirectQuestion || isAcknowledgment) ? false : shouldContinue);
+  // CRITICAL: When both objectives are met, be very strict about when to respond
+  // Only respond if:
+  // 1. They ask a direct question that needs an answer, OR
+  // 2. We haven't sent a completion message yet
+  // DO NOT respond to:
+  // - Simple acknowledgments (ok, sure, thanks, etc.)
+  // - Non-question messages after completion message sent
+  let finalShouldContinue: boolean;
+  
+  if (isEmptyResponse) {
+    // No response generated - don't continue
+    finalShouldContinue = false;
+  } else if (bothObjectivesMet) {
+    // Both objectives met - only continue if they ask a direct question AND we haven't already sent completion
+    // Check if we've already sent a completion message (look at last 5 user messages)
+    const recentUserMessages = context.conversationHistory
+      .filter(msg => msg.role === 'user')
+      .slice(-5);
+    
+    const hasRecentCompletion = recentUserMessages.some(msg => {
+      const msgLower = cleanQuotes(msg.message).toLowerCase();
+      return msgLower.includes('coordinate with my buyer') ||
+             msgLower.includes('get back to you') ||
+             msgLower.includes('confirming co-broking') ||
+             msgLower.includes('thank you for confirming') ||
+             msgLower.includes('looking forward to seeing') ||
+             msgLower.includes('catch up') ||
+             (msgLower.includes('thanks') && (msgLower.includes('confirm') || msgLower.includes('coordinate')));
+    });
+    
+    if (hasRecentCompletion) {
+      // We already sent a completion message - only respond to direct questions, not acknowledgments
+      if (isAcknowledgment) {
+        console.log('🛑 Both objectives met + completion sent + acknowledgment - NOT responding');
+        finalShouldContinue = false;
+      } else if (isDirectQuestion) {
+        console.log('✅ Both objectives met + completion sent + direct question - responding briefly');
+        finalShouldContinue = true;
+      } else {
+        console.log('🛑 Both objectives met + completion sent + no question - NOT responding');
+        finalShouldContinue = false;
+      }
+    } else {
+      // No completion sent yet - can respond if not just an acknowledgment
+      if (isAcknowledgment) {
+        console.log('🛑 Both objectives met + acknowledgment - NOT responding (even without completion)');
+        finalShouldContinue = false;
+      } else {
+        console.log('✅ Both objectives met + no completion yet - responding');
+        finalShouldContinue = true;
+      }
+    }
+  } else {
+    // Objectives not met - use normal logic
+    finalShouldContinue = shouldContinue;
+  }
 
   const result = {
     coBrokingAnalysis,
@@ -816,25 +869,29 @@ function isDirectPersonalQuestion(message: string): boolean {
  * when both objectives are already met
  */
 function isSimpleAcknowledgment(message: string): boolean {
-  const lowerMessage = message.toLowerCase().trim();
+  // First clean quotes to handle cases like "\"Ok\"" or '"Ok"'
+  let cleanMessage = cleanQuotes(message);
+  const lowerMessage = cleanMessage.toLowerCase().trim();
   
   // Simple acknowledgments that indicate conversation can end
   // Check for exact matches AND combinations
   const exactMatches = [
     'ok', 'okay', 'thanks', 'thank you', 'got it', 'understood', 
-    'sure', 'alright', 'good', 'testing', 'test'
+    'sure', 'alright', 'all right', 'good', 'testing', 'test',
+    'yep', 'yeah', 'yes', 'no problem', 'np', 'cool', 'nice'
   ];
   
-  // Check exact match first
+  // Check exact match first (very strict - must be exactly one of these words)
   if (exactMatches.includes(lowerMessage)) {
+    console.log(`✅ [ACK] Detected simple acknowledgment: "${lowerMessage}" (original: "${message.substring(0, 20)}")`);
     return true;
   }
   
   // Check for combinations like "ok thank you", "ok thanks", etc.
   const acknowledgmentPatterns = [
-    /^(ok|okay|sure|alright|got it|understood)\s+(thank you|thanks|thank)/i,
-    /^(thank you|thanks|thank)\s+(ok|okay|sure|alright|got it|understood)/i,
-    /^(ok|okay|sure|alright|got it|understood)$/i,
+    /^(ok|okay|sure|alright|all right|got it|understood|yep|yeah)\s+(thank you|thanks|thank)/i,
+    /^(thank you|thanks|thank)\s+(ok|okay|sure|alright|all right|got it|understood|yep|yeah)/i,
+    /^(ok|okay|sure|alright|all right|got it|understood|yep|yeah)$/i,
     /^(thank you|thanks|thank)$/i,
   ];
   

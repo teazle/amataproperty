@@ -82,7 +82,7 @@
 
 2. **Then pull on EC2**:
    ```bash
-   ssh ec2-user@your-ec2
+   ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
    cd /opt/smartprop/app/smartprop
    git pull
    ```

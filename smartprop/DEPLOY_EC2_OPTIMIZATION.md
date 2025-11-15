@@ -10,7 +10,7 @@
 
 ### 1. SSH to EC2
 ```bash
-ssh -i smartprop-new-key.pem ec2-user@18.142.253.142
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
 ```
 
 ### 2. Pull Latest Code

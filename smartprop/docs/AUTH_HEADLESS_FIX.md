@@ -107,6 +107,6 @@ This ensures:
 To test the fix:
 
 1. **Frontend test**: Start scraper from admin panel - should work without crashes
-2. **SSH test**: `ssh ec2-user@52.76.114.103 "cd /opt/smartprop/app/smartprop && xvfb-run -a bun src/workers/auth.pg.ts"` - should work
+2. **SSH test**: `ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103 "cd /opt/smartprop/app/smartprop && xvfb-run -a bun src/workers/auth.pg.ts"` - should work
 3. **Headless test**: `HEADLESS=true bun src/workers/auth.pg.ts` - should use headless mode
 

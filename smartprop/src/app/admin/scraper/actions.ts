@@ -152,66 +152,84 @@ export async function startScrapeJob(config: ScraperConfig) {
       console.log(`🧹 Cleaned up ${cleanupResult.cleaned} stale lock file(s)`);
     }
     
-    // Check for active jobs (after cleanup)
+    // Check for active jobs (after cleanup) - check ALL active jobs, not just one
     const { data: activeJobs } = await supabase
       .from('scraper_jobs')
       .select('id, platform, started_at')
       .in('status', ['queued', 'running'])
-      .limit(1);
+      .order('started_at', { ascending: false });
 
     if (activeJobs && activeJobs.length > 0) {
-      // Also check if lock file exists for this job
-      const job = activeJobs[0];
-      const lockFile = path.join(process.cwd(), 'storage', 
-        job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+      // Check ALL active jobs to see if any are actually running
+      // If multiple jobs exist, we need to verify which ones are really running
+      const runningJobs: Array<{ id: string; platform: string; pid?: number }> = [];
       
-      if (fs.existsSync(lockFile)) {
-        // Lock file exists, check if process is running
-        try {
-          const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-          const pid = lockData.pid;
-          if (pid && typeof pid === 'number') {
-            const isRunning = await isProcessRunning(pid);
-            if (!isRunning) {
-              // Process is dead, clean it up and allow new job
-              console.log(`🧹 Found dead process ${pid} for active job, cleaning up...`);
-              fs.unlinkSync(lockFile);
-              await supabase
-                .from('scraper_jobs')
-                .update({
-                  status: 'failed',
-                  completed_at: new Date().toISOString(),
-                  error_message: 'Process died - cleaned up stale lock'
-                })
-                .eq('id', job.id);
-              // Continue to start new job
-            } else {
-              // Process is actually running
-              return {
-                success: false,
-                error: `Another scraper (${job.platform}) is already running. Please wait for it to complete.`
-              };
-            }
-          }
-        } catch (error) {
-          console.error('Error checking lock file:', error);
-          // If we can't read lock file, remove it and continue
+      for (const job of activeJobs) {
+        const lockFile = path.join(process.cwd(), 'storage', 
+          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+        
+        if (fs.existsSync(lockFile)) {
           try {
-            fs.unlinkSync(lockFile);
-          } catch {}
+            const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+            const pid = lockData.pid;
+            if (pid && typeof pid === 'number') {
+              const isRunning = await isProcessRunning(pid);
+              if (isRunning) {
+                // This job is actually running
+                runningJobs.push({ id: job.id, platform: job.platform, pid });
+                continue; // Skip cleanup for this one
+              } else {
+                // Process is dead, clean it up
+                console.log(`🧹 Found dead process ${pid} for active job ${job.id}, cleaning up...`);
+                fs.unlinkSync(lockFile);
+                await supabase
+                  .from('scraper_jobs')
+                  .update({
+                    status: 'failed',
+                    completed_at: new Date().toISOString(),
+                    error_message: 'Process died - cleaned up stale lock'
+                  })
+                  .eq('id', job.id);
+              }
+            }
+          } catch (error) {
+            console.error('Error checking lock file:', error);
+            // If we can't read lock file, remove it and mark job as failed
+            try {
+              fs.unlinkSync(lockFile);
+            } catch {}
+            await supabase
+              .from('scraper_jobs')
+              .update({
+                status: 'failed',
+                completed_at: new Date().toISOString(),
+                error_message: 'Corrupted lock file - cleaned up'
+              })
+              .eq('id', job.id);
+          }
+        } else {
+          // No lock file but database says running - mark as failed
+          await supabase
+            .from('scraper_jobs')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: 'No lock file found but job marked as running - cleaning up'
+            })
+            .eq('id', job.id);
         }
-      } else {
-        // No lock file but database says running - mark as failed
-        await supabase
-          .from('scraper_jobs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: 'No lock file found but job marked as running - cleaning up'
-          })
-          .eq('id', job.id);
-        // Continue to start new job
       }
+      
+      // After cleaning up dead jobs, check if there are any actually running jobs
+      if (runningJobs.length > 0) {
+        // Get the most recent running job
+        const job = runningJobs[0];
+        return {
+          success: false,
+          error: `${runningJobs.length} scraper(s) (${runningJobs.map(j => j.platform).join(', ')}) are already running. Please wait for them to complete or use Force Reset.`
+        };
+      }
+      // All active jobs were cleaned up, continue to start new job
     }
 
     // Validate config
@@ -1169,8 +1187,8 @@ export async function forceResetStuckJobs() {
     const { data: finalCheck } = await supabase
       .from('scraper_jobs')
       .select('id, status')
-      .in('status', ['queued', 'running'])
-      .limit(10);
+      .in('status', ['queued', 'running']);
+      // Check ALL active jobs, not just 10
 
     if (finalCheck && finalCheck.length > 0) {
       console.warn(`⚠️  Still found ${finalCheck.length} active job(s) after reset. Force updating individually...`);

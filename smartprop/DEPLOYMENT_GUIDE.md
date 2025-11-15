@@ -37,7 +37,7 @@ The script will:
 
 ```bash
 # 1. SSH into EC2
-ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem ubuntu@18.142.253.142
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
 
 # 2. Install Bun (if not installed)
 curl -fsSL https://bun.sh/install | bash
@@ -78,16 +78,16 @@ pm2 startup  # Follow instructions to enable auto-start
 
 ```bash
 # View logs
-ssh -i smartprop-new-key.pem ubuntu@18.142.253.142 'pm2 logs smartprop'
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103 'pm2 logs smartprop'
 
 # Check status
-ssh -i smartprop-new-key.pem ubuntu@18.142.253.142 'pm2 status'
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103 'pm2 status'
 
 # Restart
-ssh -i smartprop-new-key.pem ubuntu@18.142.253.142 'pm2 restart smartprop'
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103 'pm2 restart smartprop'
 
 # Stop
-ssh -i smartprop-new-key.pem ubuntu@18.142.253.142 'pm2 stop smartprop'
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103 'pm2 stop smartprop'
 ```
 
 ## Environment Variables
@@ -99,7 +99,7 @@ NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE=your_service_role
 GROQ_API_KEY=your_groq_key
-PUBLIC_BASE_URL=http://18.142.253.142:3000
+PUBLIC_BASE_URL=http://52.76.114.103:3000
 # ... other variables
 ```
 
@@ -110,7 +110,7 @@ PUBLIC_BASE_URL=http://18.142.253.142:3000
 ./deploy-ec2.sh
 
 # Or manually:
-ssh -i smartprop-new-key.pem ubuntu@18.142.253.142
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
 cd /opt/smartprop/app
 git pull
 cd smartprop  # if needed
@@ -121,9 +121,9 @@ pm2 restart smartprop
 
 ## Accessing the Application
 
-- **Application**: http://18.142.253.142:3000
-- **Admin Dashboard**: http://18.142.253.142:3000/admin
-- **Health Check**: http://18.142.253.142:3000/api/health
+- **Application**: http://52.76.114.103:3000
+- **Admin Dashboard**: http://52.76.114.103:3000/admin
+- **Health Check**: http://52.76.114.103:3000/api/health
 
 ## Troubleshooting
 

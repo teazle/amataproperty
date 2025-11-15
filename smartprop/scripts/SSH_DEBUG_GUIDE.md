@@ -6,12 +6,12 @@
 
 If you have the EC2 key and IP:
 ```bash
-ssh -i smartprop-ec2-key.pem ubuntu@[YOUR_SERVER_IP]
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
 ```
 
 Or if using a different key:
 ```bash
-ssh -i /path/to/your-key.pem ubuntu@[YOUR_SERVER_IP]
+ssh -i /path/to/your-key.pem -o StrictHostKeyChecking=no ec2-user@[YOUR_SERVER_IP]
 ```
 
 ### 2. Navigate to App Directory

@@ -130,14 +130,47 @@ export async function GET(request: NextRequest) {
             }
           }
           
-          // Get active job from database
-          const { data: job } = await supabase
+          // Get active job from database - prefer job with lock file (actually running)
+          // Get all active jobs first
+          const { data: allActiveJobs } = await supabase
             .from('scraper_jobs')
             .select('*')
             .in('status', ['queued', 'running'])
-            .order('started_at', { ascending: false })
-            .limit(1)
-            .single();
+            .order('started_at', { ascending: false });
+
+          if (!allActiveJobs || allActiveJobs.length === 0) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: 'idle' })}\n\n`));
+            return;
+          }
+
+          // Find job that has a lock file (actually running)
+          let job = null;
+          for (const activeJob of allActiveJobs) {
+            const checkLockFile = path.join(process.cwd(), 'storage',
+              activeJob.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+            
+            if (fs.existsSync(checkLockFile)) {
+              // Check if process is actually running
+              try {
+                const lockData = JSON.parse(fs.readFileSync(checkLockFile, 'utf-8'));
+                const pid = lockData.pid;
+                if (pid && typeof pid === 'number') {
+                  const isRunning = await isProcessRunning(pid);
+                  if (isRunning) {
+                    job = activeJob;
+                    break; // Found a job that's actually running
+                  }
+                }
+              } catch (e) {
+                // Lock file exists but can't read it - skip this job
+              }
+            }
+          }
+
+          // If no job with lock file found, use the most recent one
+          if (!job) {
+            job = allActiveJobs[0];
+          }
 
           if (!job) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: 'idle' })}\n\n`));

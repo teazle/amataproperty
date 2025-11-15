@@ -62,7 +62,7 @@ node aws-deployment/deploy-to-ec2.js
 ### Step 3: SSL Certificate Setup
 ```bash
 # SSH into your server
-ssh -i smartprop-key.pem ubuntu@[EC2_PUBLIC_IP]
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@[EC2_PUBLIC_IP]
 
 # Install SSL certificate
 sudo certbot --nginx -d your-domain.com
@@ -82,7 +82,7 @@ sudo certbot --nginx -d your-domain.com
 ### 1. Service Status Check
 ```bash
 # SSH into server
-ssh -i smartprop-key.pem ubuntu@[EC2_PUBLIC_IP]
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@[EC2_PUBLIC_IP]
 
 # Check all containers are running
 docker-compose -f /opt/smartprop/app/docker-compose.prod.yml ps

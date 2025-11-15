@@ -69,7 +69,7 @@ A Record: your-domain.com → [EC2_PUBLIC_IP]
 
 SSH into your server and run:
 ```bash
-ssh -i smartprop-key.pem ubuntu@[EC2_PUBLIC_IP]
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@[EC2_PUBLIC_IP]
 sudo certbot --nginx -d your-domain.com
 ```
 
@@ -88,8 +88,8 @@ If you prefer manual deployment:
 
 ```bash
 # Copy and run setup script
-scp -i your-key.pem aws-deployment/ec2-setup.sh ubuntu@[EC2_IP]:~/
-ssh -i your-key.pem ubuntu@[EC2_IP]
+scp -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no aws-deployment/ec2-setup.sh ec2-user@[EC2_IP]:~/
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@[EC2_IP]
 chmod +x setup.sh && sudo ./setup.sh
 ```
 

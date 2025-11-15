@@ -9,7 +9,7 @@ echo "🔍 Finding latest EdgeProp scraper log..."
 echo ""
 
 # Get the latest log file
-LATEST_LOG=$(ssh -i "$KEY_FILE" "$EC2_USER@$EC2_HOST" "ls -t /tmp/ep-scraper-*.log 2>/dev/null | head -1")
+LATEST_LOG=$(ssh -i "$KEY_FILE" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "ls -t /tmp/ep-scraper-*.log 2>/dev/null | head -1")
 
 if [ -z "$LATEST_LOG" ]; then
   echo "❌ No log files found"
@@ -20,10 +20,10 @@ echo "📄 Latest log: $LATEST_LOG"
 echo ""
 echo "📋 Last 100 lines:"
 echo "=========================================="
-ssh -i "$KEY_FILE" "$EC2_USER@$EC2_HOST" "tail -100 $LATEST_LOG"
+ssh -i "$KEY_FILE" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "tail -100 $LATEST_LOG"
 echo ""
 echo "=========================================="
 echo ""
 echo "💡 To follow logs in real-time, run:"
-echo "   ssh -i $KEY_FILE $EC2_USER@$EC2_HOST 'tail -f $LATEST_LOG'"
+echo "   ssh -i $KEY_FILE -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST 'tail -f $LATEST_LOG'"
 

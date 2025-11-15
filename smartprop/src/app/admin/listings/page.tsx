@@ -81,7 +81,10 @@ const portals = ['All', 'propertyguru', 'edgeprop'];
 const priceBands = [
   { label: 'All', min: 0, max: Infinity },
   { label: 'Under $1M', min: 0, max: 999999 },
-  { label: '$1M - $2.999M', min: 1000000, max: 2999999 },
+  { label: '$1M - $1.4999M', min: 1000000, max: 1499999 },
+  { label: '$1.5M - $1.999M', min: 1500000, max: 1999999 },
+  { label: '$2M - $2.4999M', min: 2000000, max: 2499999 },
+  { label: '$2.5M - $2.999M', min: 2500000, max: 2999999 },
   { label: '$3M - $5M', min: 3000000, max: 5000000 },
   { label: 'Above $5M', min: 5000001, max: Infinity },
 ];

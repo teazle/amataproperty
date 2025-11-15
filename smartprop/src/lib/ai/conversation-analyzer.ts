@@ -362,6 +362,8 @@ export async function analyzeConversationWithAdvancedAI(
   if (isPersonalQuestion) {
     // Handle personal questions like "Are you a bot?" with natural deflection
     recommendedResponse = generatePersonalQuestionResponse(context.agentMessage, context);
+    // Clean quotes immediately after generation (safety check)
+    recommendedResponse = cleanQuotes(recommendedResponse);
     logger.conversation.responseGenerated(recommendedResponse, { type: 'personal' });
   } else if (businessQuestionResult.isBusinessQuestion && businessQuestionResult.questionType) {
     // Generate deflection response for business questions
@@ -384,6 +386,9 @@ export async function analyzeConversationWithAdvancedAI(
     } else {
       recommendedResponse = deflectionResponse;
     }
+    
+    // Clean quotes immediately after generation (safety check)
+    recommendedResponse = cleanQuotes(recommendedResponse);
     
     logger.conversation.responseGenerated(recommendedResponse, { 
       type: 'business-deflection',
@@ -408,6 +413,9 @@ export async function analyzeConversationWithAdvancedAI(
     );
     recommendedResponse = naturalResponse.result;
     
+    // Clean quotes immediately after generation (already cleaned in generateNaturalResponse, but double-check)
+    recommendedResponse = cleanQuotes(recommendedResponse);
+    
     logger.conversation.responseGenerated(recommendedResponse, { 
       type: 'natural',
       generationDuration: naturalResponse.duration
@@ -420,6 +428,29 @@ export async function analyzeConversationWithAdvancedAI(
   // Check if it's a simple acknowledgment when objectives are met
   const isAcknowledgment = isSimpleAcknowledgment(context.agentMessage);
   
+  // Final safety check: Clean quotes one more time before returning (defense in depth)
+  if (recommendedResponse && typeof recommendedResponse === 'string') {
+    const originalBeforeFinal = recommendedResponse;
+    recommendedResponse = cleanQuotes(recommendedResponse);
+    
+    // Log if we cleaned quotes at this final stage (shouldn't happen, but good to know)
+    if (originalBeforeFinal !== recommendedResponse) {
+      console.log('🧹 [FINAL CLEAN] Cleaned quotes before returning result:', {
+        before: originalBeforeFinal.substring(0, 60),
+        after: recommendedResponse.substring(0, 60)
+      });
+    }
+    
+    // Final validation
+    if (hasQuotes(recommendedResponse)) {
+      console.error('❌ [FINAL CLEAN] Quotes still present after final cleaning!', {
+        message: recommendedResponse.substring(0, 100)
+      });
+      // Force remove as absolute last resort
+      recommendedResponse = recommendedResponse.replace(/^["']+|["']+$/g, '').trim();
+    }
+  }
+
   // If response is empty, don't continue regardless of other conditions
   const isEmptyResponse = !recommendedResponse || recommendedResponse.trim().length === 0;
   if (isEmptyResponse) {

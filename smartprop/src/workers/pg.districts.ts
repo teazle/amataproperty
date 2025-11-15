@@ -623,6 +623,15 @@ async function scrapePropertyGuruByDistrict() {
   const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
   let browser: Browser | null = null;
   
+  // Initialize overallStats BEFORE try block so it's accessible in finally block
+  const overallStats = {
+    totalDistricts: 0,
+    totalListings: 0,
+    totalSuccess: 0,
+    totalErrors: 0,
+    totalSkippedNoPhone: 0,
+  };
+  
   try {
     browser = await chromium.launch({
     headless: isHeadless, // Use headless mode on EC2/server environments
@@ -722,14 +731,6 @@ async function scrapePropertyGuruByDistrict() {
       });
     }
   });
-
-  const overallStats = {
-    totalDistricts: 0,
-    totalListings: 0,
-    totalSuccess: 0,
-    totalErrors: 0,
-    totalSkippedNoPhone: 0,
-  };
 
   let consecutiveNoPhone = 0;
   const MAX_CONSECUTIVE_NO_PHONE = 2; // Re-auth if 2 consecutive listings have no phone

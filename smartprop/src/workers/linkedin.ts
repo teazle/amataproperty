@@ -1085,21 +1085,19 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     let totalProcessed = 0;
     let totalSent = 0;
     let scrollAttempts = 0;
-    let consecutiveNoNewContacts = 0; // Track consecutive attempts with no new eligible contacts
-    const maxScrollAttempts = 50; // Increased limit to allow more scrolling
-    const maxConsecutiveNoNew = 3; // Stop if 3 consecutive attempts find no new eligible contacts
+    const maxScrollAttempts = 200; // Increased limit to allow extensive scrolling
     const processedProfileUrls = new Set<string>(); // Track processed contacts to avoid duplicates
     
     // Use messages_per_job (default 50) instead of daily_limit
     const messagesPerJob = settings.messages_per_job || 50;
-    while (totalSent < messagesPerJob && scrollAttempts < maxScrollAttempts && consecutiveNoNewContacts < maxConsecutiveNoNew) {
+    // Continue scrolling until we reach messages_per_job limit or max scroll attempts
+    while (totalSent < messagesPerJob && scrollAttempts < maxScrollAttempts) {
       // Extract currently visible contacts
       console.log(`\n🔍 Extracting visible contacts (attempt ${scrollAttempts + 1})...`);
       const visibleContacts = await extractContacts(page);
       
       if (visibleContacts.length === 0) {
         console.log('   ℹ️  No contacts found on page. Scrolling to load more...');
-        consecutiveNoNewContacts++;
         scrollAttempts++;
         // Scroll to load more even if no contacts found
         await scrollToLoadMore(page, container);
@@ -1112,16 +1110,12 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       
       if (newContacts.length === 0) {
         console.log(`   ℹ️  All visible contacts already processed (all have "Message sent" or were already processed). Scrolling to load more...`);
-        consecutiveNoNewContacts++;
         scrollAttempts++;
         // Scroll to load more - all visible contacts are already messaged
         await scrollToLoadMore(page, container);
         await humanPause(2000, 3000);
         continue;
       }
-      
-      // Found new eligible contacts! Reset consecutive counter
-      consecutiveNoNewContacts = 0;
       
       console.log(`   ✅ Found ${newContacts.length} new contacts to process`);
       console.log(`   📋 Contact names: ${newContacts.map(c => c.name).join(', ')}`);
@@ -1207,9 +1201,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     if (totalSent >= messagesPerJob) {
       console.log(`\n✅ Automation completed: Messages per job limit reached (${totalSent}/${messagesPerJob})`);
     } else if (scrollAttempts >= maxScrollAttempts) {
-      console.log(`\n✅ Automation completed: Maximum scroll attempts reached (${scrollAttempts})`);
-    } else if (consecutiveNoNewContacts >= maxConsecutiveNoNew) {
-      console.log(`\n✅ Automation completed: No new eligible contacts found after ${consecutiveNoNewContacts} consecutive attempts`);
+      console.log(`\n✅ Automation completed: Maximum scroll attempts reached (${scrollAttempts}). More contacts may be available with additional scrolling.`);
     } else {
       console.log(`\n✅ Automation completed: Stopped processing`);
     }

@@ -12,7 +12,8 @@ import {
   Activity,
   CheckCircle,
   ArrowRight,
-  Star
+  Star,
+  Linkedin
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -66,6 +67,36 @@ export default function AdminDashboard() {
               <Link href="/admin/listings">
                 <Button className="w-full" variant="default">
                   <span>Open Listings</span>
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* LinkedIn */}
+        <Card className="border-2 border-blue-200 bg-blue-50">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="p-3 rounded-lg bg-blue-100">
+                <MessageSquare className="h-6 w-6 text-blue-500" />
+              </div>
+              <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Primary
+              </Badge>
+            </div>
+            <CardTitle className="text-xl">LinkedIn</CardTitle>
+            <CardDescription>Automated catch-up messages</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="text-sm text-gray-600">
+                Automate birthday, anniversary, and job change messages
+              </div>
+              <Link href="/admin/linkedin">
+                <Button className="w-full" variant="default">
+                  <span>Open LinkedIn</span>
                   <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               </Link>

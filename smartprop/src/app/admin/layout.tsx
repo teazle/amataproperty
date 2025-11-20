@@ -82,6 +82,14 @@ export default function AdminLayout({
                   <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
+              
+              <Link href="/admin/linkedin">
+                <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-blue-50">
+                  <MessageSquare className="h-4 w-4" />
+                  <span>LinkedIn</span>
+                  <CheckCircle className="h-3 w-3 text-green-500" />
+                </Button>
+              </Link>
             </div>
           </div>
           

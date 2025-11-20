@@ -18,9 +18,10 @@ export default function Home() {
       const width = section.clientWidth;
       const height = section.clientHeight;
       const maxWidth = 1620;
-      const constrainedByHeight = height * videoAspectRatio;
-      const w = Math.min(width, maxWidth, constrainedByHeight);
-      setFrameWidth(w);
+      // Allow media frame to be 135% of viewport width (like huly.io) up to maxWidth
+      // This allows it to exceed viewport dimensions (centered overflow)
+      const targetWidth = Math.min(width * 1.35, maxWidth);
+      setFrameWidth(targetWidth);
     };
     compute();
     const onResize = () => compute();
@@ -90,7 +91,7 @@ export default function Home() {
       <header className="fixed left-0 top-0 z-50 w-full px-4 animate-fade-in border-b opacity-0 backdrop-blur-[12px] [--animation-delay:600ms]">
         <div className="container mx-auto flex h-[var(--navigation-height)] w-full items-center justify-between">
           <Link className="text-md flex items-center justify-center hero-header-link" href="/">
-            SmartProp
+            Amata
           </Link>
           <div className="ml-auto flex h-full items-center">
             <Link href="/admin">
@@ -109,8 +110,8 @@ export default function Home() {
         {/* Hero Section */}
         <section ref={sectionRef} className="relative min-h-[100svh] overflow-hidden bg-black pt-0 px-safe">
           {/* Centered media frame (adds black side gutters on ultrawide) */}
-          <div className="absolute inset-0 z-0 flex items-end justify-center">
-            <div className="relative" data-media-frame style={{ width: frameWidth, aspectRatio: '1.335187' }}>
+          <div className="absolute inset-0 z-0 overflow-visible">
+            <div className="absolute left-1/2 -translate-x-1/2" data-media-frame style={{ width: frameWidth, aspectRatio: '1.335187', top: '-20%' }}>
               <video
                 autoPlay
                 loop
@@ -146,23 +147,24 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Title + CTA grouped with media frame */}
-              <div className="absolute z-20 left-[4%] top-[10%] w-[40%] max-w-[600px] pointer-events-auto">
-                <h1 className="hero-title text-white text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight leading-[0.9]">SmartProp</h1>
-                <div className="mt-6">
-                  <Link 
-                    href="/admin"
-                    className="cta"
-                    ref={(el) => { if (el) buttonRefs.current[0] = el; }}
-                  >
-                    <div className="glow-container">
-                      <div className="glow-layer-1"></div>
-                      <div className="glow-layer-2"></div>
-                    </div>
-                    <span className="label">Admin Dashboard</span>
-                  </Link>
+            </div>
+          </div>
+          
+          {/* Title + CTA positioned relative to viewport, not media frame */}
+          <div className="absolute z-20 top-[20%] left-0 w-full px-8 pointer-events-auto">
+            <h1 className="hero-title text-white text-5xl md:text-6xl lg:text-7xl xl:text-[72px] font-semibold tracking-tight leading-[0.9]">Amata</h1>
+            <div style={{ marginTop: '30px' }}>
+              <Link 
+                href="/admin"
+                className="cta"
+                ref={(el) => { if (el) buttonRefs.current[0] = el; }}
+              >
+                <div className="glow-container">
+                  <div className="glow-layer-1"></div>
+                  <div className="glow-layer-2"></div>
                 </div>
-              </div>
+                <span className="label">Admin Dashboard</span>
+              </Link>
             </div>
           </div>
           
@@ -177,7 +179,7 @@ export default function Home() {
       <footer className="bg-black text-white py-8">
         <div className="container mx-auto px-4">
           <div className="text-center text-sm">
-            <p>Copyright © 2025 SmartProp. All Rights Reserved.</p>
+            <p>Copyright © 2025 Amata. All Rights Reserved.</p>
           </div>
         </div>
       </footer>

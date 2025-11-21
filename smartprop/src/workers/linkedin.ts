@@ -920,11 +920,13 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       
       // Fill email
       const emailInput = page.locator('input[aria-label="Email or phone"]:visible').first();
+      console.log('   🎯 Filling email via aria-label input');
       await emailInput.fill(email);
       await humanPause(500, 1000);
       
       // Fill password
       const passwordInput = page.locator('input[aria-label="Password"]:visible').first();
+      console.log('   🛡️ Filling password via aria-label input');
       await passwordInput.fill(password);
       await humanPause(500, 1000);
       
@@ -1006,11 +1008,13 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         
         // Fill email
         const emailInput = page.locator('input[aria-label="Email or phone"]:visible').first();
+        console.log('   🎯 Filling email via aria-label input (session refresh)');
         await emailInput.fill(email);
         await humanPause(500, 1000);
         
         // Fill password
         const passwordInput = page.locator('input[aria-label="Password"]:visible').first();
+        console.log('   🛡️ Filling password via aria-label input (session refresh)');
         await passwordInput.fill(password);
         await humanPause(500, 1000);
         

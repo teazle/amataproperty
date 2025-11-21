@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import '@/lib/linkedin/scheduler';
 import { getLinkedInSettings, getTodayMessageCount } from '@/lib/linkedin/tracker';
 import { readLockFile, getStorageStatePath, hasStorageState, isProcessRunning } from '@/lib/linkedin/storage';
 import { getSupabaseClient } from '@/workers/supa';

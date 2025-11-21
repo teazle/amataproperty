@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLinkedInSettings, updateLinkedInSettings } from '@/lib/linkedin/tracker';
+import { refreshLinkedInScheduler } from '@/lib/linkedin/scheduler';
 
 /**
  * GET /api/linkedin/settings
@@ -144,7 +145,9 @@ export async function PUT(request: NextRequest) {
         { status: 500 }
       );
     }
-    
+
+    await refreshLinkedInScheduler();
+
     return NextResponse.json({
       success: true,
       settings: updated

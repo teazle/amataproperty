@@ -23,6 +23,38 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+const DEFAULT_SCHEDULE_TIME = '09:00';
+
+function scheduleToTime(schedule?: string | null): string {
+  if (!schedule) return DEFAULT_SCHEDULE_TIME;
+  const parts = schedule.trim().split(/\s+/);
+  let minute = '00';
+  let hour = '09';
+
+  if (parts.length === 5) {
+    minute = parts[0];
+    hour = parts[1];
+  } else if (parts.length >= 6) {
+    minute = parts[1];
+    hour = parts[2];
+  }
+
+  const pad = (value: string) => value.padStart(2, '0').slice(-2);
+  const sanitizedHour = pad(hour.replace(/\D/g, '') || '09');
+  const sanitizedMinute = pad(minute.replace(/\D/g, '') || '00');
+  return `${sanitizedHour}:${sanitizedMinute}`;
+}
+
+function timeToSchedule(time: string): string {
+  const [hourStr = '09', minuteStr = '00'] = time.split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (isNaN(hour) || isNaN(minute)) {
+    return '0 9 * * *';
+  }
+  return `${minute} ${hour} * * *`;
+}
+
 interface LinkedInSettings {
   id: string;
   profile_url: string | null;
@@ -75,6 +107,7 @@ export function LinkedInDashboard() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [runHeaded, setRunHeaded] = useState(false);
+  const [autoRunTime, setAutoRunTime] = useState(DEFAULT_SCHEDULE_TIME);
 
   // Form state
   const [formData, setFormData] = useState<Partial<LinkedInSettings>>({});
@@ -101,6 +134,10 @@ export function LinkedInDashboard() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.isRunning, showLogs]);
+
+  useEffect(() => {
+    setAutoRunTime(scheduleToTime(settings?.auto_run_schedule));
+  }, [settings?.auto_run_schedule]);
 
   // Load logs when showing logs and refresh every 3 seconds if automation is running
   useEffect(() => {
@@ -226,8 +263,14 @@ export function LinkedInDashboard() {
     }
   };
 
+  const autoRunEnabled = Boolean(formData.auto_run_schedule);
+
   const handleStart = async (dryRun: boolean = false) => {
     setStarting(true);
+    setLogs([]);
+    if (!showLogs) {
+      setShowLogs(true);
+    }
     try {
       const res = await fetch('/api/linkedin/scan', {
         method: 'POST',
@@ -238,6 +281,7 @@ export function LinkedInDashboard() {
       
       if (res.ok) {
         toast.success(dryRun ? 'Dry run started' : 'Automation started');
+        loadLogs();
         setTimeout(() => {
           loadStatus();
           loadHistory();
@@ -249,6 +293,44 @@ export function LinkedInDashboard() {
       toast.error(error.message || 'Failed to start automation');
     } finally {
       setStarting(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setStopping(true);
+    try {
+      const res = await fetch('/api/linkedin/stop', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Stop signal sent');
+      } else {
+        toast.error(data.error || 'Failed to stop automation');
+      }
+      setTimeout(() => {
+        loadStatus();
+        loadHistory();
+        if (showLogs) {
+          loadLogs();
+        }
+      }, 1000);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to stop automation');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleAutoRunToggle = (checked: boolean) => {
+    setFormData({
+      ...formData,
+      auto_run_schedule: checked ? timeToSchedule(autoRunTime) : null
+    });
+  };
+
+  const handleAutoRunTimeChange = (value: string) => {
+    setAutoRunTime(value);
+    if (autoRunEnabled) {
+      setFormData({ ...formData, auto_run_schedule: timeToSchedule(value) });
     }
   };
 
@@ -380,6 +462,24 @@ export function LinkedInDashboard() {
           >
             <Send className="h-4 w-4 mr-2" />
             Dry Run
+          </Button>
+
+          <Button
+            variant="destructive"
+            onClick={handleStop}
+            disabled={stopping || !status?.isRunning}
+          >
+            {stopping ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Stopping...
+              </>
+            ) : (
+              <>
+                <Square className="h-4 w-4 mr-2" />
+                Stop Automation
+              </>
+            )}
           </Button>
 
           <Button
@@ -538,6 +638,32 @@ export function LinkedInDashboard() {
               />
               <p className="text-xs text-gray-500">
                 Number of messages to send before stopping (default: 50)
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="auto_run_schedule">Daily Schedule</Label>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="auto_run_schedule"
+                  checked={autoRunEnabled}
+                  onCheckedChange={handleAutoRunToggle}
+                />
+                <span className="text-sm text-gray-500">
+                  {autoRunEnabled
+                    ? `Runs daily at ${autoRunTime}`
+                    : 'Auto-run disabled'}
+                </span>
+              </div>
+              <Input
+                id="auto_run_time"
+                type="time"
+                value={autoRunTime}
+                onChange={(e) => handleAutoRunTimeChange(e.target.value)}
+                disabled={!autoRunEnabled}
+              />
+              <p className="text-xs text-gray-500">
+                The automation will trigger every day at the selected time ({settings?.timezone || 'Asia/Singapore'} timezone) using the configured messages per job limit.
               </p>
             </div>
 

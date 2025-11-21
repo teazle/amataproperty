@@ -11,12 +11,12 @@ import path from 'path';
 import fs from 'fs';
 import { config } from 'dotenv';
 import { humanPause } from './stealth.js';
-import { 
-  getStorageStatePath, 
+import {
+  getStorageStatePath,
   hasStorageState,
   deleteStorageState,
-  writeLockFile, 
-  readLockFile, 
+  writeLockFile,
+  readLockFile,
   deleteLockFile,
   getLockFilePath,
   LinkedInLockData,
@@ -75,6 +75,20 @@ async function handleAccountPicker(page: Page): Promise<void> {
   }
 }
 
+async function waitForLandingPage(page: Page): Promise<boolean> {
+  const fallbackPattern = /linkedin\.com\/(feed|in|mynetwork|checkpoint|login(-submit)?)/i;
+  const timeouts = [60000, 30000];
+  for (const timeout of timeouts) {
+    try {
+      await page.waitForURL(fallbackPattern, { timeout });
+      return true;
+    } catch {
+      console.log(`   ⚠️  Landing page not detected within ${timeout}ms`);
+    }
+  }
+  return false;
+}
+
 // Load environment variables
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -85,6 +99,7 @@ interface Contact {
   linkedinId?: string;
   messageType: 'birthday' | 'work_anniversary' | 'job_change';
   messageButton?: Locator;
+  hasMessageSent?: boolean;
 }
 
 interface ProcessResult {
@@ -274,163 +289,119 @@ async function scrollToLoadAllContacts(page: Page, containerLocator: Locator): P
  */
 async function extractContacts(page: Page): Promise<Contact[]> {
   const contacts: Contact[] = [];
-  
+
   console.log('🔍 Extracting contacts from catch-up tab...');
-  
-  // SIMPLE STRATEGY: Find message compose links and extract name from paragraph element
-  // Links look like: /messaging/compose/?profileUrn=...&recipient=...&body=...
-  // Name is in: <p class="_190e3b93 _63ebc304...">Alvin Tham, MBA</p>
   const messageComposeLinks = page.locator('a[href*="/messaging/compose/"]');
   const messageLinkCount = await messageComposeLinks.count();
-  
+
   console.log(`   ✓ Found ${messageLinkCount} message compose links`);
-  
+
   if (messageLinkCount === 0) {
     console.warn('   ⚠️  No message compose links found');
     return contacts;
   }
-  
-  // Process each message compose link
+
   for (let i = 0; i < messageLinkCount; i++) {
     try {
       const messageLink = messageComposeLinks.nth(i);
-      
-      // Scroll into view
       await messageLink.scrollIntoViewIfNeeded();
       await humanPause(200, 400);
-      
-      // Get the href
-      const href = await messageLink.getAttribute('href').catch(() => '');
-      if (!href || !href.includes('/messaging/compose/')) {
-        continue;
-      }
-      
-      // Extract contact info - find the paragraph with name and profile link
+
       const contactInfo = await page.evaluate((linkIndex) => {
         const allLinks = Array.from(document.querySelectorAll('a[href*="/messaging/compose/"]'));
         const link = allLinks[linkIndex];
         if (!link) return null;
-        
-        // Walk up DOM to find the contact container
-        let container: Element | null = link.parentElement;
+
+        const ariaLabel = link.getAttribute('aria-label') || '';
+        const parsedName =
+          ariaLabel.includes(':') && ariaLabel.toLowerCase().startsWith('message')
+            ? ariaLabel.split(':')[0].replace(/message/i, '').trim()
+            : undefined;
+
+        let container: Element | null = link;
         let depth = 0;
-        
-        while (container && depth < 15) {
-          const text = container.textContent || '';
-          
-          // Find the name paragraph - try multiple selectors for the name
-          // User said: <p class="_190e3b93 _63ebc304 _47b2b2dd _79d083f8 c701dbb2 _3c849e78 _5a2e2bd7 _8b56d53f ff36582f _3935efd9">Alvin Tham, MBA</p>
-          const nameParagraph = container.querySelector('p._190e3b93, p.c701dbb2, p._3c849e78, p[class*="_190e3b93"]');
-          
-          // Find profile link
-          const profileLink = container.querySelector('a[href*="/in/"]');
-          
-          // If we found both name and profile link, we have our contact
-          if (nameParagraph && profileLink) {
-            // Check for "Message sent" - check ALL paragraphs in the container
-            // This is the TRUE indicator - if page shows "Message sent", contact was already messaged
-            const allParagraphs = container.querySelectorAll('p');
-            let hasMessageSent = false;
-            for (const p of Array.from(allParagraphs)) {
-              const paragraphText = p.textContent?.trim() || '';
-              if (paragraphText === 'Message sent') {
-                hasMessageSent = true;
-                console.log(`   [DEBUG] Found "Message sent" paragraph for contact in container`);
-                break;
-              }
+        let profileUrl = '';
+        let derivedName = parsedName;
+        let hasMessageSent = false;
+
+        const cleanupText = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+        while (container && depth < 12) {
+          const paragraphs = Array.from(container.querySelectorAll('p'));
+          for (const paragraph of paragraphs) {
+            if (link.contains(paragraph)) continue; // message copy is inside the link
+            const paragraphText = cleanupText(paragraph.textContent || '');
+            if (paragraphText.toLowerCase() === 'message sent') {
+              hasMessageSent = true;
+              break;
             }
-            
-            // Also check the full text content as a fallback
-            if (!hasMessageSent && text.includes('Message sent')) {
-              // Make sure it's actually in this contact card, not a sibling
-              const messageSentEl = container.querySelector('p:contains("Message sent"), *:contains("Message sent")');
-              if (!messageSentEl) {
-                // Try text search more carefully
-                const lines = text.split('\n').map(l => l.trim());
-                hasMessageSent = lines.some(line => line === 'Message sent' || line.includes('Message sent'));
-              } else {
-                hasMessageSent = true;
-              }
+            if (!derivedName && paragraphText) {
+              derivedName = paragraphText.split(',')[0].trim();
             }
-
-            // Extract name from paragraph - remove titles like "MBA"
-            const nameText = nameParagraph.textContent?.trim() || '';
-            const extractedName = nameText.split(',')[0].trim();
-
-            // Get profile URL (using different variable name to avoid conflict)
-            const profileHref = profileLink.getAttribute('href') || '';
-
-            // Detect message type from text for logging (but process ALL types)
-            let detectedType: 'birthday' | 'work_anniversary' | 'job_change' = 'work_anniversary';
-            if (text.includes('birthday') || text.includes('Birthday')) {
-              detectedType = 'birthday';
-            } else if (text.includes('Started') || text.includes('new role') || text.includes('new position')) {
-              detectedType = 'job_change';
-            } else if (text.includes('Completed') || text.includes('years at')) {
-              detectedType = 'work_anniversary';
-            }
-
-            return {
-              name: extractedName || 'Unknown',
-              profileUrl: profileHref,
-              messageType: detectedType,
-              hasMessageSent: hasMessageSent  // Include this in the contact data
-            };
           }
-          
+
+          if (!profileUrl) {
+            const profileLink = container.querySelector('a[href*="/in/"]');
+            if (profileLink) {
+              profileUrl = profileLink.getAttribute('href') || '';
+            }
+          }
+
+          if ((profileUrl && derivedName) || hasMessageSent) break;
           container = container.parentElement;
           depth++;
         }
-        
-        return null;
+
+        const messageSnippet = cleanupText(link.textContent || ariaLabel);
+        return {
+          name: derivedName || 'Unknown',
+          profileUrl,
+          hasMessageSent,
+          messageSnippet
+        };
       }, i);
-      
+
       if (!contactInfo) {
         console.warn(`   ⚠️  Message link ${i + 1}: Could not find contact info, skipping`);
         continue;
       }
-      
-      if (contactInfo.skip) {
+
+      if (!contactInfo.profileUrl) {
+        console.warn(`   ⚠️  Message link ${i + 1}: No profile URL found, skipping`);
         continue;
       }
-      
-      // Clean up profile URL
-      let profileUrl = contactInfo.profileUrl || '';
+
+      let profileUrl = contactInfo.profileUrl;
       if (profileUrl.startsWith('/')) {
         profileUrl = `https://www.linkedin.com${profileUrl}`;
       }
       profileUrl = profileUrl.split('?')[0];
-      
-      // Extract LinkedIn ID from URL
+
       const linkedinIdMatch = profileUrl.match(/\/in\/([^\/\?]+)/);
       const linkedinId = linkedinIdMatch ? linkedinIdMatch[1] : undefined;
-      
-      // Use detected message type or default to 'work_anniversary' (most common)
-      const messageType = contactInfo.messageType || 'work_anniversary';
-      
-      // Skip if page shows "Message sent" - don't add to contacts list
+
       if (contactInfo.hasMessageSent) {
-        console.log(`   ⏭️  Skipping ${contactInfo.name || 'Unknown'}: Page shows "Message sent"`);
-        continue; // Don't add this contact to the list
+        console.log(`   ⏭️  Skipping ${contactInfo.name}: Page shows "Message sent"`);
+        continue;
       }
 
+      const detectedType = detectMessageType(contactInfo.messageSnippet || '') || 'work_anniversary';
       contacts.push({
-        name: contactInfo.name || 'Unknown',
-        profileUrl: profileUrl || `https://www.linkedin.com/in/${(contactInfo.name || 'Unknown').replace(/\s+/g, '-').toLowerCase()}/`,
+        name: contactInfo.name,
+        profileUrl,
         linkedinId,
-        messageType,
-        messageButton: messageLink,  // This is what we click!
-        hasMessageSent: false  // We already filtered these out
+        messageType: detectedType,
+        messageButton: messageLink,
+        hasMessageSent: false
       });
-      
-      console.log(`   ✅ Found: ${contactInfo.name} (${messageType}) - Message link ${i + 1}`);
-      
+
+      console.log(`   ✅ Found: ${contactInfo.name} (${detectedType}) - Message link ${i + 1}`);
     } catch (error: any) {
       console.error(`   ❌ Error processing message link ${i + 1}:`, error.message);
       continue;
     }
   }
-  
+
   console.log(`✅ Extracted ${contacts.length} contacts ready for messaging`);
   return contacts;
 }
@@ -1018,7 +989,10 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await loginButton.click();
       
       // Wait for login
-      await page.waitForURL(/linkedin\.com\/(feed|in)/, { timeout: 30000 });
+      const landed = await waitForLandingPage(page);
+      if (!landed) {
+        console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding with catch-up navigation');
+      }
       await humanPause(3000, 5000);
       
       // Save storage state
@@ -1110,7 +1084,10 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await loginButton.click();
         
         // Wait for login
-        await page.waitForURL(/linkedin\.com\/(feed|in)/, { timeout: 30000 });
+        const landed = await waitForLandingPage(page);
+        if (!landed) {
+          console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding with catch-up navigation');
+        }
         await humanPause(3000, 5000);
         
         // Save storage state

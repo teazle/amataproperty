@@ -92,9 +92,9 @@ async function waitForLandingPage(page: Page): Promise<boolean> {
 async function waitForPostLoginReady(page: Page): Promise<boolean> {
   const selectors = [
     'nav[role="navigation"]',
-    'header[role="banner"]',
     '[data-testid="global-nav"]',
     '[data-control-name="identity_welcome_message"]',
+    'header[role="banner"]',
     'a[data-control-name="nav_home"]',
     'main.feed-list',
     'main'
@@ -102,7 +102,7 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
 
   for (const selector of selectors) {
     try {
-      await page.waitForSelector(selector, { timeout: 15000 });
+      await page.waitForSelector(selector, { timeout: 5000 });
       return true;
     } catch {
       // continue trying other selectors
@@ -110,7 +110,7 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
   }
 
   try {
-    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 20000 });
+    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 10000 });
     return true;
   } catch {
     return false;

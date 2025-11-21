@@ -53,6 +53,28 @@ async function fillInputValue(page: Page, selector: string, value: string): Prom
   }
 }
 
+async function handleAccountPicker(page: Page): Promise<void> {
+  try {
+    const picker = page.locator('text="Sign in using another account"');
+    if (await picker.count() > 0) {
+      console.log('   ✏️ Account picker detected; clicking "Sign in using another account"');
+      await picker.first().click();
+      await humanPause(1000, 2000);
+      return;
+    }
+
+    const useAnother = page.locator('text="Use another account"');
+    if (await useAnother.count() > 0) {
+      console.log('   ✏️ Account picker detected; clicking "Use another account"');
+      await useAnother.first().click();
+      await humanPause(1000, 2000);
+      return;
+    }
+  } catch (error: any) {
+    console.warn('   ⚠️ Unable to handle account picker:', (error as Error).message);
+  }
+}
+
 // Load environment variables
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -947,6 +969,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       console.log('   🏷️  Title:', await page.title());
       await humanPause(2000, 3000);
       
+      await handleAccountPicker(page);
+
       // Fill email
       const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
       console.log('   🎯 Filling email via selector:', emailSelector);
@@ -1037,6 +1061,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         console.log('   🏷️  Title (refresh):', await page.title());
         await humanPause(2000, 3000);
         
+        await handleAccountPicker(page);
+
         // Fill email
         const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
         console.log('   🎯 Filling email via selector (session refresh):', emailSelector);

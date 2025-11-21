@@ -941,24 +941,14 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(2000, 3000);
       
       // Fill email
-      const emailSelector = 'input[aria-label="Email or phone"]';
-      const emailInput = page.locator(emailSelector).first();
-      await emailInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
-      if ((await emailInput.count()) === 0) {
-        throw new Error('Email input not found');
-      }
-      console.log('   🎯 Filling email via aria-label input');
+      const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
+      console.log('   🎯 Filling email via selector:', emailSelector);
       await fillInputValue(page, emailSelector, email);
       await humanPause(500, 1000);
       
       // Fill password
-      const passwordSelector = 'input[aria-label="Password"]';
-      const passwordInput = page.locator(passwordSelector).first();
-      await passwordInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
-      if ((await passwordInput.count()) === 0) {
-        throw new Error('Password input not found');
-      }
-      console.log('   🛡️ Filling password via aria-label input');
+      const passwordSelector = 'input[aria-label="Password"], input[name="session_password"]';
+      console.log('   🛡️ Filling password via selector:', passwordSelector);
       await fillInputValue(page, passwordSelector, password);
       await humanPause(500, 1000);
       
@@ -1041,24 +1031,14 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await humanPause(2000, 3000);
         
         // Fill email
-        const emailSelector = 'input[aria-label="Email or phone"]';
-        const emailInput = page.locator(emailSelector).first();
-        await emailInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
-        if ((await emailInput.count()) === 0) {
-          throw new Error('Email input not found');
-        }
-        console.log('   🎯 Filling email via aria-label input (session refresh)');
+        const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
+        console.log('   🎯 Filling email via selector (session refresh):', emailSelector);
         await fillInputValue(page, emailSelector, email);
         await humanPause(500, 1000);
         
         // Fill password
-        const passwordSelector = 'input[aria-label="Password"]';
-        const passwordInput = page.locator(passwordSelector).first();
-        await passwordInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
-        if ((await passwordInput.count()) === 0) {
-          throw new Error('Password input not found');
-        }
-        console.log('   🛡️ Filling password via aria-label input (session refresh)');
+        const passwordSelector = 'input[aria-label="Password"], input[name="session_password"]';
+        console.log('   🛡️ Filling password via selector (session refresh):', passwordSelector);
         await fillInputValue(page, passwordSelector, password);
         await humanPause(500, 1000);
         

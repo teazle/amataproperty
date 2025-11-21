@@ -31,7 +31,12 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   const logStream = fs.openSync(LOG_FILE_PATH, 'a');
   const env = {
     ...process.env,
-    ...(options.headed ? { HEADLESS: '0' } : {})
+    ...(options.headed
+      ? {
+          HEADLESS: '0',
+          DISPLAY: process.env.LINKEDIN_DISPLAY || ':99'
+        }
+      : {})
   };
 
   const child = spawn('bun', [scriptPath, ...args], {

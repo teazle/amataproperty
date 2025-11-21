@@ -1104,6 +1104,22 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await humanPause(2000, 3000);
 
+      const catchUpTab = page.getByRole('tab', { name: /catch up/i }).first();
+      if (await catchUpTab.count() > 0) {
+        try {
+          await catchUpTab.waitFor({ state: 'attached', timeout: 10000 });
+          await humanPause(500, 1000);
+          const selected = await catchUpTab.getAttribute('aria-selected');
+          if (selected !== 'true') {
+            console.log('   👆 Catch Up tab detected but not selected; clicking it');
+            await catchUpTab.click();
+            await humanPause(1000, 2000);
+          }
+        } catch (tabError: any) {
+          console.log('   ⚠️ Unable to interact with Catch Up tab, continuing with page load:', tabError.message);
+        }
+      }
+
       const catchUpSelectors = [
         'main [role="list"]',
         'main div[role="list"]',
@@ -1113,7 +1129,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         'section[aria-label*="Catch up"]',
         'div[aria-label*="Catch up"]',
         'div[data-automation="catch-up-list"]',
-        'div[data-test-list="catch-up"]'
+        'div[data-test-list="catch-up"]',
+        'div[data-automation="catch-up-card"]',
+        'div[data-test-id="catch-up-card"]'
       ];
 
       let contactsList: Locator | null = null;
@@ -1149,6 +1167,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     let scrollAttempts = 0;
     const maxScrollAttempts = 200; // Increased limit to allow extensive scrolling
     const processedProfileUrls = new Set<string>(); // Track processed contacts to avoid duplicates
+    let stopRequested = false;
     
     // Use messages_per_job (default 50) instead of daily_limit
     const messagesPerJob = settings.messages_per_job || 50;
@@ -1191,6 +1210,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         const currentLock = readLockFile();
         if (currentLock?.status === 'stopping') {
           console.log('\n⏹️  Stop signal received, stopping gracefully...');
+          stopRequested = true;
           break;
         }
         
@@ -1247,6 +1267,11 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       }
       
       // If we've processed all visible contacts and haven't reached the limit, scroll to load more
+      if (stopRequested) {
+        console.log('\n⏹️ Stop signal handled, exiting processing loop');
+        break;
+      }
+
       if (totalSent < messagesPerJob) {
         console.log(`\n📜 Scrolling to load more contacts (${totalSent}/${messagesPerJob} sent so far)...`);
         scrollAttempts++;

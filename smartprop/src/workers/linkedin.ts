@@ -1103,11 +1103,35 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     try {
       await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await humanPause(2000, 3000);
-      
-      // Wait for contacts list to load
-      const contactsList = page.locator('main list[role="list"], main ul, main ol').first();
-      await contactsList.waitFor({ state: 'visible', timeout: 15000 });
-      console.log('   ✅ Catch Up page loaded');
+
+      const catchUpSelectors = [
+        'main [role="list"]',
+        'main div[role="list"]',
+        'main ul',
+        'main ol',
+        'main section',
+        'section[aria-label*="Catch up"]',
+        'div[aria-label*="Catch up"]',
+        'div[data-automation="catch-up-list"]',
+        'div[data-test-list="catch-up"]'
+      ];
+
+      let contactsList: Locator | null = null;
+      for (const selector of catchUpSelectors) {
+        const candidate = page.locator(selector).first();
+        try {
+          await candidate.waitFor({ state: 'visible', timeout: 12000 });
+          contactsList = candidate;
+          console.log(`   ✅ Catch Up layout detected via "${selector}"`);
+          break;
+        } catch {
+          // Continue to next selector
+        }
+      }
+
+      if (!contactsList) {
+        console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; continuing without explicit list readiness check.');
+      }
     } catch (error: any) {
       console.error('❌ Error navigating to Catch Up page:', error.message);
       throw error;

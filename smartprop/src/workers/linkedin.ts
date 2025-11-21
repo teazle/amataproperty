@@ -939,7 +939,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(2000, 3000);
       
       // Fill email
-      const emailSelector = 'input[aria-label="Email or phone"]:visible';
+      const emailSelector = 'input[aria-label="Email or phone"]';
       const emailInput = page.locator(emailSelector).first();
       if ((await emailInput.count()) === 0) {
         throw new Error('Email input not found');
@@ -949,7 +949,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(500, 1000);
       
       // Fill password
-      const passwordSelector = 'input[aria-label="Password"]:visible';
+      const passwordSelector = 'input[aria-label="Password"]';
       const passwordInput = page.locator(passwordSelector).first();
       if ((await passwordInput.count()) === 0) {
         throw new Error('Password input not found');
@@ -1035,7 +1035,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await humanPause(2000, 3000);
         
         // Fill email
-        const emailSelector = 'input[aria-label="Email or phone"]:visible';
+        const emailSelector = 'input[aria-label="Email or phone"]';
         const emailInput = page.locator(emailSelector).first();
         if ((await emailInput.count()) === 0) {
           throw new Error('Email input not found');
@@ -1045,7 +1045,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await humanPause(500, 1000);
         
         // Fill password
-        const passwordSelector = 'input[aria-label="Password"]:visible';
+        const passwordSelector = 'input[aria-label="Password"]';
         const passwordInput = page.locator(passwordSelector).first();
         if ((await passwordInput.count()) === 0) {
           throw new Error('Password input not found');

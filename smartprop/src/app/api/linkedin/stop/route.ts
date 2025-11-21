@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { readLockFile, writeLockFile } from '@/lib/linkedin/storage';
+import {
+  readLockFile,
+  writeLockFile,
+  deleteLockFile,
+  isProcessRunning
+} from '@/lib/linkedin/storage';
 
 export async function POST() {
   const lockData = readLockFile();
@@ -12,11 +17,36 @@ export async function POST() {
 
   lockData.status = 'stopping';
   writeLockFile(lockData);
-  console.log('⏹️ Stop signal requested via API');
+  console.log('⏹️ Stop signal requested via API (status updated)');
+
+  let killResult = 'not attempted';
+  if (lockData.pid) {
+    try {
+      if (await isProcessRunning(lockData.pid)) {
+        process.kill(lockData.pid, 'SIGTERM');
+        killResult = `SIGTERM sent to PID ${lockData.pid}`;
+        console.log(`⏹️ SIGTERM sent to PID ${lockData.pid}`);
+      } else {
+        killResult = 'process already exited';
+      }
+    } catch (error: any) {
+      killResult = `error: ${error.message}`;
+      console.error(`❌ Error sending SIGTERM to PID ${lockData.pid}:`, error);
+    }
+  }
+
+  setTimeout(async () => {
+    const stillRunning = lockData.pid ? await isProcessRunning(lockData.pid) : false;
+    if (!stillRunning) {
+      deleteLockFile();
+      console.log('🧹 LinkedIn lock file removed after stop');
+    }
+  }, 5000);
 
   return NextResponse.json({
     success: true,
-    message: 'Stop signal sent'
+    message: 'Stop signal sent',
+    detail: killResult
   });
 }
 

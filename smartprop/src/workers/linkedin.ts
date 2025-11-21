@@ -284,6 +284,18 @@ async function scrollToLoadAllContacts(page: Page, containerLocator: Locator): P
   return currentCount;
 }
 
+async function captureDebugScreenshot(page: Page, label: string): Promise<void> {
+  try {
+    const tmpDir = path.join(process.cwd(), 'tmp');
+    await fs.promises.mkdir(tmpDir, { recursive: true });
+    const screenshotPath = path.join(tmpDir, `linkedin-${label}-${Date.now()}.png`);
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.log(`   🖼️  Saved debug screenshot: ${screenshotPath}`);
+  } catch (error: any) {
+    console.warn('   ⚠️ Failed to capture debug screenshot:', error.message);
+  }
+}
+
 /**
  * Extract contacts from the catch-up tab
  */
@@ -1104,6 +1116,18 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await humanPause(2000, 3000);
 
+      const landingUrl = page.url();
+      const landingTitle = await page.title().catch(() => 'unknown');
+      console.log(`   🌐 Catch Up landing URL: ${landingUrl}`);
+      console.log(`   🏷️  Catch Up landing Title: ${landingTitle}`);
+
+      const loginBanner = await page.locator('text="Sign in"').count();
+      if (landingUrl.includes('/login') || loginBanner > 0) {
+        console.warn('   ⚠️  LinkedIn redirected back to login page after catch-up navigation');
+        await captureDebugScreenshot(page, 'catchup-login');
+        throw new Error('LinkedIn is still showing the login page after catch-up navigation');
+      }
+
       const catchUpTab = page.getByRole('tab', { name: /catch up/i }).first();
       if (await catchUpTab.count() > 0) {
         try {
@@ -1150,7 +1174,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       }
 
       if (!contactsList) {
-        console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; continuing without explicit list readiness check.');
+        console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; failing early');
+        await captureDebugScreenshot(page, 'catchup-missing');
+        throw new Error('Catch Up list not detected after navigation');
       }
     } catch (error: any) {
       console.error('❌ Error navigating to Catch Up page:', error.message);

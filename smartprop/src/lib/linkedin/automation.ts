@@ -15,11 +15,12 @@ export interface AutomationOptions {
 
 const LOG_FILE_PATH = '/tmp/linkedin-automation.log';
 
-export function startLinkedInAutomation(options: AutomationOptions = {}): number {
+export async function startLinkedInAutomation(options: AutomationOptions = {}): Promise<number> {
   const lockFile = getLockFilePath();
   const lockData = readLockFile();
-  if (lockData?.status === 'running') {
-    if (lockData.pid && isProcessRunning(lockData.pid)) {
+  if (lockData?.status === 'running' && lockData.pid) {
+    const running = await isProcessRunning(lockData.pid);
+    if (running) {
       throw new Error('LinkedIn automation is already running');
     }
   }

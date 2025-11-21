@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { dryRun, headed } = body;
-    const pid = startLinkedInAutomation({
+    const pid = await startLinkedInAutomation({
       dryRun,
       headed,
       reason: 'manual scan'

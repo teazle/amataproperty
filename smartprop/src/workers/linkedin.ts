@@ -941,6 +941,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       // Fill email
       const emailSelector = 'input[aria-label="Email or phone"]';
       const emailInput = page.locator(emailSelector).first();
+      await emailInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
       if ((await emailInput.count()) === 0) {
         throw new Error('Email input not found');
       }
@@ -951,6 +952,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       // Fill password
       const passwordSelector = 'input[aria-label="Password"]';
       const passwordInput = page.locator(passwordSelector).first();
+      await passwordInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
       if ((await passwordInput.count()) === 0) {
         throw new Error('Password input not found');
       }
@@ -1037,6 +1039,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         // Fill email
         const emailSelector = 'input[aria-label="Email or phone"]';
         const emailInput = page.locator(emailSelector).first();
+        await emailInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
         if ((await emailInput.count()) === 0) {
           throw new Error('Email input not found');
         }
@@ -1047,6 +1050,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         // Fill password
         const passwordSelector = 'input[aria-label="Password"]';
         const passwordInput = page.locator(passwordSelector).first();
+        await passwordInput.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
         if ((await passwordInput.count()) === 0) {
           throw new Error('Password input not found');
         }

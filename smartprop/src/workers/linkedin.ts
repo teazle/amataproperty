@@ -33,6 +33,26 @@ import {
 import { getSupabaseClient } from '@/workers/supa';
 import { Page, Locator } from 'playwright-core';
 
+async function fillInputValue(page: Page, selector: string, value: string): Promise<void> {
+  const success = await page.evaluate(
+    ({ selector, value }) => {
+      const input = document.querySelector<HTMLInputElement>(selector);
+      if (!input) {
+        return false;
+      }
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    },
+    { selector, value }
+  );
+
+  if (!success) {
+    throw new Error(`Unable to fill input: ${selector}`);
+  }
+}
+
 // Load environment variables
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -919,15 +939,23 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(2000, 3000);
       
       // Fill email
-      const emailInput = page.locator('input[aria-label="Email or phone"]:visible').first();
+      const emailSelector = 'input[aria-label="Email or phone"]:visible';
+      const emailInput = page.locator(emailSelector).first();
+      if ((await emailInput.count()) === 0) {
+        throw new Error('Email input not found');
+      }
       console.log('   🎯 Filling email via aria-label input');
-      await emailInput.fill(email);
+      await fillInputValue(page, emailSelector, email);
       await humanPause(500, 1000);
       
       // Fill password
-      const passwordInput = page.locator('input[aria-label="Password"]:visible').first();
+      const passwordSelector = 'input[aria-label="Password"]:visible';
+      const passwordInput = page.locator(passwordSelector).first();
+      if ((await passwordInput.count()) === 0) {
+        throw new Error('Password input not found');
+      }
       console.log('   🛡️ Filling password via aria-label input');
-      await passwordInput.fill(password);
+      await fillInputValue(page, passwordSelector, password);
       await humanPause(500, 1000);
       
       // Click login - use specific selector to avoid clicking "Sign in with Apple" or social login buttons
@@ -1007,15 +1035,23 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await humanPause(2000, 3000);
         
         // Fill email
-        const emailInput = page.locator('input[aria-label="Email or phone"]:visible').first();
+        const emailSelector = 'input[aria-label="Email or phone"]:visible';
+        const emailInput = page.locator(emailSelector).first();
+        if ((await emailInput.count()) === 0) {
+          throw new Error('Email input not found');
+        }
         console.log('   🎯 Filling email via aria-label input (session refresh)');
-        await emailInput.fill(email);
+        await fillInputValue(page, emailSelector, email);
         await humanPause(500, 1000);
         
         // Fill password
-        const passwordInput = page.locator('input[aria-label="Password"]:visible').first();
+        const passwordSelector = 'input[aria-label="Password"]:visible';
+        const passwordInput = page.locator(passwordSelector).first();
+        if ((await passwordInput.count()) === 0) {
+          throw new Error('Password input not found');
+        }
         console.log('   🛡️ Filling password via aria-label input (session refresh)');
-        await passwordInput.fill(password);
+        await fillInputValue(page, passwordSelector, password);
         await humanPause(500, 1000);
         
         // Click login - use more specific selector to avoid clicking "Sign in with Apple"

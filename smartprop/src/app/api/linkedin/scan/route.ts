@@ -10,7 +10,7 @@ import fs from 'fs';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { dryRun } = body;
+    const { dryRun, headed } = body;
 
     // Check if already running
     const lockFile = path.join(process.cwd(), 'storage', 'linkedin.lock.json');
@@ -44,9 +44,15 @@ export async function POST(request: NextRequest) {
     // Open log file for writing (append mode)
     const logStream = fs.openSync(logFile, 'a');
     
+    const env = {
+      ...process.env,
+      ...(headed ? { HEADLESS: '0' } : {})
+    };
+
     const child = spawn('bun', [scriptPath, ...args], {
       detached: true,
       stdio: ['ignore', logStream, logStream], // Redirect stdout and stderr to log file
+      env,
       cwd: process.cwd()
     });
 

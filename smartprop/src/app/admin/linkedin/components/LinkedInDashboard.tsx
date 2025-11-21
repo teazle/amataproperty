@@ -74,6 +74,7 @@ export function LinkedInDashboard() {
   const [logs, setLogs] = useState<string[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [runHeaded, setRunHeaded] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState<Partial<LinkedInSettings>>({});
@@ -231,7 +232,7 @@ export function LinkedInDashboard() {
       const res = await fetch('/api/linkedin/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dryRun })
+        body: JSON.stringify({ dryRun, headed: runHeaded })
       });
       const data = await res.json();
       
@@ -389,6 +390,17 @@ export function LinkedInDashboard() {
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
             Refresh Status
           </Button>
+
+            <div className="ml-auto flex items-center gap-2">
+              <Switch
+                id="run_headed"
+                checked={runHeaded}
+                onCheckedChange={(checked) => setRunHeaded(checked)}
+              />
+              <Label htmlFor="run_headed" className="text-xs font-medium">
+                Run in headed browser
+              </Label>
+            </div>
 
           {status?.isRunning && (
             <Badge className="ml-auto flex items-center gap-2">

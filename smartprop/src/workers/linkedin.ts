@@ -907,12 +907,19 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     ]
   });
   
+  const storagePath = getStorageStatePath();
+  const hadSavedSession = hasStorageState();
+  if (hadSavedSession) {
+    console.log('   🧹 Clearing saved session to avoid account-picker screen');
+    deleteStorageState();
+  }
+
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     locale: 'en-US',
     timezoneId: settings.timezone || 'Asia/Singapore',
     // Load saved storage state if exists
-    ...(hasStorageState() ? { storageState: getStorageStatePath() } : {})
+    ...(hasStorageState() ? { storageState: storagePath } : {})
   });
   
   await context.addInitScript(() => {

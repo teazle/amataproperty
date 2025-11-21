@@ -1121,13 +1121,15 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       }
 
       const catchUpSelectors = [
-        'main [role="list"]',
-        'main div[role="list"]',
-        'main ul',
-        'main ol',
-        'main section',
-        'section[aria-label*="Catch up"]',
-        'div[aria-label*="Catch up"]',
+        'section:has-text("Catch up")',
+        'div:has-text("Catch up")',
+        'main button:has-text("Message")',
+        'main button[aria-label*="Message"]',
+        'main li',
+        'main [role="grid"]',
+        'main [aria-label*="Catch up"]',
+        'main [data-test-list*="catch"]',
+        'main div[role="presentation"]',
         'div[data-automation="catch-up-list"]',
         'div[data-test-list="catch-up"]',
         'div[data-automation="catch-up-card"]',

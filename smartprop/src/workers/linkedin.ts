@@ -919,12 +919,12 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(2000, 3000);
       
       // Fill email
-      const emailInput = page.locator('input[name="session_key"], input[type="email"]').first();
+      const emailInput = page.getByLabel('Email or phone').first();
       await emailInput.fill(email);
       await humanPause(500, 1000);
       
       // Fill password
-      const passwordInput = page.locator('input[name="session_password"], input[type="password"]').first();
+      const passwordInput = page.getByLabel('Password').first();
       await passwordInput.fill(password);
       await humanPause(500, 1000);
       
@@ -1005,12 +1005,12 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         await humanPause(2000, 3000);
         
         // Fill email
-        const emailInput = page.locator('input[name="session_key"], input[type="email"]').first();
+        const emailInput = page.getByLabel('Email or phone').first();
         await emailInput.fill(email);
         await humanPause(500, 1000);
         
         // Fill password
-        const passwordInput = page.locator('input[name="session_password"], input[type="password"]').first();
+        const passwordInput = page.getByLabel('Password').first();
         await passwordInput.fill(password);
         await humanPause(500, 1000);
         

@@ -117,6 +117,140 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
   }
 }
 
+async function executeLoginFlow(page: Page, context: BrowserContext, email: string, password: string): Promise<void> {
+  console.log('🔐 Performing login flow...');
+  await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
+  console.log('   🌐 Login URL:', page.url());
+  console.log('   🏷️  Title:', await page.title());
+  await humanPause(2000, 3000);
+
+  await handleAccountPicker(page);
+
+  const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
+  console.log('   🎯 Filling email via selector:', emailSelector);
+  await fillInputValue(page, emailSelector, email);
+  await humanPause(500, 1000);
+
+  const passwordSelector = 'input[aria-label="Password"], input[name="session_password"]';
+  console.log('   🛡️ Filling password via selector:', passwordSelector);
+  await fillInputValue(page, passwordSelector, password);
+  await humanPause(500, 1000);
+
+  const loginButtonSelectors = [
+    'button[type="submit"]',
+    'form button[type="submit"]',
+    'button[type="submit"]:not(:has-text("Apple")):not(:has-text("Google"))'
+  ];
+
+  let loginButton: Locator | null = null;
+  for (const selector of loginButtonSelectors) {
+    const btn = page.locator(selector).first();
+    const count = await btn.count();
+    if (count > 0) {
+      const text = await btn.textContent().catch(() => '');
+      if (!text || text.trim().toLowerCase().includes('sign in')) {
+        loginButton = btn;
+        console.log(`   ✅ Found login button with selector: ${selector}`);
+        break;
+      }
+    }
+  }
+
+  if (!loginButton) {
+    loginButton = page.getByRole('button', { name: 'Sign in', exact: true }).first();
+    const total = await loginButton.count();
+    if (total === 0) {
+      throw new Error('Login button not found');
+    }
+  }
+
+  await loginButton.click();
+  const landed = await waitForLandingPage(page);
+  if (!landed) {
+    console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding cautiously');
+  }
+  await humanPause(3000, 5000);
+
+  await context.storageState({ path: getStorageStatePath() });
+  console.log('✅ Logged in and saved session');
+}
+
+async function loadCatchUpPage(page: Page): Promise<boolean> {
+  console.log('📍 Navigating directly to Catch Up page...');
+  try {
+    await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await humanPause(2000, 3000);
+
+    const landingUrl = page.url();
+    const landingTitle = await page.title().catch(() => 'unknown');
+    console.log(`   🌐 Catch Up landing URL: ${landingUrl}`);
+    console.log(`   🏷️  Catch Up landing Title: ${landingTitle}`);
+
+    const loginBanner = await page.locator('text="Sign in"').count();
+    if (landingUrl.includes('/login') || loginBanner > 0) {
+      console.warn('   ⚠️  LinkedIn redirected back to login page after catch-up navigation');
+      await captureDebugScreenshot(page, 'catchup-login');
+      return false;
+    }
+
+    const catchUpTab = page.getByRole('tab', { name: /catch up/i }).first();
+    if (await catchUpTab.count() > 0) {
+      try {
+        await catchUpTab.waitFor({ state: 'attached', timeout: 10000 });
+        await humanPause(500, 1000);
+        const selected = await catchUpTab.getAttribute('aria-selected');
+        if (selected !== 'true') {
+          console.log('   👆 Catch Up tab detected but not selected; clicking it');
+          await catchUpTab.click();
+          await humanPause(1000, 2000);
+        }
+      } catch (tabError: any) {
+        console.log('   ⚠️ Unable to interact with Catch Up tab, continuing with page load:', tabError.message);
+      }
+    }
+
+    const catchUpSelectors = [
+      'section:has-text("Catch up")',
+      'div:has-text("Catch up")',
+      'main button:has-text("Message")',
+      'main button[aria-label*="Message"]',
+      'main li',
+      'main [role="grid"]',
+      'main [aria-label*="Catch up"]',
+      'main [data-test-list*="catch"]',
+      'main div[role="presentation"]',
+      'div[data-automation="catch-up-list"]',
+      'div[data-test-list="catch-up"]',
+      'div[data-automation="catch-up-card"]',
+      'div[data-test-id="catch-up-card"]'
+    ];
+
+    let contactsList: Locator | null = null;
+    for (const selector of catchUpSelectors) {
+      const candidate = page.locator(selector).first();
+      try {
+        await candidate.waitFor({ state: 'visible', timeout: 12000 });
+        contactsList = candidate;
+        console.log(`   ✅ Catch Up layout detected via "${selector}"`);
+        break;
+      } catch {
+        // Continue to next selector
+      }
+    }
+
+    if (!contactsList) {
+      console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; failing early');
+      await captureDebugScreenshot(page, 'catchup-missing');
+      return false;
+    }
+
+    return true;
+  } catch (error: any) {
+    console.error('❌ Error navigating to Catch Up page:', error.message);
+    return false;
+  }
+}
+
 // Load environment variables
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -974,247 +1108,68 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   try {
     // Login if needed
     if (!hasStorageState()) {
-      console.log('🔐 Logging in to LinkedIn...');
-      await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
-      console.log('   🌐 Login URL:', page.url());
-      console.log('   🏷️  Title:', await page.title());
-      await humanPause(2000, 3000);
-      
-      await handleAccountPicker(page);
-
-      // Fill email
-      const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
-      console.log('   🎯 Filling email via selector:', emailSelector);
-      await fillInputValue(page, emailSelector, email);
-      await humanPause(500, 1000);
-      
-      // Fill password
-      const passwordSelector = 'input[aria-label="Password"], input[name="session_password"]';
-      console.log('   🛡️ Filling password via selector:', passwordSelector);
-      await fillInputValue(page, passwordSelector, password);
-      await humanPause(500, 1000);
-      
-      // Click login - use specific selector to avoid clicking "Sign in with Apple" or social login buttons
-      // Target the form submit button specifically, not social login buttons
-      const loginButtonSelectors = [
-        'button[type="submit"]',  // Form submit button (most specific)
-        'form button[type="submit"]',  // Submit button within form
-      ];
-      
-      let loginButton: Locator | null = null;
-      for (const selector of loginButtonSelectors) {
-        const btn = page.locator(selector).first();
-        const count = await btn.count();
-        if (count > 0) {
-          const text = await btn.textContent().catch(() => '');
-          // Make sure it's not a social login button (should just say "Sign in")
-          if (text && text.trim().toLowerCase() === 'sign in') {
-            loginButton = btn;
-            console.log(`   ✅ Found login button with selector: ${selector}`);
-            break;
-          }
-        }
-      }
-      
-      if (!loginButton) {
-        // Fallback: use getByRole for exact "Sign in" button
-        loginButton = page.getByRole('button', { name: 'Sign in', exact: true }).first();
-        const count = await loginButton.count();
-        if (count === 0) {
-          throw new Error('Login button not found');
-        }
-        console.log('   ✅ Found login button using getByRole');
-      }
-      
-      await loginButton.click();
-      
-      // Wait for login
-      const landed = await waitForLandingPage(page);
-      if (!landed) {
-        console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding with catch-up navigation');
-      }
-      await humanPause(3000, 5000);
-      
-      // Save storage state
-      await context.storageState({ path: getStorageStatePath() });
-      console.log('✅ Logged in and saved session');
+      await executeLoginFlow(page, context, email, password);
     } else {
-      // Verify session is still valid - use faster load strategy
       console.log('🔍 Verifying session...');
       try {
         await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 60000 });
         await humanPause(2000, 3000);
       } catch (timeoutError: any) {
-        // If feed times out, try catch-up page directly - session might still be valid
         console.log('   ⚠️  Feed page load slow, trying catch-up page directly...');
         try {
           await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
           await humanPause(2000, 3000);
           console.log('   ✅ Session appears valid (catch-up page loaded)');
         } catch (e: any) {
-          // Session likely expired, delete and login fresh
           console.log('   ⚠️  Session expired, will login fresh');
           deleteStorageState();
-          throw new Error('Session expired');
+          await executeLoginFlow(page, context, email, password);
         }
       }
-      
-      // Check if logged in (multiple checks for robustness)
+
       const navCheck = await page.locator('nav[role="navigation"], nav.global-nav, header[role="banner"]').count() > 0;
       const feedCheck = await page.locator('main, .feed-container, [data-testid="feed-container"]').count() > 0;
       const loginCheck = await page.locator('input[name="session_key"], .login-form').count() === 0;
-      
+
       const isLoggedIn = (navCheck || feedCheck) && loginCheck;
-      
+
       if (!isLoggedIn) {
         console.log('⚠️  Session expired, attempting fresh login...');
-        // Delete invalid session and login fresh
         deleteStorageState();
-        await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
-        console.log('   🌐 Login URL (refresh):', page.url());
-        console.log('   🏷️  Title (refresh):', await page.title());
-        await humanPause(2000, 3000);
-        
-        await handleAccountPicker(page);
-
-        // Fill email
-        const emailSelector = 'input[aria-label="Email or phone"], input[name="session_key"]';
-        console.log('   🎯 Filling email via selector (session refresh):', emailSelector);
-        await fillInputValue(page, emailSelector, email);
-        await humanPause(500, 1000);
-        
-        // Fill password
-        const passwordSelector = 'input[aria-label="Password"], input[name="session_password"]';
-        console.log('   🛡️ Filling password via selector (session refresh):', passwordSelector);
-        await fillInputValue(page, passwordSelector, password);
-        await humanPause(500, 1000);
-        
-        // Click login - use more specific selector to avoid clicking "Sign in with Apple"
-        // Target the form submit button specifically, not social login buttons
-        const loginButtonSelectors = [
-          'button[type="submit"]',  // Form submit button
-          'form button[type="submit"]',  // Submit button within form
-          'button[type="submit"]:not(:has-text("Apple")):not(:has-text("Google"))',  // Submit but not social login
-        ];
-        
-        let loginButton: Locator | null = null;
-        for (const selector of loginButtonSelectors) {
-          const btn = page.locator(selector).first();
-          const count = await btn.count();
-          if (count > 0) {
-            const text = await btn.textContent().catch(() => '');
-            // Make sure it's not a social login button
-            if (text && !text.toLowerCase().includes('apple') && !text.toLowerCase().includes('google')) {
-              loginButton = btn;
-              console.log(`   ✅ Found login button with selector: ${selector}`);
-              break;
-            }
-          }
-        }
-        
-        if (!loginButton) {
-          // Fallback: use getByRole for submit button
-          loginButton = page.getByRole('button', { name: 'Sign in', exact: true }).first();
-          const count = await loginButton.count();
-          if (count === 0) {
-            throw new Error('Login button not found');
-          }
-        }
-        
-        await loginButton.click();
-        
-        // Wait for login
-        const landed = await waitForLandingPage(page);
-        if (!landed) {
-          console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding with catch-up navigation');
-        }
-        await humanPause(3000, 5000);
-        
-        // Save storage state
-        await context.storageState({ path: getStorageStatePath() });
-        console.log('✅ Logged in and saved session');
+        await executeLoginFlow(page, context, email, password);
       } else {
         console.log('✅ Session verified');
       }
     }
+
     const postLoginReady = await waitForPostLoginReady(page);
     if (!postLoginReady) {
       console.warn('   ⚠️  Unable to confirm post-login layout before navigating to Catch Up');
     }
-    
-    // Navigate directly to catch-up page (faster than clicking tab)
-    console.log('📍 Navigating directly to Catch Up page...');
-    try {
-      await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await humanPause(2000, 3000);
 
-      const landingUrl = page.url();
-      const landingTitle = await page.title().catch(() => 'unknown');
-      console.log(`   🌐 Catch Up landing URL: ${landingUrl}`);
-      console.log(`   🏷️  Catch Up landing Title: ${landingTitle}`);
-
-      const loginBanner = await page.locator('text="Sign in"').count();
-      if (landingUrl.includes('/login') || loginBanner > 0) {
-        console.warn('   ⚠️  LinkedIn redirected back to login page after catch-up navigation');
-        await captureDebugScreenshot(page, 'catchup-login');
-        throw new Error('LinkedIn is still showing the login page after catch-up navigation');
-      }
-
-      const catchUpTab = page.getByRole('tab', { name: /catch up/i }).first();
-      if (await catchUpTab.count() > 0) {
-        try {
-          await catchUpTab.waitFor({ state: 'attached', timeout: 10000 });
-          await humanPause(500, 1000);
-          const selected = await catchUpTab.getAttribute('aria-selected');
-          if (selected !== 'true') {
-            console.log('   👆 Catch Up tab detected but not selected; clicking it');
-            await catchUpTab.click();
-            await humanPause(1000, 2000);
-          }
-        } catch (tabError: any) {
-          console.log('   ⚠️ Unable to interact with Catch Up tab, continuing with page load:', tabError.message);
-        }
-      }
-
-      const catchUpSelectors = [
-        'section:has-text("Catch up")',
-        'div:has-text("Catch up")',
-        'main button:has-text("Message")',
-        'main button[aria-label*="Message"]',
-        'main li',
-        'main [role="grid"]',
-        'main [aria-label*="Catch up"]',
-        'main [data-test-list*="catch"]',
-        'main div[role="presentation"]',
-        'div[data-automation="catch-up-list"]',
-        'div[data-test-list="catch-up"]',
-        'div[data-automation="catch-up-card"]',
-        'div[data-test-id="catch-up-card"]'
-      ];
-
-      let contactsList: Locator | null = null;
-      for (const selector of catchUpSelectors) {
-        const candidate = page.locator(selector).first();
-        try {
-          await candidate.waitFor({ state: 'visible', timeout: 12000 });
-          contactsList = candidate;
-          console.log(`   ✅ Catch Up layout detected via "${selector}"`);
+    let catchUpLoaded = false;
+    let catchUpAttempts = 0;
+    const maxCatchUpAttempts = 3;
+    while (!catchUpLoaded && catchUpAttempts < maxCatchUpAttempts) {
+      catchUpLoaded = await loadCatchUpPage(page);
+      if (!catchUpLoaded) {
+        catchUpAttempts++;
+        if (catchUpAttempts >= maxCatchUpAttempts) {
           break;
-        } catch {
-          // Continue to next selector
+        }
+        console.log(`   🔁 Retrying login (attempt ${catchUpAttempts + 1}) before catch-up`);
+        await executeLoginFlow(page, context, email, password);
+        const ready = await waitForPostLoginReady(page);
+        if (!ready) {
+          console.warn('   ⚠️  Post-login layout still not detected after retry');
         }
       }
-
-      if (!contactsList) {
-        console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; failing early');
-        await captureDebugScreenshot(page, 'catchup-missing');
-        throw new Error('Catch Up list not detected after navigation');
-      }
-    } catch (error: any) {
-      console.error('❌ Error navigating to Catch Up page:', error.message);
-      throw error;
     }
-    
+
+    if (!catchUpLoaded) {
+      throw new Error('Failed to reach Catch Up page after multiple login attempts');
+    }
+
     // Find contacts container (main element)
     const container = page.locator('main').first();
     

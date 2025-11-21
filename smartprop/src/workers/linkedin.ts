@@ -936,6 +936,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     if (!hasStorageState()) {
       console.log('🔐 Logging in to LinkedIn...');
       await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
+      console.log('   🌐 Login URL:', page.url());
+      console.log('   🏷️  Title:', await page.title());
       await humanPause(2000, 3000);
       
       // Fill email
@@ -1034,6 +1036,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         // Delete invalid session and login fresh
         deleteStorageState();
         await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
+        console.log('   🌐 Login URL (refresh):', page.url());
+        console.log('   🏷️  Title (refresh):', await page.title());
         await humanPause(2000, 3000);
         
         // Fill email

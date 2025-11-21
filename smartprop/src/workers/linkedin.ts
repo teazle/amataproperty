@@ -89,6 +89,34 @@ async function waitForLandingPage(page: Page): Promise<boolean> {
   return false;
 }
 
+async function waitForPostLoginReady(page: Page): Promise<boolean> {
+  const selectors = [
+    'nav[role="navigation"]',
+    'header[role="banner"]',
+    '[data-testid="global-nav"]',
+    '[data-control-name="identity_welcome_message"]',
+    'a[data-control-name="nav_home"]',
+    'main.feed-list',
+    'main'
+  ];
+
+  for (const selector of selectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 15000 });
+      return true;
+    } catch {
+      // continue trying other selectors
+    }
+  }
+
+  try {
+    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 20000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Load environment variables
 config({ path: path.resolve(process.cwd(), '.env') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -1108,6 +1136,10 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       } else {
         console.log('✅ Session verified');
       }
+    }
+    const postLoginReady = await waitForPostLoginReady(page);
+    if (!postLoginReady) {
+      console.warn('   ⚠️  Unable to confirm post-login layout before navigating to Catch Up');
     }
     
     // Navigate directly to catch-up page (faster than clicking tab)

@@ -30,7 +30,7 @@ import {
   updateDailyStats
 } from '@/lib/linkedin/tracker';
 import { getSupabaseClient } from '@/workers/supa';
-import { Page, Locator } from 'playwright-core';
+import { Page, Locator, BrowserContext } from 'playwright-core';
 
 async function fillInputValue(page: Page, selector: string, value: string): Promise<void> {
   const success = await page.evaluate(
@@ -164,9 +164,71 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
   if (!landed) {
     console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding cautiously');
   }
-  await humanPause(3000, 5000);
+  
+  // Wait longer for LinkedIn to fully establish session (especially important for EC2/datacenter IPs)
+  console.log('   ⏳ Waiting for session to be fully established...');
+  await humanPause(5000, 7000);
+  
+  // Verify we're actually logged in before saving session
+  const currentUrl = page.url();
+  const pageTitle = await page.title().catch(() => '');
+  const hasLoginForm = await page.locator('input[name="session_key"], .login-form').count() > 0;
+  
+  if (currentUrl.includes('/login') || hasLoginForm) {
+    console.warn('   ⚠️  Still on login page after login attempt - LinkedIn may be challenging the session');
+    console.warn('   💡 This could be due to:');
+    console.warn('      - Datacenter IP detection (EC2 IP flagged)');
+    console.warn('      - LinkedIn security challenge');
+    console.warn('      - Session not fully established');
+    throw new Error('Login failed - redirected back to login page');
+  }
+  
+  // Navigate to feed to ensure session is active
+  try {
+    await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await humanPause(2000, 3000);
+    
+    // Double-check we're logged in
+    const feedUrl = page.url();
+    const stillOnLogin = feedUrl.includes('/login') || await page.locator('input[name="session_key"]').count() > 0;
+    
+    if (stillOnLogin) {
+      throw new Error('Session not valid - LinkedIn redirected to login');
+    }
+    
+    console.log('   ✅ Session verified - logged in successfully');
+  } catch (e: any) {
+    console.error('   ❌ Failed to verify session after login:', e.message);
+    throw new Error('Login verification failed');
+  }
 
+  // Save session state (cookies, localStorage, IndexedDB)
   await context.storageState({ path: getStorageStatePath() });
+  
+  // Also save sessionStorage separately (Playwright storageState doesn't include it by default)
+  try {
+    const sessionStorage = await page.evaluate(() => {
+      const storage: Record<string, string> = {};
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const key = window.sessionStorage.key(i);
+        if (key) {
+          storage[key] = window.sessionStorage.getItem(key) || '';
+        }
+      }
+      return storage;
+    });
+    
+    const storagePath = getStorageStatePath();
+    const storageDir = path.dirname(storagePath);
+    const sessionStoragePath = path.join(storageDir, 'linkedin.sessionStorage.json');
+    
+    const fs = await import('fs');
+    fs.writeFileSync(sessionStoragePath, JSON.stringify(sessionStorage, null, 2));
+    console.log('   💾 Saved sessionStorage separately');
+  } catch (e: any) {
+    console.warn('   ⚠️  Could not save sessionStorage:', e.message);
+  }
+  
   console.log('✅ Logged in and saved session');
 }
 
@@ -784,7 +846,7 @@ async function processContact(
       console.log(`   📝 Using existing record (ID: ${messageId}, status: ${existing[0].status}) for ${contact.name}`);
       
       // Update to pending if it was failed before
-      if (existing[0].status === 'failed') {
+      if (existing[0].status === 'failed' && messageId) {
         await updateLinkedInMessage(messageId, {
           status: 'pending',
           error_message: null,
@@ -947,6 +1009,10 @@ async function processContact(
     }
     
     // Only mark as sent if we got confirmation OR dialog closed
+    if (!messageId) {
+      throw new Error('Message ID not available');
+    }
+    
     if (messageConfirmed || !dialogStillOpen) {
       console.log(`   ✅ Confirming message was sent for ${contact.name}...`);
       await updateLinkedInMessage(messageId, {
@@ -1116,8 +1182,51 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     locale: 'en-US',
     timezoneId: settings.timezone || 'Asia/Singapore',
     // Load saved storage state if exists (only if we didn't clear it)
-    ...(hasSavedSession ? { storageState: storagePath } : {})
+    ...(hasSavedSession ? { storageState: storagePath } : {}),
+    // Additional headers to appear more like a real browser
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
+    }
   });
+  
+  // Restore sessionStorage if it was saved
+  if (hasSavedSession) {
+    try {
+      const fs = await import('fs');
+      const storageDir = path.dirname(storagePath);
+      const sessionStoragePath = path.join(storageDir, 'linkedin.sessionStorage.json');
+      
+      if (fs.existsSync(sessionStoragePath)) {
+        const sessionStorage = JSON.parse(fs.readFileSync(sessionStoragePath, 'utf-8'));
+        
+        await context.addInitScript((storage) => {
+          if (window.location.hostname === 'www.linkedin.com' || window.location.hostname === 'linkedin.com') {
+            for (const [key, value] of Object.entries(storage)) {
+              try {
+                window.sessionStorage.setItem(key, value as string);
+              } catch (e) {
+                // Ignore quota errors
+              }
+            }
+          }
+        }, sessionStorage);
+        
+        console.log('   💾 Restored sessionStorage from saved session');
+      }
+    } catch (e: any) {
+      console.warn('   ⚠️  Could not restore sessionStorage:', e.message);
+    }
+  }
   
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', {
@@ -1458,8 +1567,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   return result;
 }
 
-// Run if executed directly
-if (import.meta.main) {
+// Run if executed directly (Bun check)
+// @ts-ignore - Bun extends ImportMeta with 'main' property
+if ((import.meta as any).main || process.argv[1]?.includes('linkedin.ts')) {
   const dryRun = process.argv.includes('--dry-run');
   automateLinkedInMessages(dryRun)
     .then(result => {

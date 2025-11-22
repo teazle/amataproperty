@@ -7,8 +7,6 @@
 
 import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
-import path from 'path';
-import fs from 'fs';
 import { config } from 'dotenv';
 import { humanPause } from './stealth.js';
 import {
@@ -93,16 +91,12 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
   const selectors = [
     'nav[role="navigation"]',
     '[data-testid="global-nav"]',
-    '[data-control-name="identity_welcome_message"]',
-    'header[role="banner"]',
-    'a[data-control-name="nav_home"]',
-    'main.feed-list',
-    'main'
+    '[data-control-name="identity_welcome_message"]'
   ];
 
   for (const selector of selectors) {
     try {
-      await page.waitForSelector(selector, { timeout: 5000 });
+      await page.waitForSelector(selector, { timeout: 3000 });
       return true;
     } catch {
       // continue trying other selectors
@@ -110,7 +104,7 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
   }
 
   try {
-    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 10000 });
+    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 3000 });
     return true;
   } catch {
     return false;
@@ -189,7 +183,6 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
     const loginBanner = await page.locator('text="Sign in"').count();
     if (landingUrl.includes('/login') || loginBanner > 0) {
       console.warn('   ⚠️  LinkedIn redirected back to login page after catch-up navigation');
-      await captureDebugScreenshot(page, 'catchup-login');
       return false;
     }
 
@@ -240,7 +233,6 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
 
     if (!contactsList) {
       console.warn('   ⚠️ Unable to detect Catch Up list via expected selectors; failing early');
-      await captureDebugScreenshot(page, 'catchup-missing');
       return false;
     }
 
@@ -444,18 +436,6 @@ async function scrollToLoadAllContacts(page: Page, containerLocator: Locator): P
   
   console.log(`✅ Finished loading contacts. Total: ${currentCount}`);
   return currentCount;
-}
-
-async function captureDebugScreenshot(page: Page, label: string): Promise<void> {
-  try {
-    const tmpDir = path.join(process.cwd(), 'tmp');
-    await fs.promises.mkdir(tmpDir, { recursive: true });
-    const screenshotPath = path.join(tmpDir, `linkedin-${label}-${Date.now()}.png`);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log(`   🖼️  Saved debug screenshot: ${screenshotPath}`);
-  } catch (error: any) {
-    console.warn('   ⚠️ Failed to capture debug screenshot:', error.message);
-  }
 }
 
 /**

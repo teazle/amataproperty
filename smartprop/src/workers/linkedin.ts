@@ -440,14 +440,40 @@ async function scrollToLoadAllContacts(page: Page, containerLocator: Locator): P
 }
 
 /**
+ * Check if page/browser is still valid
+ */
+function isPageValid(page: Page): boolean {
+  try {
+    // Check if page is closed
+    if (page.isClosed()) {
+      return false;
+    }
+    // Check if context is closed
+    if (page.context().browser()?.isConnected() === false) {
+      return false;
+    }
+    return true;
+  } catch (e) {
+    // If we can't check, assume invalid
+    return false;
+  }
+}
+
+/**
  * Extract contacts from the catch-up tab
  */
-async function extractContacts(page: Page): Promise<Contact[]> {
+async function extractContacts(page: Page, maxContacts: number = 50): Promise<Contact[]> {
   const contacts: Contact[] = [];
+
+  // Check if page is valid before starting
+  if (!isPageValid(page)) {
+    console.warn('   ⚠️  Page/browser is closed, cannot extract contacts');
+    throw new Error('Target page, context or browser has been closed');
+  }
 
   console.log('🔍 Extracting contacts from catch-up tab...');
   const messageComposeLinks = page.locator('a[href*="/messaging/compose/"]');
-  const messageLinkCount = await messageComposeLinks.count();
+  const messageLinkCount = await messageComposeLinks.count().catch(() => 0);
 
   console.log(`   ✓ Found ${messageLinkCount} message compose links`);
 
@@ -456,10 +482,24 @@ async function extractContacts(page: Page): Promise<Contact[]> {
     return contacts;
   }
 
-  for (let i = 0; i < messageLinkCount; i++) {
+  // Limit the number of contacts to process at once
+  const contactsToProcess = Math.min(messageLinkCount, maxContacts);
+  if (messageLinkCount > maxContacts) {
+    console.log(`   ℹ️  Limiting extraction to ${maxContacts} contacts (found ${messageLinkCount} total)`);
+  }
+
+  for (let i = 0; i < contactsToProcess; i++) {
+    // Check if page is still valid before processing each contact
+    if (!isPageValid(page)) {
+      console.warn(`   ⚠️  Page/browser closed while extracting contacts (at link ${i + 1}), stopping extraction`);
+      throw new Error('Target page, context or browser has been closed');
+    }
+
     try {
       const messageLink = messageComposeLinks.nth(i);
-      await messageLink.scrollIntoViewIfNeeded();
+      await messageLink.scrollIntoViewIfNeeded().catch(() => {
+        throw new Error('Target page, context or browser has been closed');
+      });
       await humanPause(200, 400);
 
       const contactInfo = await page.evaluate((linkIndex) => {
@@ -1056,18 +1096,27 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   });
   
   const storagePath = getStorageStatePath();
-  const hadSavedSession = hasStorageState();
-  if (hadSavedSession) {
-    console.log('   🧹 Clearing saved session to avoid account-picker screen');
+  let hasSavedSession = hasStorageState();
+  
+  // Try to use saved session first - only clear if explicitly needed
+  // (Previously was clearing every time which caused login failures on EC2)
+  const shouldClearSession = process.env.CLEAR_LINKEDIN_SESSION === 'true';
+  if (shouldClearSession && hasSavedSession) {
+    console.log('   🧹 Clearing saved session (CLEAR_LINKEDIN_SESSION=true)...');
     deleteStorageState();
+    hasSavedSession = false; // Update flag after clearing
+  } else if (hasSavedSession) {
+    console.log('   💾 Found saved session, will try to use it first');
+  } else {
+    console.log('   📝 No saved session found, will login fresh');
   }
 
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     locale: 'en-US',
     timezoneId: settings.timezone || 'Asia/Singapore',
-    // Load saved storage state if exists
-    ...(hasStorageState() ? { storageState: storagePath } : {})
+    // Load saved storage state if exists (only if we didn't clear it)
+    ...(hasSavedSession ? { storageState: storagePath } : {})
   });
   
   await context.addInitScript(() => {
@@ -1087,8 +1136,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   };
   
   try {
-    // Login if needed
-    if (!hasStorageState()) {
+    // Login if needed (check hasSavedSession variable, not hasStorageState() again)
+    if (!hasSavedSession) {
       await executeLoginFlow(page, context, email, password);
     } else {
       console.log('🔍 Verifying session...');
@@ -1167,11 +1216,38 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     
     // Use messages_per_job (default 50) instead of daily_limit
     const messagesPerJob = settings.messages_per_job || 50;
+    console.log(`\n📊 LinkedIn Automation Settings:`);
+    console.log(`   - Messages per job: ${messagesPerJob}`);
+    console.log(`   - Batch size limit: 20 contacts per batch`);
+    console.log(`   - Will process in batches until ${messagesPerJob} messages are sent\n`);
+    
     // Continue scrolling until we reach messages_per_job limit or max scroll attempts
     while (totalSent < messagesPerJob && scrollAttempts < maxScrollAttempts) {
-      // Extract currently visible contacts
-      console.log(`\n🔍 Extracting visible contacts (attempt ${scrollAttempts + 1})...`);
-      const visibleContacts = await extractContacts(page);
+      // Check if page is still valid before extracting contacts
+      if (!isPageValid(page)) {
+        console.error('\n❌ Page/browser has been closed, stopping automation');
+        result.errors.push('Browser/page was closed during automation');
+        break;
+      }
+
+      // Limit batch size to avoid processing too many contacts at once
+      // Recalculate each iteration since totalSent changes
+      const remainingMessages = messagesPerJob - totalSent;
+      const maxBatchSize = Math.min(remainingMessages, 20); // Process max 20 at a time
+
+      // Extract currently visible contacts (limit batch size)
+      console.log(`\n🔍 Extracting visible contacts (attempt ${scrollAttempts + 1}, batch limit: ${maxBatchSize})...`);
+      let visibleContacts: Contact[] = [];
+      try {
+        visibleContacts = await extractContacts(page, maxBatchSize);
+      } catch (error: any) {
+        if (error.message?.includes('Target page, context or browser has been closed')) {
+          console.error('\n❌ Browser/page closed during contact extraction, stopping automation');
+          result.errors.push('Browser/page was closed during contact extraction');
+          break;
+        }
+        throw error;
+      }
       
       if (visibleContacts.length === 0) {
         console.log('   ℹ️  No contacts found on page. Scrolling to load more...');
@@ -1200,6 +1276,14 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       
       // Process each new contact
       for (let contactIndex = 0; contactIndex < newContacts.length; contactIndex++) {
+        // Check if page is still valid before processing each contact
+        if (!isPageValid(page)) {
+          console.error('\n❌ Page/browser has been closed, stopping contact processing');
+          result.errors.push('Browser/page was closed during contact processing');
+          stopRequested = true;
+          break;
+        }
+
         const contact = newContacts[contactIndex];
         console.log(`\n   [${contactIndex + 1}/${newContacts.length}] Starting to process: ${contact.name}`);
         // Check for stop signal
@@ -1230,7 +1314,21 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           result.messagesSent++;
         } else {
           console.log(`   💬 Calling processContact for ${contact.name}...`);
-          const processResult = await processContact(page, contact, settings, lockData);
+          let processResult;
+          try {
+            processResult = await processContact(page, contact, settings, lockData);
+          } catch (error: any) {
+            // If browser/page was closed, stop processing immediately
+            if (error.message?.includes('Target page, context or browser has been closed') || 
+                error.message?.includes('browser has been closed')) {
+              console.error(`\n❌ Browser/page closed while processing ${contact.name}, stopping automation`);
+              result.errors.push(`Browser/page was closed while processing ${contact.name}`);
+              stopRequested = true;
+              break;
+            }
+            // Re-throw other errors
+            throw error;
+          }
           console.log(`   📊 Result for ${contact.name}: ${processResult.success ? '✅ Success' : '❌ Failed'}${processResult.error ? ` - ${processResult.error}` : ''}`);
           
           lockData.contactsProcessed++;
@@ -1242,6 +1340,16 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           } else {
             result.messagesFailed++;
             lockData.messagesFailed++;
+            
+            // If error indicates browser closure, stop processing
+            if (processResult.error?.includes('Target page, context or browser has been closed') ||
+                processResult.error?.includes('browser has been closed')) {
+              console.error(`\n❌ Browser/page closed (error: ${processResult.error}), stopping automation`);
+              result.errors.push(`Browser/page was closed: ${processResult.error}`);
+              stopRequested = true;
+              break;
+            }
+            
             if (processResult.error) {
               result.errors.push(`${contact.name}: ${processResult.error}`);
             }

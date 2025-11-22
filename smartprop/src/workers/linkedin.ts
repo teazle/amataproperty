@@ -7,6 +7,7 @@
 
 import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
+import path from 'path';
 import { config } from 'dotenv';
 import { humanPause } from './stealth.js';
 import {

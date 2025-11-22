@@ -28,6 +28,11 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   const scriptPath = path.join(process.cwd(), 'src', 'workers', 'linkedin.ts');
   const args = options.dryRun ? ['--dry-run'] : [];
 
+  try {
+    fs.writeFileSync(LOG_FILE_PATH, '');
+  } catch (error) {
+    console.warn('Failed to reset LinkedIn log file:', (error as Error).message);
+  }
   const logStream = fs.openSync(LOG_FILE_PATH, 'a');
   const env = {
     ...process.env,

@@ -108,7 +108,8 @@ export function LinkedInDashboard() {
   const [showLogs, setShowLogs] = useState(false);
   const [runHeaded, setRunHeaded] = useState(false);
   const [autoRunTime, setAutoRunTime] = useState(DEFAULT_SCHEDULE_TIME);
-  const logsIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
 
   // Form state
   const [formData, setFormData] = useState<Partial<LinkedInSettings>>({});
@@ -118,6 +119,16 @@ export function LinkedInDashboard() {
     loadStatus();
     loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
   }, []);
 
   // Extract isRunning to a stable value for dependencies
@@ -140,34 +151,78 @@ export function LinkedInDashboard() {
     setAutoRunTime(scheduleToTime(settings?.auto_run_schedule));
   }, [settings?.auto_run_schedule]);
 
-  // Load logs when showing logs and refresh every 3 seconds if automation is running
+  // Live log streaming with SSE when logs are shown
   useEffect(() => {
-    // Clear any existing interval
-    if (logsIntervalRef.current) {
-      clearInterval(logsIntervalRef.current);
-      logsIntervalRef.current = null;
+    // Close existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
-    if (!showLogs) return;
-    
-    // Load immediately
-    loadLogs();
-    
-    // Refresh logs every 3 seconds if automation is running
-    if (isRunning) {
-      logsIntervalRef.current = setInterval(() => {
-        loadLogs();
-      }, 3000);
+    if (!showLogs) {
+      return;
     }
-    
-    return () => {
-      if (logsIntervalRef.current) {
-        clearInterval(logsIntervalRef.current);
-        logsIntervalRef.current = null;
+
+    // Clear logs when starting new stream
+    setLogs([]);
+    setLogsLoading(true);
+
+    // Create SSE connection for live log streaming
+    const eventSource = new EventSource('/api/linkedin/logs/stream');
+    eventSourceRef.current = eventSource;
+
+    eventSource.onopen = () => {
+      console.log('✅ Connected to live log stream');
+      setLogsLoading(false);
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'log' && data.line) {
+          setLogs(prevLogs => {
+            const updated = [...prevLogs, data.line];
+            // Keep only last 2000 lines to prevent memory issues
+            return updated.slice(-2000);
+          });
+          
+          // Auto-scroll to bottom
+          setTimeout(() => {
+            if (logsContainerRef.current) {
+              logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+            }
+          }, 50);
+        } else if (data.type === 'connected' || data.type === 'info') {
+          console.log('Log stream:', data.message);
+        } else if (data.type === 'error') {
+          console.error('Log stream error:', data.message);
+          toast.error(`Log stream error: ${data.message}`);
+        }
+      } catch (error) {
+        console.error('Failed to parse SSE message:', error);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLogs, isRunning]);
+
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      // EventSource will automatically try to reconnect
+      // Only set loading to false if connection is closed (not reconnecting)
+      if (eventSource.readyState === EventSource.CLOSED) {
+        setLogsLoading(false);
+        console.log('SSE connection closed');
+      } else {
+        console.log('SSE reconnecting...');
+      }
+    };
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [showLogs]);
 
   const loadStatus = async () => {
     try {
@@ -253,14 +308,11 @@ export function LinkedInDashboard() {
   };
 
   const loadLogs = async () => {
-    // Don't set loading state if we're in auto-refresh mode to avoid flickering
-    const isAutoRefresh = logsIntervalRef.current !== null;
-    if (!isAutoRefresh) {
-      setLogsLoading(true);
-    }
+    // This function is kept for manual refresh button, but SSE handles live updates
+    setLogsLoading(true);
     try {
       const res = await fetch('/api/linkedin/logs?lines=500&tail=true', {
-        cache: 'no-store', // Prevent caching
+        cache: 'no-store',
         headers: {
           'Cache-Control': 'no-cache',
         },
@@ -275,24 +327,19 @@ export function LinkedInDashboard() {
         setLogs(data.logs || []);
         // Auto-scroll to bottom
         setTimeout(() => {
-          const container = document.getElementById('logs-container');
-          if (container) {
-            container.scrollTop = container.scrollHeight;
+          if (logsContainerRef.current) {
+            logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
           }
         }, 100);
       } else {
         console.error('Failed to load logs:', data.error);
+        toast.error('Failed to load logs');
       }
     } catch (error: any) {
       console.error('Error loading logs:', error);
-      // Don't show toast on every auto-refresh failure to avoid spam
-      if (!isAutoRefresh) {
-        toast.error('Failed to load logs. Please try refreshing manually.');
-      }
+      toast.error('Failed to load logs. Please try refreshing manually.');
     } finally {
-      if (!isAutoRefresh) {
-        setLogsLoading(false);
-      }
+      setLogsLoading(false);
     }
   };
 
@@ -314,7 +361,7 @@ export function LinkedInDashboard() {
       
       if (res.ok) {
         toast.success(dryRun ? 'Dry run started' : 'Automation started');
-        loadLogs();
+        // SSE will automatically stream logs, no need to call loadLogs()
         setTimeout(() => {
           loadStatus();
           loadHistory();
@@ -342,9 +389,7 @@ export function LinkedInDashboard() {
       setTimeout(() => {
         loadStatus();
         loadHistory();
-        if (showLogs) {
-          loadLogs();
-        }
+        // SSE handles log updates automatically, no need to call loadLogs()
       }, 1000);
     } catch (error: any) {
       toast.error(error.message || 'Failed to stop automation');
@@ -587,6 +632,7 @@ export function LinkedInDashboard() {
               <div className="text-center text-gray-500 py-8">No logs available yet</div>
             ) : (
               <div
+                ref={logsContainerRef}
                 id="logs-container"
                 className="bg-black font-mono text-sm p-4 rounded-lg overflow-auto max-h-[600px] text-white"
                 style={{ 

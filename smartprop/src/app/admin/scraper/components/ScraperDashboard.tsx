@@ -7,6 +7,7 @@ import { ScraperConfigForm } from './ScraperConfigForm';
 import { LiveProgressPanel } from './LiveProgressPanel';
 import { RecentListingsPreview } from './RecentListingsPreview';
 import { HistoryTable } from './HistoryTable';
+import { ScheduledJobsSection } from './ScheduledJobsSection';
 import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob, syncCompletedJobs } from '../actions';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -380,6 +381,9 @@ export function ScraperDashboard({
           }}
         />
       )}
+
+      {/* Scheduled Jobs */}
+      <ScheduledJobsSection />
 
       {/* Scraper Configuration Form */}
       <ScraperConfigForm

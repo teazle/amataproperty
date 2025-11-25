@@ -61,9 +61,9 @@ export async function GET(request: NextRequest) {
         }
       };
 
-      // Send listings every 5 seconds
+      // Send listings every 30 seconds (reduced frequency to avoid rate limits)
       await sendRecentListings();
-      const interval = setInterval(sendRecentListings, 5000);
+      const interval = setInterval(sendRecentListings, 30000);
 
       // Cleanup on disconnect
       request.signal.addEventListener('abort', () => {

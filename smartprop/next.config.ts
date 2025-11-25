@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     // Ignore ESLint errors during build
     ignoreDuringBuilds: true,
   },
+  // Note: instrumentationHook is enabled by default in Next.js 15, no need to specify
   // Exclude scripts and test files from build
   webpack: (config) => {
     config.resolve.alias = {

@@ -11,7 +11,17 @@ const execAsync = promisify(exec);
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  db: {
+    schema: 'public',
+  },
+  global: {
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+  },
+});
 
 export interface ScraperConfig {
   platform: 'propertyguru' | 'edgeprop';
@@ -385,14 +395,28 @@ async function isProcessRunning(pid: number): Promise<boolean> {
   });
 }
 
+// Cache to track last sync time and prevent excessive queries
+const lastSyncCache = new Map<string, number>();
+const SYNC_COOLDOWN = 10000; // Only sync once every 10 seconds per platform
+
 /**
  * Get current active scraper job status
  */
 export async function getActiveJob(): Promise<ScraperJobStatus | null> {
   try {
-    // Auto-sync completed.json files with database
+    // Auto-sync completed.json files with database (with rate limiting)
     const platforms = ['propertyguru', 'edgeprop'] as const;
+    const now = Date.now();
+    
     for (const platform of platforms) {
+      const lastSync = lastSyncCache.get(platform) || 0;
+      const timeSinceLastSync = now - lastSync;
+      
+      // Only sync if enough time has passed
+      if (timeSinceLastSync < SYNC_COOLDOWN) {
+        continue;
+      }
+      
       const lockFile = path.join(process.cwd(), 'storage', 
         platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
       const completedFile = lockFile.replace('.lock', '.completed.json');
@@ -432,6 +456,7 @@ export async function getActiveJob(): Promise<ScraperJobStatus | null> {
                 })
                 .eq('id', job.id);
               console.log(`✅ getActiveJob: Auto-synced completed job ${job.id} for ${platform}`);
+              lastSyncCache.set(platform, now);
             }
           }
         } catch (error) {
@@ -440,13 +465,26 @@ export async function getActiveJob(): Promise<ScraperJobStatus | null> {
       }
     }
     
-    const { data: job } = await supabase
+    // Use .maybeSingle() instead of .single() to handle cases where no job exists
+    // This prevents 406 errors when the query returns no results
+    const { data: job, error: jobError } = await supabase
       .from('scraper_jobs')
       .select('*')
       .in('status', ['queued', 'running'])
       .order('started_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
+
+    // Handle 406 or other errors gracefully
+    if (jobError) {
+      // Check if it's a 406 error specifically
+      if (jobError.message?.includes('406') || jobError.code === 'PGRST116') {
+        console.warn('[getActiveJob] 406 error (likely no results), returning null:', jobError.message);
+        return null;
+      }
+      console.error('[getActiveJob] Error fetching active job:', jobError);
+      return null;
+    }
 
     if (!job) return null;
 
@@ -520,11 +558,21 @@ export async function getDistrictMetadata() {
   }
 }
 
+// Cache for quality metrics to reduce queries
+let qualityMetricsCache: { data: any; timestamp: number } | null = null;
+const QUALITY_METRICS_CACHE_TTL = 60000; // Cache for 60 seconds
+
 /**
- * Get data quality metrics
+ * Get data quality metrics (with caching to reduce rate limits)
  */
 export async function getDataQualityMetrics() {
   try {
+    // Use cache if available and fresh
+    const now = Date.now();
+    if (qualityMetricsCache && (now - qualityMetricsCache.timestamp) < QUALITY_METRICS_CACHE_TTL) {
+      return qualityMetricsCache.data;
+    }
+    
     // Get latest metrics for each platform
     const { data: metrics, error } = await supabase
       .from('scraper_metrics')
@@ -534,7 +582,7 @@ export async function getDataQualityMetrics() {
 
     if (error) throw error;
 
-    // Calculate stale listings (not seen in 7+ days)
+    // Calculate stale listings (not seen in 7+ days) - use estimate to reduce query cost
     const { count: staleCount } = await supabase
       .from('listings')
       .select('*', { count: 'exact', head: true })
@@ -549,12 +597,12 @@ export async function getDataQualityMetrics() {
       .select('*', { count: 'exact', head: true })
       .gte('scraped_at', today.toISOString());
 
-    // Calculate completeness score
+    // Calculate completeness score - reduce sample size to 50 instead of 100
     const { data: recentListings } = await supabase
       .from('listings')
       .select('*')
       .order('scraped_at', { ascending: false })
-      .limit(100);
+      .limit(50);
 
     let completenessScore = 0;
     let phoneValidationRate = 0;
@@ -585,20 +633,22 @@ export async function getDataQualityMetrics() {
 
       completenessScore = (totalScore / recentListings.length);
 
-      // Get agents for these listings and check phone rate
+      // Get agents for these listings and check phone rate - only if we have listings
       const agentIds = recentListings.map((l: unknown) => (l as Record<string, unknown>).agent_id).filter(Boolean);
-      const { data: agents } = await supabase
-        .from('agents')
-        .select('phone')
-        .in('id', agentIds);
+      if (agentIds.length > 0) {
+        const { data: agents } = await supabase
+          .from('agents')
+          .select('phone')
+          .in('id', agentIds);
 
-      if (agents) {
-        phoneCount = agents.filter(a => a.phone && a.phone.length > 0).length;
-        phoneValidationRate = phoneCount / agents.length;
+        if (agents) {
+          phoneCount = agents.filter(a => a.phone && a.phone.length > 0).length;
+          phoneValidationRate = phoneCount / agents.length;
+        }
       }
     }
 
-    return {
+    const result = {
       success: true,
       metrics: {
         completenessScore: Math.round(completenessScore * 100),
@@ -607,6 +657,11 @@ export async function getDataQualityMetrics() {
         staleListings: staleCount || 0
       }
     };
+    
+    // Cache the result
+    qualityMetricsCache = { data: result, timestamp: now };
+    
+    return result;
 
   } catch (error) {
     console.error('Error getting data quality metrics:', error);
@@ -1374,12 +1429,26 @@ export async function forceFixStuckJob(jobId: string) {
       .from('scraper_jobs')
       .select('id, platform, status')
       .eq('id', jobId)
-      .single();
+      .maybeSingle();
 
-    if (jobError || !job) {
+    if (jobError) {
+      // Handle 406 errors gracefully
+      if (jobError.message?.includes('406') || jobError.code === 'PGRST116') {
+        return {
+          success: false,
+          error: `Job ${jobId} not found (406 error)`
+        };
+      }
       return {
         success: false,
-        error: `Job ${jobId} not found: ${jobError?.message || 'Unknown error'}`
+        error: `Job ${jobId} not found: ${jobError.message || 'Unknown error'}`
+      };
+    }
+
+    if (!job) {
+      return {
+        success: false,
+        error: `Job ${jobId} not found`
       };
     }
 
@@ -1474,11 +1543,16 @@ export async function forceFixStuckJob(jobId: string) {
 
     // Verify update worked
     await new Promise(resolve => setTimeout(resolve, 500));
-    const { data: verifyJob } = await supabase
+    const { data: verifyJob, error: verifyError } = await supabase
       .from('scraper_jobs')
       .select('id, status')
       .eq('id', jobId)
-      .single();
+      .maybeSingle();
+
+    // Ignore 406 errors during verification (job might not exist anymore)
+    if (verifyError && !verifyError.message?.includes('406') && verifyError.code !== 'PGRST116') {
+      console.warn(`[forceFixStuckJob] Error verifying job ${jobId}:`, verifyError);
+    }
 
     if (verifyJob && (verifyJob.status === 'queued' || verifyJob.status === 'running')) {
       return {
@@ -1623,6 +1697,305 @@ export async function syncCompletedJobs() {
       success: false,
       error: error instanceof Error ? error.message : String(error),
       synced: 0
+    };
+  }
+}
+
+// ============================================================
+// Scheduled Jobs Management
+// ============================================================
+
+export interface ScheduledJob {
+  id: string;
+  name: string;
+  platform: 'propertyguru' | 'edgeprop';
+  cron_expression: string;
+  timezone: string;
+  config: {
+    districts?: string[];
+    pages: number;
+  };
+  enabled: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_run_status: 'success' | 'failed' | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Get all scheduled jobs
+ */
+export async function getScheduledJobs(): Promise<ScheduledJob[]> {
+  try {
+    const { data: jobs, error } = await supabase
+      .from('scheduled_jobs')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      // Check for rate limit errors
+      if (error.message?.includes('rate limit') || error.message?.includes('quota') || error.message?.includes('exceeded')) {
+        console.warn('Rate limit hit when fetching scheduled jobs. Returning empty array.');
+        return [];
+      }
+      console.error('Error fetching scheduled jobs:', error);
+      return [];
+    }
+
+    return (jobs || []) as ScheduledJob[];
+  } catch (error: any) {
+    // Check for rate limit errors
+    if (error?.message?.includes('rate limit') || error?.message?.includes('quota') || error?.message?.includes('exceeded')) {
+      console.warn('Rate limit exception when fetching scheduled jobs.');
+      return [];
+    }
+    console.error('Error fetching scheduled jobs:', error);
+    return [];
+  }
+}
+
+/**
+ * Create a new scheduled job
+ */
+export async function createScheduledJob(job: {
+  name: string;
+  platform: 'propertyguru' | 'edgeprop';
+  cron_expression: string;
+  timezone?: string;
+  config: {
+    districts?: string[];
+    pages: number;
+  };
+  enabled?: boolean;
+}): Promise<{ success: boolean; job?: ScheduledJob; error?: string }> {
+  try {
+    // Validate cron expression
+    const cron = require('node-cron');
+    if (!cron.validate(job.cron_expression)) {
+      return {
+        success: false,
+        error: `Invalid cron expression: ${job.cron_expression}`,
+      };
+    }
+
+    // Calculate next run time
+    const tempTask = cron.schedule(job.cron_expression, () => {}, {
+      timezone: job.timezone || 'Asia/Singapore',
+      name: 'temp',
+    });
+    const nextRun = tempTask.getNextRun() || new Date();
+    tempTask.destroy();
+
+    const { data, error } = await supabase
+      .from('scheduled_jobs')
+      .insert({
+        name: job.name,
+        platform: job.platform,
+        cron_expression: job.cron_expression,
+        timezone: job.timezone || 'Asia/Singapore',
+        config: job.config,
+        enabled: job.enabled !== undefined ? job.enabled : true,
+        next_run_at: nextRun.toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+
+    // Reload scheduler
+    try {
+      const { reloadScheduler } = await import('@/lib/scheduler/scraper-scheduler');
+      await reloadScheduler();
+    } catch (reloadError) {
+      console.error('Failed to reload scheduler:', reloadError);
+    }
+
+    revalidatePath('/admin/scraper');
+
+    return {
+      success: true,
+      job: data as ScheduledJob,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Update a scheduled job
+ */
+export async function updateScheduledJob(
+  id: string,
+  updates: Partial<{
+    name: string;
+    platform: 'propertyguru' | 'edgeprop';
+    cron_expression: string;
+    timezone: string;
+    config: {
+      districts?: string[];
+      pages: number;
+    };
+    enabled: boolean;
+  }>
+): Promise<{ success: boolean; job?: ScheduledJob; error?: string }> {
+  try {
+    // Validate cron expression if provided
+    if (updates.cron_expression) {
+      const cron = require('node-cron');
+      if (!cron.validate(updates.cron_expression)) {
+        return {
+          success: false,
+          error: `Invalid cron expression: ${updates.cron_expression}`,
+        };
+      }
+    }
+
+    // Get existing job to calculate next run time
+    const { data: existingJob, error: existingJobError } = await supabase
+      .from('scheduled_jobs')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (existingJobError) {
+      // Handle 406 errors gracefully
+      if (existingJobError.message?.includes('406') || existingJobError.code === 'PGRST116') {
+        return {
+          success: false,
+          error: 'Scheduled job not found (406 error)',
+        };
+      }
+      return {
+        success: false,
+        error: `Error fetching scheduled job: ${existingJobError.message}`,
+      };
+    }
+
+    if (!existingJob) {
+      return {
+        success: false,
+        error: 'Scheduled job not found',
+      };
+    }
+
+    // Calculate next run time if cron or timezone changed
+    const updateData: Record<string, unknown> = { ...updates };
+    if (updates.cron_expression || updates.timezone) {
+      const cron = require('node-cron');
+      const finalCron = updates.cron_expression || existingJob.cron_expression;
+      const finalTimezone = updates.timezone || existingJob.timezone;
+      const tempTask = cron.schedule(finalCron, () => {}, {
+        timezone: finalTimezone,
+        name: 'temp',
+      });
+      const nextRun = tempTask.getNextRun() || new Date();
+      tempTask.destroy();
+      updateData.next_run_at = nextRun.toISOString();
+    }
+
+    const { data, error } = await supabase
+      .from('scheduled_jobs')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+
+    // Reload scheduler
+    try {
+      const { reloadScheduler } = await import('@/lib/scheduler/scraper-scheduler');
+      await reloadScheduler();
+    } catch (reloadError) {
+      console.error('Failed to reload scheduler:', reloadError);
+    }
+
+    revalidatePath('/admin/scraper');
+
+    return {
+      success: true,
+      job: data as ScheduledJob,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Delete a scheduled job
+ */
+export async function deleteScheduledJob(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Remove from scheduler
+    const { getScheduler } = await import('@/lib/scheduler/scraper-scheduler');
+    const scheduler = getScheduler();
+    scheduler.removeSchedule(id);
+
+    // Delete from database
+    const { error } = await supabase
+      .from('scheduled_jobs')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+
+    revalidatePath('/admin/scraper');
+
+    return {
+      success: true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Toggle scheduled job enabled/disabled
+ */
+export async function toggleScheduledJob(id: string, enabled: boolean): Promise<{ success: boolean; job?: ScheduledJob; error?: string }> {
+  return updateScheduledJob(id, { enabled });
+}
+
+/**
+ * Reload scheduler
+ */
+export async function reloadScheduler(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { reloadScheduler: reload } = await import('@/lib/scheduler/scraper-scheduler');
+    await reload();
+    return {
+      success: true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }

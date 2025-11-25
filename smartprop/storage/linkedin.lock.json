@@ -1,10 +1,10 @@
 {
-  "pid": 20852,
+  "pid": 29752,
   "status": "stopped",
-  "startedAt": "2025-11-20T15:20:41.093Z",
-  "contactsProcessed": 5,
-  "messagesSent": 5,
-  "messagesFailed": 0,
-  "currentContactIndex": 5,
-  "lastContactName": "Slevin Wang"
+  "startedAt": "2025-11-25T19:58:09.613Z",
+  "contactsProcessed": 12,
+  "messagesSent": 11,
+  "messagesFailed": 1,
+  "currentContactIndex": 12,
+  "lastContactName": "Owen Gallimore"
 }

@@ -34,98 +34,110 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      // Track last cleanup time to avoid excessive queries
+      let lastCleanupTime = 0;
+      const CLEANUP_INTERVAL = 30000; // Only run cleanup every 30 seconds
+
       // Send initial status
       const sendStatus = async () => {
         try {
-          // Check for stale locks and sync completed jobs
-          const platforms = ['propertyguru', 'edgeprop'] as const;
-          for (const platform of platforms) {
-            const lockFile = path.join(process.cwd(), 'storage', 
-              platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-            const completedFile = lockFile.replace('.lock', '.completed.json');
+          const now = Date.now();
+          const shouldRunCleanup = (now - lastCleanupTime) >= CLEANUP_INTERVAL;
+          
+          // Only check for stale locks and sync completed jobs every 30 seconds to reduce queries
+          if (shouldRunCleanup) {
+            lastCleanupTime = now;
             
-            // First, check for completed.json files and sync them automatically
-            if (fs.existsSync(completedFile) && !fs.existsSync(lockFile)) {
-              try {
-                const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
-                if (completedData.status === 'completed') {
-                  // Find matching job by platform and started_at time (within 1 hour window)
-                  const startedAt = new Date(completedData.startedAt);
-                  const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
-                  const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
+            // Check for stale locks and sync completed jobs
+            const platforms = ['propertyguru', 'edgeprop'] as const;
+            for (const platform of platforms) {
+              const lockFile = path.join(process.cwd(), 'storage', 
+                platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
+              const completedFile = lockFile.replace('.lock', '.completed.json');
+              
+              // First, check for completed.json files and sync them automatically
+              if (fs.existsSync(completedFile) && !fs.existsSync(lockFile)) {
+                try {
+                  const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
+                  if (completedData.status === 'completed') {
+                    // Find matching job by platform and started_at time (within 1 hour window)
+                    const startedAt = new Date(completedData.startedAt);
+                    const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
+                    const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
 
-                  const { data: matchingJobs } = await supabase
-                    .from('scraper_jobs')
-                    .select('id, status')
-                    .eq('platform', platform)
-                    .in('status', ['running', 'queued'])
-                    .gte('started_at', windowStart.toISOString())
-                    .lte('started_at', windowEnd.toISOString())
-                    .order('started_at', { ascending: false })
-                    .limit(1);
-
-                  if (matchingJobs && matchingJobs.length > 0) {
-                    const job = matchingJobs[0];
-                    // Auto-sync: Update database to completed status
-                    await supabase
-                      .from('scraper_jobs')
-                      .update({
-                        status: 'completed',
-                        completed_at: completedData.completedAt || new Date().toISOString(),
-                        listings_processed: completedData.progress?.listingsProcessed || completedData.stats?.totalSuccess || 0,
-                        stats: completedData.stats || null,
-                        current_page: completedData.progress?.currentPage || null,
-                        current_district: completedData.progress?.currentDistrict || null
-                      })
-                      .eq('id', job.id);
-                    console.log(`✅ Status API: Auto-synced completed job ${job.id} for ${platform}`);
-                  }
-                }
-              } catch (error) {
-                console.error(`Error auto-syncing completed job for ${platform}:`, error);
-              }
-            }
-            
-            // Then check for stale locks
-            if (fs.existsSync(lockFile)) {
-              try {
-                const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-                const pid = lockData.pid;
-                
-                if (pid && typeof pid === 'number') {
-                  const isRunning = await isProcessRunning(pid);
-                  if (!isRunning) {
-                    // Stale lock detected - clean it up
-                    console.log(`🧹 Status API: Cleaning stale lock file (process ${pid} not running)`);
-                    fs.unlinkSync(lockFile);
-                    
-                    // Mark corresponding job as failed
-                    const { data: jobs } = await supabase
+                    const { data: matchingJobs } = await supabase
                       .from('scraper_jobs')
                       .select('id, status')
                       .eq('platform', platform)
-                      .in('status', ['queued', 'running'])
+                      .in('status', ['running', 'queued'])
+                      .gte('started_at', windowStart.toISOString())
+                      .lte('started_at', windowEnd.toISOString())
                       .order('started_at', { ascending: false })
                       .limit(1);
-                    
-                    if (jobs && jobs.length > 0) {
+
+                    if (matchingJobs && matchingJobs.length > 0) {
+                      const job = matchingJobs[0];
+                      // Auto-sync: Update database to completed status
                       await supabase
                         .from('scraper_jobs')
                         .update({
-                          status: 'failed',
-                          completed_at: new Date().toISOString(),
-                          error_message: 'Stale lock detected and cleaned'
+                          status: 'completed',
+                          completed_at: completedData.completedAt || new Date().toISOString(),
+                          listings_processed: completedData.progress?.listingsProcessed || completedData.stats?.totalSuccess || 0,
+                          stats: completedData.stats || null,
+                          current_page: completedData.progress?.currentPage || null,
+                          current_district: completedData.progress?.currentDistrict || null
                         })
-                        .eq('id', jobs[0].id);
+                        .eq('id', job.id);
+                      console.log(`✅ Status API: Auto-synced completed job ${job.id} for ${platform}`);
                     }
                   }
+                } catch (error) {
+                  console.error(`Error auto-syncing completed job for ${platform}:`, error);
                 }
-              } catch (error) {
-                // Lock file might be corrupted, try to remove it
+              }
+              
+              // Then check for stale locks
+              if (fs.existsSync(lockFile)) {
                 try {
-                  fs.unlinkSync(lockFile);
-                  console.log(`🧹 Status API: Removed corrupted lock file`);
-                } catch {}
+                  const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
+                  const pid = lockData.pid;
+                  
+                  if (pid && typeof pid === 'number') {
+                    const isRunning = await isProcessRunning(pid);
+                    if (!isRunning) {
+                      // Stale lock detected - clean it up
+                      console.log(`🧹 Status API: Cleaning stale lock file (process ${pid} not running)`);
+                      fs.unlinkSync(lockFile);
+                      
+                      // Mark corresponding job as failed
+                      const { data: jobs } = await supabase
+                        .from('scraper_jobs')
+                        .select('id, status')
+                        .eq('platform', platform)
+                        .in('status', ['queued', 'running'])
+                        .order('started_at', { ascending: false })
+                        .limit(1);
+                      
+                      if (jobs && jobs.length > 0) {
+                        await supabase
+                          .from('scraper_jobs')
+                          .update({
+                            status: 'failed',
+                            completed_at: new Date().toISOString(),
+                            error_message: 'Stale lock detected and cleaned'
+                          })
+                          .eq('id', jobs[0].id);
+                      }
+                    }
+                  }
+                } catch (error) {
+                  // Lock file might be corrupted, try to remove it
+                  try {
+                    fs.unlinkSync(lockFile);
+                    console.log(`🧹 Status API: Removed corrupted lock file`);
+                  } catch {}
+                }
               }
             }
           }
@@ -238,9 +250,10 @@ export async function GET(request: NextRequest) {
         }
       };
 
-      // Send status every 2 seconds
+      // Send status every 10 seconds (reduced frequency to avoid rate limits)
+      // This endpoint makes multiple queries per call, so we need to be conservative
       await sendStatus();
-      const interval = setInterval(sendStatus, 2000);
+      const interval = setInterval(sendStatus, 10000);
 
       // Cleanup on disconnect
       request.signal.addEventListener('abort', () => {

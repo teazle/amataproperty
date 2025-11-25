@@ -212,7 +212,45 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
   // Always rely on the NopeCHA browser extension (no API key flow)
   const preferNopechaExtensionOnly = true;
   console.log('🔐 Performing login flow...');
-  await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
+  
+  // CRITICAL: Check if browser/context/page is still open before navigation
+  try {
+    console.log('   🔍 Checking browser/context/page state before navigation...');
+    console.log(`   📋 Page is closed: ${page.isClosed()}`);
+    
+    // Verify page is still attached
+    if (page.isClosed()) {
+      console.error('   ❌ Page is closed before navigation');
+      throw new Error('Page is closed before navigation');
+    }
+    
+    // Verify context is still open
+    const pages = context.pages();
+    console.log(`   📊 Context pages count: ${pages.length}`);
+    console.log(`   📋 Page in context: ${pages.includes(page)}`);
+    
+    if (pages.length === 0 || !pages.includes(page)) {
+      console.error('   ❌ Context is closed or page is detached');
+      throw new Error('Context is closed or page is detached');
+    }
+    
+    console.log('   ✅ Browser/context/page state verified, navigating to login...');
+    await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    console.log('   ✅ Navigation to login page completed');
+  } catch (error: any) {
+    console.error('   ❌ Error during login navigation:', error.message);
+    console.error('   📊 Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.split('\n').slice(0, 5).join('\n')
+    });
+    
+    if (error.message.includes('closed') || error.message.includes('detached')) {
+      console.error('   ❌ Browser/context/page closure detected');
+      throw new Error(`Browser/context/page closed before navigation: ${error.message}`);
+    }
+    throw error;
+  }
   console.log('   🌐 Login URL:', page.url());
   console.log('   🏷️  Title:', await page.title());
   await humanPause(2000, 3000);
@@ -1290,8 +1328,31 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
 async function loadCatchUpPage(page: Page): Promise<boolean> {
   console.log('📍 Navigating directly to Catch Up page...');
   try {
+    // CRITICAL: Check if page is still open before navigation
+    console.log('   🔍 Checking page state before navigation...');
+    console.log(`   📋 Page is closed: ${page.isClosed()}`);
+    
+    if (page.isClosed()) {
+      console.error('   ❌ Page is closed before navigation to catch-up page');
+      throw new Error('Page is closed before navigation to catch-up page');
+    }
+    
+    console.log('   ✅ Page state verified, starting navigation...');
     await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    console.log('   ✅ Navigation completed');
     await humanPause(500, 800);
+
+    // CRITICAL: Check if page is still open after navigation
+    console.log('   🔍 Checking page state after navigation...');
+    console.log(`   📋 Page is closed: ${page.isClosed()}`);
+    console.log(`   🔗 Current URL: ${page.url()}`);
+    
+    if (page.isClosed()) {
+      console.error('   ❌ Page was closed during navigation to catch-up page');
+      throw new Error('Page was closed during navigation to catch-up page');
+    }
+    
+    console.log('   ✅ Page state verified after navigation');
 
     const landingUrl = page.url();
     const landingTitle = await page.title().catch(() => 'unknown');
@@ -1357,6 +1418,13 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
     return true;
   } catch (error: any) {
     console.error('❌ Error navigating to Catch Up page:', error.message);
+    
+    // Check if the error is due to browser/page being closed
+    if (error.message.includes('closed') || error.message.includes('Target page') || error.message.includes('detached')) {
+      console.error('   ❌ Browser/page was closed during navigation');
+      throw new Error(`Browser closed during catch-up navigation: ${error.message}`);
+    }
+    
     return false;
   }
 }
@@ -3767,20 +3835,46 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     '--disable-dev-shm-usage',
     '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--disable-gpu'
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-extensions-except',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-ipc-flooding-protection',
+    '--memory-pressure-off',
+    '--max_old_space_size=4096'
   ];
 
-  const browser = await chromium.launch({
-    headless: headlessMode,
-    plugins: plugins.recommended({
-      humanize: {
-        click: { delay: { min: 200, max: 600 } },
-        cursor: false,
-        dialog: { delay: { min: 800, max: 2000 } }
-      }
-    }),
-    args: browserArgs
-  });
+  console.log('   🚀 Launching browser...');
+  console.log(`   📋 Browser args: ${browserArgs.join(' ')}`);
+  console.log(`   👁️  Headless mode: ${headlessMode}`);
+  
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: headlessMode,
+      plugins: plugins.recommended({
+        humanize: {
+          click: { delay: { min: 200, max: 600 } },
+          cursor: false,
+          dialog: { delay: { min: 800, max: 2000 } }
+        }
+      }),
+      args: browserArgs
+    });
+    console.log('   ✅ Browser launched successfully');
+    console.log(`   🔗 Browser version: ${browser.version()}`);
+  } catch (error: any) {
+    console.error('   ❌ Failed to launch browser:', error.message);
+    console.error('   📊 Error details:', {
+      name: error.name,
+      stack: error.stack,
+      cause: error.cause
+    });
+    throw error;
+  }
   
   const storagePath = getStorageStatePath();
   let hasSavedSession = hasStorageState();
@@ -3797,12 +3891,31 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     console.log('   📝 No saved session found, will login fresh');
   }
 
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
-    locale: 'en-US',
-    timezoneId: settings.timezone || 'Asia/Singapore',
-    ...(hasSavedSession ? { storageState: storagePath } : {})
-  });
+  console.log('   🌐 Creating browser context...');
+  console.log(`   💾 Using saved session: ${hasSavedSession}`);
+  if (hasSavedSession) {
+    console.log(`   📁 Storage path: ${storagePath}`);
+  }
+  
+  let context;
+  try {
+    context = await browser.newContext({
+      viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
+      locale: 'en-US',
+      timezoneId: settings.timezone || 'Asia/Singapore',
+      ...(hasSavedSession ? { storageState: storagePath } : {})
+    });
+    console.log('   ✅ Browser context created successfully');
+    console.log(`   📊 Context pages count: ${context.pages().length}`);
+  } catch (error: any) {
+    console.error('   ❌ Failed to create browser context:', error.message);
+    console.error('   📊 Error details:', {
+      name: error.name,
+      stack: error.stack,
+      browserConnected: !browser.isConnected() ? 'disconnected' : 'connected'
+    });
+    throw error;
+  }
   
   // Restore sessionStorage if it was saved
   if (hasSavedSession) {
@@ -3864,7 +3977,24 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     };
   });
   
-  const page = await context.newPage();
+  console.log('   📄 Creating new page...');
+  let page;
+  try {
+    page = await context.newPage();
+    console.log('   ✅ Page created successfully');
+    console.log(`   📊 Total pages in context: ${context.pages().length}`);
+    console.log(`   🔗 Page URL: ${page.url()}`);
+    console.log(`   📋 Page is closed: ${page.isClosed()}`);
+  } catch (error: any) {
+    console.error('   ❌ Failed to create page:', error.message);
+    console.error('   📊 Error details:', {
+      name: error.name,
+      stack: error.stack,
+      contextPages: context.pages().length,
+      browserConnected: !browser.isConnected() ? 'disconnected' : 'connected'
+    });
+    throw error;
+  }
   
   const result: ProcessResult = {
     success: false,
@@ -3881,16 +4011,54 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await executeLoginFlow(page, context, email, password);
     } else {
       console.log('🔍 Verifying session...');
+      console.log('   🔍 Checking browser state before feed navigation...');
+      console.log(`   📋 Page is closed: ${page.isClosed()}`);
+      console.log(`   📊 Context pages: ${context.pages().length}`);
+      console.log(`   🔗 Browser connected: ${!browser.isConnected() ? 'disconnected' : 'connected'}`);
+      
       try {
         await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 5000 });
+        console.log('   ✅ Feed navigation completed');
         await humanPause(2000, 2000); // 2 second wait before navigating to catch-up page
       } catch (timeoutError: any) {
         console.log('   ⚠️  Feed page load slow, trying catch-up page directly...');
+        console.log(`   📊 Timeout error: ${timeoutError.message}`);
         try {
+          // CRITICAL: Check if browser/context/page is still open before navigation
+          console.log('   🔍 Checking browser/context/page state before catch-up navigation...');
+          console.log(`   📋 Page is closed: ${page.isClosed()}`);
+          
+          if (page.isClosed()) {
+            console.error('   ❌ Page is closed before navigation to catch-up page');
+            throw new Error('Page is closed before navigation to catch-up page');
+          }
+          
+          const pages = context.pages();
+          console.log(`   📊 Context pages count: ${pages.length}`);
+          console.log(`   📋 Page in context: ${pages.includes(page)}`);
+          
+          if (pages.length === 0 || !pages.includes(page)) {
+            console.error('   ❌ Context is closed or page is detached');
+            throw new Error('Context is closed or page is detached');
+          }
+          
+          console.log('   ✅ Browser/context/page state verified, navigating to catch-up...');
           await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+          console.log('   ✅ Navigation to catch-up completed');
           await humanPause(2000, 3000);
           console.log('   ✅ Session appears valid (catch-up page loaded)');
         } catch (e: any) {
+          console.error('   ❌ Error during catch-up navigation:', e.message);
+          console.error('   📊 Error details:', {
+            name: e.name,
+            message: e.message,
+            stack: e.stack?.split('\n').slice(0, 5).join('\n')
+          });
+          
+          if (e.message.includes('closed') || e.message.includes('detached')) {
+            console.error('   ❌ Browser/context/page closed during navigation:', e.message);
+            throw new Error(`Browser closed during navigation: ${e.message}`);
+          }
           console.log('   ⚠️  Session expired, will login fresh');
           deleteStorageState();
           await executeLoginFlow(page, context, email, password);
@@ -3921,10 +4089,17 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     let catchUpAttempts = 0;
     const maxCatchUpAttempts = 3;
     while (!catchUpLoaded && catchUpAttempts < maxCatchUpAttempts) {
+      console.log(`\n   🔄 Catch-up page load attempt ${catchUpAttempts + 1}/${maxCatchUpAttempts}...`);
+      console.log('   🔍 Checking browser state before catch-up load...');
+      console.log(`   📋 Page is closed: ${page.isClosed()}`);
+      console.log(`   📊 Context pages: ${context.pages().length}`);
+      console.log(`   🔗 Browser connected: ${!browser.isConnected() ? 'disconnected' : 'connected'}`);
+      
       catchUpLoaded = await loadCatchUpPage(page);
       if (!catchUpLoaded) {
         catchUpAttempts++;
         if (catchUpAttempts >= maxCatchUpAttempts) {
+          console.log('   ⚠️  Max catch-up attempts reached, breaking...');
           break;
         }
         console.log(`   🔁 Retrying login (attempt ${catchUpAttempts + 1}) before catch-up`);
@@ -3933,6 +4108,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         if (!ready) {
           console.warn('   ⚠️  Post-login layout still not detected after retry');
         }
+      } else {
+        console.log('   ✅ Catch-up page loaded successfully');
       }
     }
 
@@ -4236,7 +4413,36 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     
   } catch (error: any) {
     console.error('❌ Error in LinkedIn automation:', error);
-    console.error('   Stack:', error.stack);
+    console.error('   📊 Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.split('\n').slice(0, 10).join('\n'),
+      cause: error.cause
+    });
+    
+    // Log browser/context/page state at error time
+    try {
+      console.log('   🔍 Browser state at error time:');
+      console.log(`      Browser connected: ${browser ? (!browser.isConnected() ? 'disconnected' : 'connected') : 'null'}`);
+      if (context) {
+        console.log(`      Context pages: ${context.pages().length}`);
+      } else {
+        console.log('      Context: null');
+      }
+      if (page) {
+        console.log(`      Page closed: ${page.isClosed()}`);
+        try {
+          console.log(`      Page URL: ${page.url()}`);
+        } catch (urlError) {
+          console.log(`      Page URL: (could not get - ${(urlError as Error).message})`);
+        }
+      } else {
+        console.log('      Page: null');
+      }
+    } catch (stateError: any) {
+      console.error('   ⚠️  Could not check browser state:', stateError.message);
+    }
+    
     result.errors.push(error.message || 'Unknown error');
     result.success = false;
     
@@ -4251,13 +4457,22 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await humanPause(10000, 10000);
     }
   } finally {
+    console.log('   🧹 Cleaning up...');
     try {
       // Save final storage state if context exists
       if (context) {
+        console.log('   💾 Saving storage state...');
         await context.storageState({ path: getStorageStatePath() });
+        console.log('   ✅ Storage state saved');
+      } else {
+        console.log('   ⚠️  Context is null, cannot save storage state');
       }
-    } catch (e) {
-      console.warn('   ⚠️  Could not save storage state:', e);
+    } catch (e: any) {
+      console.warn('   ⚠️  Could not save storage state:', e.message);
+      console.warn('   📊 Storage state error details:', {
+        name: e.name,
+        stack: e.stack?.split('\n').slice(0, 3).join('\n')
+      });
     }
     
     // Update lock file
@@ -4266,9 +4481,20 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     
     // Close browser
     try {
-      await browser.close();
-    } catch (e) {
-      console.warn('   ⚠️  Error closing browser:', e);
+      console.log('   🔒 Closing browser...');
+      if (browser) {
+        console.log(`   📊 Browser connected before close: ${!browser.isConnected() ? 'disconnected' : 'connected'}`);
+        await browser.close();
+        console.log('   ✅ Browser closed successfully');
+      } else {
+        console.log('   ⚠️  Browser is null, cannot close');
+      }
+    } catch (e: any) {
+      console.warn('   ⚠️  Error closing browser:', e.message);
+      console.warn('   📊 Browser close error details:', {
+        name: e.name,
+        stack: e.stack?.split('\n').slice(0, 3).join('\n')
+      });
     }
     
     console.log('\n✅ Automation completed');

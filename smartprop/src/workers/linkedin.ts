@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 /**
  * LinkedIn Catch-Up Message Automation Worker
  * Automates sending congratulations messages for birthdays, work anniversaries, and job changes
@@ -23,7 +25,6 @@ import {
 } from '@/lib/linkedin/storage';
 import {
   getLinkedInSettings,
-  wasContactMessaged,
   createLinkedInMessage,
   updateLinkedInMessage,
   getTodayMessageCount,
@@ -31,6 +32,8 @@ import {
 } from '@/lib/linkedin/tracker';
 import { getSupabaseClient } from '@/workers/supa';
 import { Page, Locator, BrowserContext } from 'playwright-core';
+
+type SolveResult = { success: boolean; token?: string; error?: string };
 
 async function fillInputValue(page: Page, selector: string, value: string): Promise<void> {
   const success = await page.evaluate(
@@ -112,7 +115,102 @@ async function waitForPostLoginReady(page: Page): Promise<boolean> {
   }
 }
 
+/**
+ * Attempt to solve visible reCAPTCHA v2 using NopeCHA.
+ * Requires NOPECHA_API_KEY or NOPECHA_KEY.
+ */
+async function solveRecaptchaWithNopecha(page: Page): Promise<SolveResult> {
+  const apiKey = process.env.NOPECHA_API_KEY || process.env.NOPECHA_KEY;
+  if (!apiKey) {
+    console.log('   ⚠️  NopeCHA API key not set (NOPECHA_API_KEY), skipping auto-solve');
+    return { success: false, error: 'missing_api_key' };
+  }
+
+  try {
+    const recaptchaIframe = page.locator('iframe[src*="recaptcha"]').first();
+    await recaptchaIframe.waitFor({ state: 'attached', timeout: 5000 });
+    const src = await recaptchaIframe.getAttribute('src');
+    if (!src) {
+      return { success: false, error: 'no_iframe_src' };
+    }
+
+    const urlObj = new URL(src, 'https://www.linkedin.com');
+    const sitekey = urlObj.searchParams.get('k') || urlObj.searchParams.get('sitekey');
+    if (!sitekey) {
+      console.log('   ⚠️  Could not find reCAPTCHA sitekey');
+      return { success: false, error: 'no_sitekey' };
+    }
+
+    console.log(`   🤖 Sending reCAPTCHA to NopeCHA (sitekey: ${sitekey.slice(0, 12)}...)`);
+    const solveResp = await fetch('https://api.nopecha.com/solve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: apiKey,
+        type: 'recaptcha2',
+        sitekey,
+        url: page.url()
+      })
+    });
+
+    if (!solveResp.ok) {
+      const text = await solveResp.text().catch(() => '');
+      console.log(`   ❌ NopeCHA request failed: ${solveResp.status} ${text}`);
+      return { success: false, error: `http_${solveResp.status}` };
+    }
+
+    const data = await solveResp.json().catch(() => ({}));
+    const token = Array.isArray(data?.data) ? data.data[0] : data?.data;
+    if (!token || typeof token !== 'string') {
+      console.log('   ❌ NopeCHA did not return a token');
+      return { success: false, error: 'no_token' };
+    }
+
+    console.log('   ✅ Received token from NopeCHA, injecting into page...');
+    await page.evaluate((tokenValue) => {
+      const setValue = (el: HTMLTextAreaElement | HTMLInputElement) => {
+        el.value = tokenValue;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      const candidates = [
+        ...Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea[name="g-recaptcha-response"], #g-recaptcha-response')),
+        ...Array.from(document.querySelectorAll<HTMLInputElement>('input[name="g-recaptcha-response"]'))
+      ];
+
+      candidates.forEach(setValue);
+
+      const cfg = (window as any).___grecaptcha_cfg;
+      if (cfg?.clients) {
+        Object.values(cfg.clients).forEach((client: any) => {
+          const cb = client?.callback || client?.V?.callback || client?.W?.callback;
+          if (typeof cb === 'function') {
+            try {
+              cb(tokenValue);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+      }
+    }, token);
+
+    const verifyButton = page.locator('button:has-text("Verify"), button:has-text("Continue"), button:has-text("Submit")').first();
+    if (await verifyButton.count().catch(() => 0)) {
+      await verifyButton.click({ timeout: 5000 }).catch(() => {});
+    }
+
+    return { success: true, token };
+  } catch (error: any) {
+    console.log(`   ❌ NopeCHA solve error: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
 async function executeLoginFlow(page: Page, context: BrowserContext, email: string, password: string): Promise<void> {
+  // Always rely on the NopeCHA browser extension (no API key flow)
+  const preferNopechaExtensionOnly = true;
   console.log('🔐 Performing login flow...');
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
   console.log('   🌐 Login URL:', page.url());
@@ -160,45 +258,1002 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
   }
 
   await loginButton.click();
-  const landed = await waitForLandingPage(page);
-  if (!landed) {
-    console.log('   ⚠️  Unable to confirm landing page URL after login, proceeding cautiously');
+  console.log('   🖱️  Clicked login button, waiting for response...');
+  
+  // Wait for navigation or any redirects
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  } catch (e) {
+    console.log('   ⚠️  Network idle timeout, continuing...');
   }
   
-  // Wait longer for LinkedIn to fully establish session (especially important for EC2/datacenter IPs)
+  await humanPause(3000, 5000);
+
+  // Check current URL - reCAPTCHA appears on challenge/checkpoint pages
+  const currentUrl = page.url();
+  const isOnChallengePage = currentUrl.includes('/challenge') || currentUrl.includes('/checkpoint');
+  
+  // Check for reCAPTCHA checkbox and click it (only on challenge pages)
+  // Declare isImageChallenge at function scope so it's accessible later
+  let isImageChallenge = false;
+  
+  if (isOnChallengePage) {
+    console.log('   🔍 Checking for reCAPTCHA challenge on security page...');
+    console.log(`   🌐 Current URL: ${currentUrl}`);
+    
+    // Wait longer for reCAPTCHA to load (it can take a few seconds)
+    console.log('   ⏳ Waiting for reCAPTCHA to load...');
+    
+    // Wait for page to be fully loaded and network to be idle
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      console.log('   ✅ Page network idle');
+    } catch {
+      console.log('   ⚠️  Network idle timeout, continuing...');
+    }
+    
+    // Additional wait for CAPTCHA iframe to actually load content
+    await humanPause(5000, 7000);
+    
+    // Wait for any loading spinners to disappear
+    try {
+      await page.waitForFunction(
+        () => {
+          // Check if there are any visible spinners/loaders
+          const spinners = document.querySelectorAll('[class*="spinner"], [class*="loading"], [class*="loader"], [aria-busy="true"]');
+          return Array.from(spinners).every(el => {
+            const style = window.getComputedStyle(el);
+            return style.display === 'none' || style.visibility === 'hidden' || !el.checkVisibility();
+          });
+        },
+        { timeout: 10000 }
+      );
+      console.log('   ✅ Loading spinners cleared');
+    } catch {
+      console.log('   ⚠️  Spinner check timeout, continuing...');
+    }
+    
+    // Check page content for reCAPTCHA indicators AND determine challenge type FIRST
+    const challengePageText = await page.textContent('body').catch(() => '') || '';
+    const hasSecurityCheckText = challengePageText.includes("Let's do a quick security check") || 
+                                  challengePageText.includes('security check') ||
+                                  challengePageText.includes('I\'m not a robot');
+    console.log(`   📄 Page contains security check text: ${hasSecurityCheckText}`);
+    
+    // Wait a bit more for challenge content to load (image challenges load after spinners clear)
+    await humanPause(5000, 7000); // Wait longer for challenge content
+    
+    // Re-check page text after waiting (content may load dynamically)
+    // The challenge text might appear after iframe loads
+    let updatedPageText = await page.textContent('body').catch(() => '') || '';
+    let finalChallengeText = updatedPageText || challengePageText;
+    
+    // If page text is still very short, wait more and check again
+    if (finalChallengeText.length < 200) {
+      console.log(`   ⏳ Page text is short (${finalChallengeText.length} chars), waiting for challenge content...`);
+      await humanPause(5000, 7000);
+      updatedPageText = await page.textContent('body').catch(() => '') || '';
+      finalChallengeText = updatedPageText || challengePageText;
+      console.log(`   📄 Re-checked page text: ${finalChallengeText.length} chars`);
+    }
+    
+    // Check if this is an image selection challenge (text is on main page, not in iframe)
+    // This MUST be detected early before we try to interact with iframe
+    // LinkedIn may use bold formatting (**traffic lights**) which gets stripped
+    const challengeTextLower = finalChallengeText.toLowerCase();
+    const isImageChallengeOnPage = challengeTextLower.includes('select all squares with') ||
+                                    challengeTextLower.includes('select all squares') ||
+                                    challengeTextLower.includes('click all images with') ||
+                                    challengeTextLower.includes('click all images') ||
+                                    challengeTextLower.includes('traffic lights') ||
+                                    challengeTextLower.includes('trafficlights') ||
+                                    challengeTextLower.includes('crosswalks') ||
+                                    challengeTextLower.includes('fire hydrants') ||
+                                    challengeTextLower.includes('firehydrants') ||
+                                    challengeTextLower.includes('buses') ||
+                                    challengeTextLower.includes('mountains') ||
+                                    challengeTextLower.includes('select all images') ||
+                                    challengeTextLower.includes('select all images with') ||
+                                    challengeTextLower.includes('select all boxes') ||
+                                    // Check for grid of images (3x3, 4x4, etc.) - indicates image challenge
+                                    (challengeTextLower.includes('square') && challengeTextLower.includes('with')) ||
+                                    // Check for SKIP button text - indicates image challenge
+                                    (challengeTextLower.includes('skip') && challengeTextLower.includes('squares'));
+    
+    // Also check for visual indicators: image grid, SKIP button, etc.
+    // Check for SKIP button first (strong indicator of image challenge)
+    const hasSkipButton = await page.locator('button:has-text("Skip"), button:has-text("SKIP"), [aria-label*="Skip" i], button[type="button"]:has-text(/skip/i)').count().catch(() => 0) > 0;
+    
+    // Check for image grid (multiple images in a grid layout)
+    const hasImageGrid = await page.locator('img[alt*="square"], img[alt*="image"], [class*="grid"], [class*="tile"], img[src*="captcha"], [class*="challenge-image"]').count().catch(() => 0) > 9; // Usually 9+ images in a grid
+    
+    // Check for challenge-specific elements
+    const hasChallengeGrid = await page.locator('[class*="challenge"], [class*="captcha"], [data-testid*="challenge"]').count().catch(() => 0) > 0;
+    
+    const hasImageChallengeText = finalChallengeText.length > 100 && (
+      challengeTextLower.includes('square') ||
+      challengeTextLower.includes('image') ||
+      challengeTextLower.includes('select')
+    );
+    
+    // Combine text and visual indicators (update the outer scope variable)
+    // SKIP button is a strong indicator of image challenge
+    // Image grid with challenge text is also a strong indicator
+    isImageChallenge = isImageChallengeOnPage || 
+                       hasSkipButton ||  // SKIP button = image challenge
+                       (hasImageGrid && hasImageChallengeText) || 
+                       (hasChallengeGrid && hasImageChallengeText);
+    
+    // Debug: Show what text we found (for troubleshooting)
+    if (finalChallengeText.length > 0) {
+      const relevantText = finalChallengeText.substring(0, 800).replace(/\s+/g, ' ').trim();
+      console.log(`   📄 Page text preview (${relevantText.length} chars): ${relevantText.substring(0, 300)}...`);
+    }
+    
+    console.log(`   🔍 Detection results: hasImageGrid=${hasImageGrid}, hasSkipButton=${hasSkipButton}, hasChallengeGrid=${hasChallengeGrid}, textMatch=${isImageChallengeOnPage}`);
+    
+    // Update the outer scope variable (already declared above at function scope)
+    isImageChallenge = isImageChallengeOnPage || (hasImageGrid && hasImageChallengeText) || hasSkipButton;
+    
+    if (preferNopechaExtensionOnly) {
+      // Skip manual handling; rely on extension
+      console.log('   ⏳ Waiting for extension to solve the challenge (no manual clicks)...');
+    } else if (isImageChallenge) {
+      console.log('   🖼️  Image selection challenge detected on main page!');
+      console.log('   🤖 NopeCHA should automatically solve this (may take 10-30 seconds)...');
+      if (hasSkipButton) {
+        console.log('   ✅ SKIP button found - confirms image challenge');
+      }
+      if (hasImageGrid) {
+        console.log('   ✅ Image grid detected - confirms image challenge');
+      }
+    } else {
+      console.log(`   📄 Challenge type: Checkbox (no image challenge indicators found)`);
+      // Show a sample of the text for debugging
+      if (finalChallengeText.length > 0) {
+        console.log(`   🔍 Searched for: "traffic lights", "select all squares", "select all images", etc.`);
+      }
+    }
+    
+    // Check for reCAPTCHA iframe first (most reliable indicator)
+    // Wait specifically for iframe to appear
+    let recaptchaIframe = null;
+    const iframeSelectors = [
+      'iframe[src*="recaptcha"]',
+      'iframe[src*="google.com/recaptcha"]',
+      'iframe[title*="reCAPTCHA"]',
+      'iframe[title*="recaptcha"]',
+      'iframe[title*="recaptcha" i]',
+      'iframe[name*="recaptcha" i]',
+      'iframe[role="presentation"]',
+      'iframe'
+    ];
+    
+    console.log('   🔍 Looking for reCAPTCHA iframe...');
+    for (const selector of iframeSelectors) {
+      try {
+        // Wait for iframe to be available
+        const iframe = page.locator(selector).first();
+        const count = await iframe.count();
+        console.log(`   🔎 Checking selector "${selector}": found ${count} elements`);
+        
+        if (count > 0) {
+          // Check if it's visible and get its src to verify it's reCAPTCHA
+          const isVisible = await iframe.isVisible().catch(() => false);
+          if (isVisible) {
+            try {
+              const src = await iframe.getAttribute('src').catch(() => '');
+              const title = await iframe.getAttribute('title').catch(() => '');
+              console.log(`   📋 Iframe src: ${src?.substring(0, 100)}...`);
+              console.log(`   📋 Iframe title: ${title}`);
+              
+              if (src?.includes('recaptcha') || title?.toLowerCase().includes('recaptcha')) {
+                console.log(`   ✅ Found reCAPTCHA iframe: ${selector}`);
+                recaptchaIframe = iframe;
+                break;
+              } else if (selector === 'iframe' && hasSecurityCheckText) {
+                // If we're on security check page and found an iframe, it's likely reCAPTCHA
+                console.log(`   ✅ Likely reCAPTCHA iframe (on security page): ${selector}`);
+                recaptchaIframe = iframe;
+                break;
+              }
+            } catch (e) {
+              // Continue checking
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log(`   ⚠️  Error checking selector "${selector}": ${e.message}`);
+      }
+    }
+    
+    // Also check for reCAPTCHA text on page
+    const hasRecaptchaText = await page.locator('text=/I\'m not a robot/i, text=/reCAPTCHA/i, text=/security check/i').count().catch(() => 0) > 0;
+    console.log(`   📄 Page has reCAPTCHA text: ${hasRecaptchaText}`);
+    
+    // Fallback: If we have security check text but no iframe found, try finding all iframes
+    if (!recaptchaIframe && hasSecurityCheckText) {
+      console.log('   🔄 Security check text found but no iframe detected, checking all iframes...');
+      try {
+        const allIframes = page.locator('iframe');
+        const iframeCount = await allIframes.count();
+        console.log(`   📊 Found ${iframeCount} total iframes on page`);
+        
+        for (let i = 0; i < Math.min(iframeCount, 5); i++) {
+          try {
+            const iframe = allIframes.nth(i);
+            const isVisible = await iframe.isVisible().catch(() => false);
+            if (isVisible) {
+              const src = await iframe.getAttribute('src').catch(() => '');
+              const title = await iframe.getAttribute('title').catch(() => '');
+              console.log(`   🔍 Iframe ${i}: src="${src?.substring(0, 80)}...", title="${title}"`);
+              
+              // If it's from google.com or has recaptcha in src/title, it's likely reCAPTCHA
+              if (src?.includes('google.com') || src?.includes('recaptcha') || 
+                  title?.toLowerCase().includes('recaptcha')) {
+                console.log(`   ✅ Found reCAPTCHA iframe (fallback method): iframe ${i}`);
+                recaptchaIframe = iframe;
+                break;
+              }
+            }
+          } catch (e) {
+            // Continue
+          }
+        }
+      } catch (e: any) {
+        console.warn(`   ⚠️  Error checking all iframes: ${e.message}`);
+      }
+    }
+  
+  // Determine challenge type early (from main page text) - use the variable we already declared
+  // Use the combined detection result
+  if (recaptchaIframe || hasRecaptchaText || hasSecurityCheckText) {
+    let checkboxClicked = false;
+    let solvedByNopecha = false;
+    
+    // Extension-only mode: let the NopeCHA browser extension handle it without API
+    if (preferNopechaExtensionOnly) {
+      console.log('   🧩 NopeCHA extension-only mode enabled (NOPECHA_EXTENSION_ONLY=true)');
+      console.log('   ⏳ Waiting for the extension to solve automatically; skipping manual clicks and API calls');
+      solvedByNopecha = true;
+      checkboxClicked = true; // enter wait loop below
+    } else {
+      // Try NopeCHA API first for both checkbox and image challenges
+      try {
+        const solveResult = await solveRecaptchaWithNopecha(page);
+        if (solveResult.success) {
+          solvedByNopecha = true;
+          checkboxClicked = true;
+          console.log('   ✅ NopeCHA token applied; waiting briefly for validation...');
+          await humanPause(3000, 5000);
+        } else if (solveResult.error === 'missing_api_key') {
+          console.log('   ⚠️  NopeCHA not configured; continuing with manual fallback');
+        } else {
+          console.log(`   ⚠️  NopeCHA could not solve automatically (${solveResult.error || 'unknown error'}), falling back to manual clicks`);
+        }
+      } catch (e: any) {
+        console.log(`   ⚠️  NopeCHA solve attempt threw an error: ${e.message}`);
+      }
+    }
+    
+    if (isImageChallenge) {
+      console.log('   🖼️  Image selection challenge detected!');
+      console.log('   🤖 NopeCHA will automatically solve this (may take 10-30 seconds)...');
+      console.log('   ⏸️  Skipping checkbox clicking - NopeCHA handles image challenges automatically');
+      // Don't try to click checkbox for image challenges - NopeCHA will handle it
+      checkboxClicked = false;
+    } else {
+      console.log('   🤖 Checkbox CAPTCHA detected! Attempting to click checkbox...');
+      
+      // Method 1: Try to click inside the iframe (most reliable)
+      if (recaptchaIframe && !solvedByNopecha) {
+      try {
+        console.log('   🔄 Accessing CAPTCHA iframe...');
+        // Get the actual Frame object from the iframe element handle
+        const iframeElement = await recaptchaIframe.elementHandle();
+        if (!iframeElement) {
+          throw new Error('Could not get iframe element handle');
+        }
+        
+        const frame = await iframeElement.contentFrame();
+        if (frame) {
+          console.log('   ✅ Iframe accessed, waiting for content to load...');
+          
+          // Wait for iframe to be fully loaded
+          try {
+            await frame.waitForLoadState('domcontentloaded', { timeout: 15000 });
+            console.log('   ✅ Iframe DOM content loaded');
+          } catch {
+            console.log('   ⚠️  Iframe DOM load timeout, continuing...');
+          }
+          
+          // Wait for iframe network to be idle
+          try {
+            await frame.waitForLoadState('networkidle', { timeout: 15000 });
+            console.log('   ✅ Iframe network idle');
+          } catch {
+            console.log('   ⚠️  Iframe network idle timeout, continuing...');
+          }
+          
+          // Additional wait for CAPTCHA content to render
+          await humanPause(5000, 7000);
+          
+          // Check if iframe has actual content (not just spinner)
+          const hasContent = await frame.evaluate(() => {
+            const body = document.body;
+            if (!body) return false;
+            
+            // Check if body has meaningful content (not just empty/spinner)
+            const text = body.textContent || '';
+            const hasText = text.trim().length > 10;
+            
+            // Check for visible elements
+            const visibleElements = Array.from(body.querySelectorAll('*')).filter(el => {
+              const style = window.getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              return style.display !== 'none' && 
+                     style.visibility !== 'hidden' && 
+                     rect.width > 0 && 
+                     rect.height > 0;
+            });
+            
+            return hasText || visibleElements.length > 0;
+          });
+          
+          if (!hasContent) {
+            console.log('   ⚠️  Iframe appears to be empty or still loading, waiting longer...');
+            await humanPause(5000, 7000);
+          } else {
+            console.log('   ✅ Iframe has content');
+          }
+          
+          // Re-check main page text AFTER iframe loads (challenge text might appear now)
+          await humanPause(5000, 7000); // Give it more time for challenge to render and NopeCHA to detect
+          const mainPageTextAfterIframe = await page.textContent('body').catch(() => '') || '';
+          if (mainPageTextAfterIframe.length > 200) {
+            console.log(`   📄 Main page text updated after iframe load: ${mainPageTextAfterIframe.length} chars`);
+            const updatedTextLower = mainPageTextAfterIframe.toLowerCase();
+            
+            // Show a sample of the text for debugging
+            const textSample = mainPageTextAfterIframe.substring(0, 500).replace(/\s+/g, ' ').trim();
+            console.log(`   📋 Text sample: ${textSample.substring(0, 200)}...`);
+            
+            // Re-check for image challenge keywords (more variations)
+            const hasTrafficLights = updatedTextLower.includes('traffic lights') || updatedTextLower.includes('trafficlights') || updatedTextLower.includes('traffic light');
+            const hasSelectAllSquares = updatedTextLower.includes('select all squares') || updatedTextLower.includes('select all squares with') || updatedTextLower.includes('select all square');
+            const hasSelectAllImages = updatedTextLower.includes('select all images') || updatedTextLower.includes('select all image');
+            const hasClickAll = updatedTextLower.includes('click all images') || updatedTextLower.includes('click all squares');
+            
+            // Re-check for SKIP button (might appear after iframe loads)
+            const hasSkipButtonNow = await page.locator('button:has-text("Skip"), button:has-text("SKIP"), [aria-label*="Skip" i], button:has-text(/skip/i)').count().catch(() => 0) > 0;
+            
+            // Check for image grid on main page
+            const hasImageGridNow = await page.locator('img[alt*="square"], img[alt*="image"], [class*="grid"], [class*="tile"]').count().catch(() => 0) > 9;
+            
+            console.log(`   🔍 Re-check results: trafficLights=${hasTrafficLights}, selectAllSquares=${hasSelectAllSquares}, selectAllImages=${hasSelectAllImages}, clickAll=${hasClickAll}, skipButton=${hasSkipButtonNow}, imageGrid=${hasImageGridNow}`);
+            
+            if (hasTrafficLights || hasSelectAllSquares || hasSelectAllImages || hasClickAll || hasSkipButtonNow || hasImageGridNow) {
+              console.log('   🖼️  Image challenge detected in updated page text!');
+              isImageChallenge = true; // Update the outer scope variable
+              console.log('   ⏸️  Skipping checkbox clicking - this is an image challenge');
+              console.log('   🤖 NopeCHA should automatically solve this (may take 10-30 seconds)...');
+            }
+          }
+          
+          // Check iframe src to determine CAPTCHA type
+          const iframeSrc = await recaptchaIframe.getAttribute('src').catch(() => '');
+          const isLinkedInCaptcha = iframeSrc?.includes('linkedin.com') || iframeSrc?.includes('captchaInternal');
+          const isGoogleRecaptcha = iframeSrc?.includes('google.com/recaptcha') || iframeSrc?.includes('recaptcha');
+          
+          console.log(`   📋 CAPTCHA type: ${isLinkedInCaptcha ? 'LinkedIn Internal' : isGoogleRecaptcha ? 'Google reCAPTCHA' : 'Unknown'}`);
+          
+          // Detect challenge type: checkbox or image selection
+          const challengeType = await frame.evaluate(() => {
+            const bodyText = document.body?.textContent?.toLowerCase() || '';
+            const hasImages = document.querySelectorAll('img, canvas').length > 0;
+            const hasCheckbox = document.querySelector('input[type="checkbox"], [role="checkbox"]') !== null;
+            const hasImageChallenge = bodyText.includes('select all') || 
+                                      bodyText.includes('click all') ||
+                                      bodyText.includes('images with') ||
+                                      bodyText.includes('traffic lights') ||
+                                      bodyText.includes('crosswalks') ||
+                                      bodyText.includes('fire hydrants') ||
+                                      bodyText.includes('buses') ||
+                                      bodyText.includes('mountains') ||
+                                      (hasImages && bodyText.length > 100);
+            
+            if (hasCheckbox && !hasImageChallenge) {
+              return 'checkbox';
+            } else if (hasImageChallenge) {
+              return 'image_selection';
+            } else {
+              return 'unknown';
+            }
+          });
+          
+          console.log(`   🎯 Challenge type detected: ${challengeType}`);
+          
+          if (challengeType === 'image_selection') {
+            console.log('   🖼️  Image selection challenge detected!');
+            console.log('   💡 This requires selecting specific images (e.g., "click all images with traffic lights")');
+            console.log('   ⚠️  Image selection challenges are difficult to automate');
+            console.log('   💡 Options:');
+            console.log('      1. Use a CAPTCHA solving service (2Captcha, etc.)');
+            console.log('      2. Complete manually in headed mode');
+            console.log('      3. The automation will wait for manual completion...');
+            
+            // For image selection, we'll wait for manual completion
+            // In the future, we could integrate a CAPTCHA solving service here
+            checkboxClicked = false; // Mark as not clicked, will wait for manual
+          } else {
+            // Only try checkbox methods if it's a checkbox challenge
+            console.log('   ☑️  Checkbox challenge - attempting to click...');
+            // LinkedIn CAPTCHA selectors (different from Google reCAPTCHA)
+            const linkedinCheckboxSelectors = [
+              'input[type="checkbox"]',
+              '[role="checkbox"]',
+              'label',
+              '.checkbox',
+              '[class*="checkbox"]',
+              'button[type="button"]',
+              'div[role="button"]',
+              'span[role="button"]'
+            ];
+          
+            // Google reCAPTCHA selectors
+            const googleRecaptchaSelectors = [
+              '#recaptcha-anchor',
+              '.recaptcha-checkbox',
+              '.recaptcha-checkbox-border',
+              'span.recaptcha-checkbox',
+              'div.recaptcha-checkbox',
+              '.rc-anchor-checkbox',
+              '#recaptcha-anchor > div'
+            ];
+            
+            // Use appropriate selectors based on CAPTCHA type
+            const checkboxSelectors = isLinkedInCaptcha ? linkedinCheckboxSelectors : 
+                                      isGoogleRecaptcha ? googleRecaptchaSelectors :
+                                      [...linkedinCheckboxSelectors, ...googleRecaptchaSelectors];
+            
+            console.log(`   🔍 Trying ${checkboxSelectors.length} checkbox selectors...`);
+            
+            // Method 1: Use evaluate to find and click checkbox (most reliable for LinkedIn CAPTCHA)
+            if (!checkboxClicked) {
+            try {
+              console.log('   🔄 Using evaluate to find and click checkbox...');
+              
+              // First, debug what's actually in the iframe
+              const iframeDebug = await frame.evaluate(() => {
+                const debug: any = {
+                  html: document.documentElement.outerHTML.substring(0, 500),
+                  bodyText: document.body?.textContent?.substring(0, 200) || '',
+                  allInputs: Array.from(document.querySelectorAll('input')).map(i => ({
+                    type: i.type,
+                    id: i.id,
+                    className: i.className,
+                    visible: i.offsetParent !== null
+                  })),
+                  allButtons: Array.from(document.querySelectorAll('button')).map(b => ({
+                    text: b.textContent?.substring(0, 50),
+                    className: b.className,
+                    visible: b.offsetParent !== null
+                  })),
+                  allClickable: Array.from(document.querySelectorAll('[role="button"], [role="checkbox"], label, button')).map(el => ({
+                    tag: el.tagName,
+                    role: el.getAttribute('role'),
+                    text: el.textContent?.substring(0, 50),
+                    className: el.className,
+                    visible: (el as HTMLElement).offsetParent !== null
+                  }))
+                };
+                return debug;
+              });
+              
+              console.log('   📋 Iframe debug info:');
+              console.log(`   📄 Body text preview: ${iframeDebug.bodyText}`);
+              console.log(`   🔘 Found ${iframeDebug.allInputs.length} inputs`);
+              console.log(`   🔘 Found ${iframeDebug.allButtons.length} buttons`);
+              console.log(`   🔘 Found ${iframeDebug.allClickable.length} clickable elements`);
+              
+              if (iframeDebug.allInputs.length > 0) {
+                console.log(`   📋 Inputs: ${JSON.stringify(iframeDebug.allInputs)}`);
+              }
+              if (iframeDebug.allButtons.length > 0) {
+                console.log(`   📋 Buttons: ${JSON.stringify(iframeDebug.allButtons)}`);
+              }
+              
+              const clicked = await frame.evaluate(() => {
+                const isVisible = (el: Element) => {
+                  const style = window.getComputedStyle(el);
+                  const rect = (el as HTMLElement).getBoundingClientRect();
+                  return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+                
+                // Recursively search shadow DOM for clickable elements
+                const searchShadow = (root: ShadowRoot | Document | Element): HTMLElement | null => {
+                  const walker = (root instanceof ShadowRoot || root instanceof Document)
+                    ? root
+                    : (root as Element).shadowRoot;
+                  if (!walker) return null;
+                  
+                  const candidates = Array.from(walker.querySelectorAll<HTMLElement>('input[type="checkbox"], [role="checkbox"], button, [role="button"], label, div[onclick], span[onclick]'));
+                  const hit = candidates.find(el => isVisible(el));
+                  if (hit) return hit;
+                  
+                  const all = Array.from(walker.querySelectorAll('*'));
+                  for (const el of all) {
+                    if ((el as Element).shadowRoot) {
+                      const found = searchShadow(el as Element);
+                      if (found) return found;
+                    }
+                  }
+                  return null;
+                };
+                
+                // Look for checkbox input first
+                const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
+                if (checkbox && checkbox.offsetParent !== null) { // Check if visible
+                  checkbox.click();
+                  return { success: true, method: 'input[type="checkbox"]' };
+                }
+                
+                // Look for checkbox role
+                const checkboxRole = document.querySelector('[role="checkbox"]') as HTMLElement;
+                if (checkboxRole && checkboxRole.offsetParent !== null) {
+                  checkboxRole.click();
+                  return { success: true, method: '[role="checkbox"]' };
+                }
+                
+                // Look for "I'm not a robot" text and click nearby
+                const allElements = Array.from(document.querySelectorAll('*'));
+                const robotText = allElements.find(el => {
+                  const text = el.textContent || '';
+                  return text.includes("I'm not a robot") || 
+                         text.includes('I am not a robot') ||
+                         text.includes("I'm not a robot") ||
+                         text.toLowerCase().includes('not a robot');
+                }) as HTMLElement;
+                
+                if (robotText) {
+                  // Find parent or nearby clickable element
+                  const clickable = robotText.closest('label') || 
+                                 robotText.closest('div[role="button"]') ||
+                                 robotText.closest('button') ||
+                                 robotText.previousElementSibling as HTMLElement ||
+                                 robotText.parentElement;
+                  
+                  if (clickable) {
+                    (clickable as HTMLElement).click();
+                    return { success: true, method: 'text-based click' };
+                  }
+                  
+                  // If no clickable parent, try clicking the text element itself
+                  robotText.click();
+                  return { success: true, method: 'direct text click' };
+                }
+                
+                // Look inside shadow DOM for clickable items
+                const shadowClickable = searchShadow(document);
+                if (shadowClickable) {
+                  shadowClickable.click();
+                  return { success: true, method: 'shadow-dom clickable' };
+                }
+                
+                // Look for any visible button or clickable element
+                const visibleClickable = Array.from(document.querySelectorAll('button, [role="button"], [role="checkbox"], label, div[onclick], span[onclick]')).find(el => {
+                  const style = window.getComputedStyle(el as Element);
+                  return style.display !== 'none' && 
+                         style.visibility !== 'hidden' &&
+                         (el as HTMLElement).offsetParent !== null;
+                }) as HTMLElement;
+                
+                if (visibleClickable) {
+                  visibleClickable.click();
+                  return { success: true, method: 'first visible clickable' };
+                }
+                
+                // Last resort: Find any clickable element in the iframe
+                const clickableElements = allElements.filter(el => {
+                  const style = window.getComputedStyle(el as Element);
+                  return style.display !== 'none' && 
+                         style.visibility !== 'hidden' &&
+                         (el.tagName === 'BUTTON' || 
+                          el.getAttribute('role') === 'button' ||
+                          el.getAttribute('role') === 'checkbox' ||
+                          el.tagName === 'LABEL' ||
+                          (el as HTMLElement).onclick !== null);
+                }) as HTMLElement[];
+                
+                if (clickableElements.length > 0) {
+                  // Click the first visible clickable element
+                  clickableElements[0].click();
+                  return { success: true, method: 'first clickable element' };
+                }
+                
+                return { success: false, method: 'none' };
+              });
+              
+              if (clicked.success) {
+                console.log(`   ✅ Clicked checkbox via evaluate (${clicked.method})`);
+                checkboxClicked = true;
+                await humanPause(2000, 3000);
+              } else {
+                console.log('   ⚠️  Evaluate did not find clickable checkbox');
+                console.log('   💡 The iframe content may be different than expected');
+              }
+            } catch (e: any) {
+              console.warn(`   ⚠️  Evaluate click failed: ${e.message}`);
+            }
+          }
+          
+          // Method 2: Try using locators with waitForSelector
+          if (!checkboxClicked) {
+            for (const selector of checkboxSelectors) {
+              try {
+                console.log(`   🔎 Trying selector: ${selector}`);
+                
+                // Wait for selector to appear
+                try {
+                  await frame.waitForSelector(selector, { timeout: 3000, state: 'attached' });
+                } catch {
+                  // Selector not found, continue
+                  continue;
+                }
+                
+                const checkbox = frame.locator(selector).first();
+                const count = await checkbox.count();
+                console.log(`   📊 Found ${count} elements with selector "${selector}"`);
+                
+                if (count > 0) {
+                  const isVisible = await checkbox.isVisible().catch(() => false);
+                  console.log(`   👁️  Element visible: ${isVisible}`);
+                  
+                  if (isVisible) {
+                    console.log(`   ✅ Found checkbox in iframe: ${selector}`);
+                    
+                    // Try to get bounding box and click center
+                    try {
+                      const box = await checkbox.boundingBox();
+                      if (box) {
+                        // Get iframe position to calculate absolute coordinates
+                        const iframeBox = await recaptchaIframe.boundingBox();
+                        if (iframeBox) {
+                          const centerX = iframeBox.x + box.x + box.width / 2;
+                          const centerY = iframeBox.y + box.y + box.height / 2;
+                          console.log(`   🖱️  Clicking at center: (${centerX}, ${centerY})`);
+                          await page.mouse.click(centerX, centerY);
+                          console.log('   ✅ Clicked checkbox via mouse click');
+                          checkboxClicked = true;
+                          break;
+                        }
+                      }
+                    } catch (e) {
+                      // Fallback to regular click
+                      try {
+                        await checkbox.click({ timeout: 5000, force: true });
+                        console.log('   ✅ Clicked checkbox');
+                        checkboxClicked = true;
+                        break;
+                      } catch (clickError: any) {
+                        console.log(`   ⚠️  Click failed: ${clickError.message}`);
+                      }
+                    }
+                  }
+                }
+              } catch (e: any) {
+                // Continue to next selector
+                console.log(`   ⚠️  Selector "${selector}" failed: ${e.message}`);
+              }
+            }
+          }
+          
+          // Last resort: Click in the center-left of iframe where checkbox usually is (only for checkbox challenges)
+          if (!checkboxClicked && (challengeType === 'checkbox' || challengeType === 'unknown')) {
+            try {
+              console.log('   🔄 Last resort: Clicking in iframe center-left area...');
+              const iframeBox = await recaptchaIframe.boundingBox();
+              if (iframeBox) {
+                // Click in left portion where checkbox usually is (about 25% from left, 50% from top)
+                const clickX = iframeBox.x + iframeBox.width * 0.25;
+                const clickY = iframeBox.y + iframeBox.height * 0.5;
+                console.log(`   🖱️  Clicking at: (${clickX}, ${clickY})`);
+                await page.mouse.click(clickX, clickY);
+                console.log('   ✅ Clicked in iframe center-left');
+                checkboxClicked = true;
+                await humanPause(1000, 2000);
+              }
+            } catch (e: any) {
+              console.warn(`   ⚠️  Could not click in iframe: ${e.message}`);
+            }
+          }
+          } // End of else block (checkbox challenge handling - inside iframe)
+        }
+      } catch (e: any) {
+        console.warn(`   ⚠️  Could not access iframe: ${e.message}`);
+      }
+      } // End of if (recaptchaIframe) for checkbox clicking
+    } // End of else block (checkbox challenge handling)
+    
+    // Method 2: Try clicking on page-level elements (if iframe method failed) - only for checkbox challenges
+    if (!checkboxClicked && !isImageChallenge && !preferNopechaExtensionOnly) {
+      console.log('   🔄 Trying page-level selectors...');
+      const pageSelectors = [
+        'text=/I\'m not a robot/i',
+        'text=/I\'m not a robot/i',
+        '.g-recaptcha',
+        '#recaptcha',
+        '[data-sitekey]',
+        'div:has-text("I\'m not a robot")',
+        'span:has-text("I\'m not a robot")'
+      ];
+      
+      for (const selector of pageSelectors) {
+        try {
+          const element = page.locator(selector).first();
+          const count = await element.count();
+          if (count > 0) {
+            const isVisible = await element.isVisible().catch(() => false);
+            if (isVisible) {
+              console.log(`   ✅ Found element: ${selector}`);
+              
+              // Try to get bounding box and click near the checkbox area
+              try {
+                const box = await element.boundingBox();
+                if (box) {
+                  // Click slightly to the left where checkbox usually is
+                  const clickX = box.x - 30;
+                  const clickY = box.y + box.height / 2;
+                  console.log(`   🖱️  Clicking near checkbox area: (${clickX}, ${clickY})`);
+                  await page.mouse.click(clickX, clickY);
+                  console.log('   ✅ Clicked near checkbox via mouse');
+                  checkboxClicked = true;
+                  await humanPause(2000, 3000);
+                  break;
+                }
+              } catch (e) {
+                // Fallback to regular click
+                await element.click({ timeout: 5000, force: true });
+                console.log('   ✅ Clicked element');
+                checkboxClicked = true;
+                await humanPause(2000, 3000);
+                break;
+              }
+            }
+          }
+        } catch (e: any) {
+          // Continue
+        }
+      }
+      
+      // Last resort: Try clicking on the iframe itself if we found one
+      if (!checkboxClicked && recaptchaIframe) {
+        try {
+          console.log('   🔄 Last resort: Clicking directly on iframe...');
+          const iframeBox = await recaptchaIframe.boundingBox();
+          if (iframeBox) {
+            // Click in the left portion of iframe where checkbox is
+            const clickX = iframeBox.x + 30;
+            const clickY = iframeBox.y + iframeBox.height / 2;
+            console.log(`   🖱️  Clicking on iframe at: (${clickX}, ${clickY})`);
+            await page.mouse.click(clickX, clickY);
+            console.log('   ✅ Clicked on iframe');
+            checkboxClicked = true;
+            await humanPause(2000, 3000);
+          }
+        } catch (e: any) {
+          console.warn(`   ⚠️  Could not click on iframe: ${e.message}`);
+        }
+      }
+    }
+    
+    // Wait for CAPTCHA to be solved (NopeCHA handles both checkbox and image selection)
+    // Use the combined image challenge detection (isImageChallenge)
+    // Image selection challenges take longer for NopeCHA to solve
+    // Give NopeCHA more time - it may need 30-60 seconds for image challenges
+    const maxWaitTime = isImageChallenge || preferNopechaExtensionOnly ? 120000 : 60000; // 120s for image/extension, 60s for checkbox
+    const checkInterval = 3000; // Check every 3 seconds
+    
+    if (checkboxClicked || isImageChallenge) {
+      console.log(`   ⏳ Waiting for CAPTCHA to be solved (up to ${maxWaitTime/1000}s, NopeCHA may need time)...`);
+      if (isImageChallenge) {
+        console.log('   🤖 NopeCHA is working on the image selection challenge (traffic lights, etc.)...');
+        console.log('   ⏳ This may take 10-30 seconds for NopeCHA to analyze and click the correct images');
+      }
+      await humanPause(3000, 5000); // Give it time to process
+      
+      // Wait for CAPTCHA to complete
+      let recaptchaCompleted = false;
+      const startTime = Date.now();
+      
+      while (!recaptchaCompleted && (Date.now() - startTime) < maxWaitTime) {
+        await humanPause(checkInterval, checkInterval);
+        
+        // Check if we're still on a challenge page
+        const currentUrl = page.url();
+        const stillOnChallenge = currentUrl.includes('/challenge') || currentUrl.includes('/checkpoint');
+        const hasRecaptcha = await page.locator('iframe[src*="recaptcha"], iframe[src*="captchaInternal"]').count().catch(() => 0) > 0;
+        
+        if (!stillOnChallenge && !hasRecaptcha) {
+          recaptchaCompleted = true;
+          console.log('   ✅ CAPTCHA appears to be completed!');
+          break;
+        }
+        
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        // Log progress every 10 seconds
+        if (elapsed % 10 === 0 && elapsed > 0) {
+          if (isImageChallenge) {
+            console.log(`   ⏳ Still waiting... (${elapsed}s elapsed, NopeCHA is solving the image challenge...)`);
+          } else {
+            console.log(`   ⏳ Still waiting for CAPTCHA... (${elapsed}s elapsed)`);
+          }
+        }
+      }
+      
+      if (!recaptchaCompleted) {
+        console.warn(`   ⚠️  CAPTCHA not completed after ${maxWaitTime/1000}s`);
+        if (isImageChallenge) {
+          console.warn('   💡 Image selection challenges may take longer for NopeCHA to solve');
+          console.warn('   💡 NopeCHA should handle this automatically, but you can complete manually if needed');
+          console.warn('   💡 Check the browser window - NopeCHA may still be working on it');
+        }
+        console.warn('   💡 In headed mode, you can complete it manually in the browser');
+      }
+    } else {
+      console.warn('   ⚠️  Could not find or click reCAPTCHA checkbox');
+      console.warn('   💡 You may need to complete it manually in the browser');
+      console.warn('   💡 Try clicking the checkbox manually and the automation will continue');
+    }
+  } else {
+    console.log('   ✅ No reCAPTCHA detected on this page');
+  }
+  } // End of isOnChallengePage check
+  
+  // Check for security challenges (re-check URL after potential navigation)
+  const currentUrlAfterRecaptcha = page.url();
+  const pageTitle = await page.title().catch(() => '');
+  const securityPageText = await page.textContent('body').catch(() => '') || '';
+  
+  console.log(`   🌐 Current URL after login click: ${currentUrlAfterRecaptcha}`);
+  console.log(`   🏷️  Page title: ${pageTitle}`);
+  
+  // Check for various LinkedIn security challenges
+  const verificationInputCount = await page.locator('input[type="tel"], input[name="pin"], input[aria-label*="code" i], input[aria-label*="verification" i]').count();
+  const hasSecurityChallenge = 
+    securityPageText.includes('Verify your identity') ||
+    securityPageText.includes('Security challenge') ||
+    securityPageText.includes('unusual activity') ||
+    securityPageText.includes('verify it\'s you') ||
+    securityPageText.includes('security check') ||
+    currentUrlAfterRecaptcha.includes('/challenge') ||
+    currentUrlAfterRecaptcha.includes('/checkpoint') ||
+    verificationInputCount > 0;
+  
+  if (hasSecurityChallenge) {
+    console.warn('   ⚠️  LinkedIn security challenge detected!');
+    console.warn('   💡 LinkedIn is asking for additional verification:');
+    console.warn('      - This could be a CAPTCHA, 2FA code, or phone verification');
+    console.warn('      - In headed mode, you can manually complete this');
+    console.warn('      - The browser will wait for you to complete it...');
+    
+    // Check if we're in headed mode by checking if browser is visible
+    // In headed mode, we can wait for manual intervention
+    const headlessMode = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
+    const forceHeaded = process.env.HEADLESS === 'false' || process.env.HEADLESS === '0';
+    const isHeaded = forceHeaded || (!headlessMode && process.env.NODE_ENV !== 'production');
+    
+    if (isHeaded) {
+      console.log('   ⏳ Waiting up to 120 seconds for manual security challenge completion...');
+      console.log('   👀 Please complete the security challenge in the browser window');
+      
+      // Wait and periodically check if challenge is completed
+      let challengeCompleted = false;
+      const maxWaitTime = 120000; // 120 seconds
+      const checkInterval = 5000; // Check every 5 seconds
+      const startTime = Date.now();
+      
+      while (!challengeCompleted && (Date.now() - startTime) < maxWaitTime) {
+        await humanPause(checkInterval, checkInterval);
+        
+        const currentUrl = page.url();
+        const stillOnChallenge = currentUrl.includes('/challenge') || currentUrl.includes('/checkpoint');
+        const backToLogin = currentUrl.includes('/login');
+        
+        if (!stillOnChallenge && !backToLogin) {
+          // Challenge appears to be completed - we're on a different page
+          challengeCompleted = true;
+          console.log('   ✅ Security challenge appears to be completed!');
+          break;
+        }
+        
+        if (backToLogin) {
+          console.warn('   ⚠️  Redirected back to login - challenge may have failed');
+          break;
+        }
+        
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        console.log(`   ⏳ Still waiting... (${elapsed}s elapsed, challenge still active)`);
+      }
+      
+      if (!challengeCompleted) {
+        const finalUrl = page.url();
+        if (finalUrl.includes('/login')) {
+          throw new Error('Security challenge not completed - LinkedIn redirected back to login. Please try again or check if account needs manual verification.');
+        } else {
+          console.warn('   ⚠️  Challenge wait timeout - proceeding cautiously');
+        }
+      }
+    } else {
+      throw new Error('Security challenge detected but running in headless mode - cannot complete manually. Please run with HEADLESS=false to complete the challenge.');
+    }
+  }
+  
+  // Check if we're still on login page
+  const hasLoginForm = await page.locator('input[name="session_key"], .login-form, form[action*="login"]').count() > 0;
+  const isOnLoginPage = currentUrl.includes('/login') || hasLoginForm;
+  
+  if (isOnLoginPage) {
+    console.warn('   ⚠️  Still on login page after login attempt');
+    console.warn('   💡 Possible reasons:');
+    console.warn('      - Invalid credentials');
+    console.warn('      - LinkedIn security challenge (check browser)');
+    console.warn('      - Account locked or restricted');
+    console.warn('      - Datacenter IP detection');
+    
+    // In headed mode, wait a bit longer to see if user can complete challenge
+    const headlessMode = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
+    const forceHeaded = process.env.HEADLESS === 'false' || process.env.HEADLESS === '0';
+    const isHeaded = forceHeaded || (!headlessMode && process.env.NODE_ENV !== 'production');
+    
+    if (isHeaded) {
+      console.log('   ⏳ Waiting 30 more seconds in case of manual intervention needed...');
+      await humanPause(30000, 30000);
+      
+      // Re-check after waiting
+      const newUrl = page.url();
+      const newHasLoginForm = await page.locator('input[name="session_key"]').count() > 0;
+      if (newUrl.includes('/login') || newHasLoginForm) {
+        throw new Error('Login failed - still on login page after waiting');
+      }
+    } else {
+      throw new Error('Login failed - redirected back to login page');
+    }
+  }
+  
+  // Wait for any redirects to complete
   console.log('   ⏳ Waiting for session to be fully established...');
   await humanPause(5000, 7000);
   
-  // Verify we're actually logged in before saving session
-  const currentUrl = page.url();
-  const pageTitle = await page.title().catch(() => '');
-  const hasLoginForm = await page.locator('input[name="session_key"], .login-form').count() > 0;
-  
-  if (currentUrl.includes('/login') || hasLoginForm) {
-    console.warn('   ⚠️  Still on login page after login attempt - LinkedIn may be challenging the session');
-    console.warn('   💡 This could be due to:');
-    console.warn('      - Datacenter IP detection (EC2 IP flagged)');
-    console.warn('      - LinkedIn security challenge');
-    console.warn('      - Session not fully established');
-    throw new Error('Login failed - redirected back to login page');
-  }
-  
   // Navigate to feed to ensure session is active
   try {
-    await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await humanPause(2000, 3000);
+    console.log('   🔍 Verifying session by navigating to feed...');
+    await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 5000 });
+    await humanPause(2000, 2000); // 2 second wait before navigating to catch-up page
     
     // Double-check we're logged in
     const feedUrl = page.url();
+    const feedTitle = await page.title().catch(() => '');
     const stillOnLogin = feedUrl.includes('/login') || await page.locator('input[name="session_key"]').count() > 0;
+    
+    console.log(`   🌐 Feed URL: ${feedUrl}`);
+    console.log(`   🏷️  Feed title: ${feedTitle}`);
     
     if (stillOnLogin) {
       throw new Error('Session not valid - LinkedIn redirected to login');
     }
     
+    // Check for feed content to confirm we're logged in
+    const hasFeedContent = await page.locator('main, .feed-container, [data-testid="feed-container"], nav[role="navigation"]').count() > 0;
+    if (!hasFeedContent) {
+      console.warn('   ⚠️  Feed page loaded but no feed content detected');
+    }
+    
     console.log('   ✅ Session verified - logged in successfully');
   } catch (e: any) {
     console.error('   ❌ Failed to verify session after login:', e.message);
+    console.error('   💡 Current page URL:', page.url());
+    console.error('   💡 Current page title:', await page.title().catch(() => 'unknown'));
     throw new Error('Login verification failed');
   }
 
@@ -236,7 +1291,7 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
   console.log('📍 Navigating directly to Catch Up page...');
   try {
     await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await humanPause(2000, 3000);
+    await humanPause(500, 800);
 
     const landingUrl = page.url();
     const landingTitle = await page.title().catch(() => 'unknown');
@@ -405,15 +1460,23 @@ async function scrollToLoadMore(page: Page, containerLocator: Locator): Promise<
       const hasLoadMore = await loadMoreButton.count() > 0 && await loadMoreButton.isVisible().catch(() => false);
       if (hasLoadMore) {
         console.log('   🔄 Clicking "Load more" button...');
-        await loadMoreButton.click();
-        await humanPause(2000, 3000);
+        try {
+          await loadMoreButton.click({ timeout: 5000 });
+        } catch {
+          console.log('   ⚠️  Click intercepted, trying JS click...');
+          await page.evaluate(() => {
+            const btn = document.querySelector('button:has-text("Load more"), button:has-text("Show more")') as HTMLElement | null;
+            if (btn) btn.click();
+          }).catch(() => {});
+        }
+        await humanPause(1200, 1800);
       }
     } else {
       // Fallback: just scroll window
       await page.evaluate(() => {
         window.scrollTo(0, document.body.scrollHeight);
       });
-      await humanPause(2000, 3000);
+      await humanPause(1200, 1800);
     }
   } catch (e: any) {
     console.log(`   ⚠️  Error scrolling: ${e.message}`);
@@ -637,6 +1700,7 @@ async function extractContacts(page: Page, maxContacts: number = 50): Promise<Co
       const linkedinIdMatch = profileUrl.match(/\/in\/([^\/\?]+)/);
       const linkedinId = linkedinIdMatch ? linkedinIdMatch[1] : undefined;
 
+      // Skip only if the page shows "Message sent"
       if (contactInfo.hasMessageSent) {
         console.log(`   ⏭️  Skipping ${contactInfo.name}: Page shows "Message sent"`);
         continue;
@@ -673,17 +1737,23 @@ function enhanceMessage(
   profileTemplate: string,
   companyTemplate: string
 ): string {
+  // Include LinkedIn's original template (like "Congrats on...") and append our links
   let enhanced = originalTemplate.trim();
   
   // Replace placeholders in templates
   const profileText = profileTemplate.replace('{profile_url}', profileUrl);
   const companyText = companyTemplate.replace('{company_url}', companyUrl);
   
-  // Append templates
+  // Append our custom links after LinkedIn's template
+  if (enhanced) {
+    enhanced += '\n\n';
+  }
   enhanced += profileText;
-  enhanced += '\n' + companyText;
+  if (companyText) {
+    enhanced += '\n\n' + companyText;
+  }
   
-  return enhanced;
+  return enhanced.trim();
 }
 
 /**
@@ -700,94 +1770,686 @@ async function processContact(
   try {
     console.log(`\n💬 Processing: ${contact.name} (${contact.messageType})`);
     
-    // If page shows "Message sent", skip - this means LinkedIn shows it was already messaged
-    if (contact.hasMessageSent) {
-      console.log(`   ⏭️  Page shows "${contact.name}" was already messaged (Message sent visible), skipping`);
+    // Close any existing message bubbles to avoid mixing conversations
+    // BUT: Only close if they're actually open and blocking - don't open the messaging overlay
+    try {
+      // Check if there's an open messaging overlay dialog first
+      const messagingOverlay = page.locator('[role="dialog"][aria-label*="Messaging" i]').first();
+      const overlayVisible = await messagingOverlay.isVisible({ timeout: 1000 }).catch(() => false);
       
-      // Update database to match page state
-      const supabase = getSupabaseClient();
-      const { data: existing } = await supabase
-        .from('linkedin_messages')
-        .select('id, status')
-        .eq('contact_profile_url', contact.profileUrl)
-        .limit(1);
-
-      if (existing && existing.length > 0 && existing[0].status !== 'sent') {
-        // Update existing record to 'sent' since page shows it was sent
-        console.log(`   📝 Updating existing record for ${contact.name} to 'sent'...`);
-        await updateLinkedInMessage(existing[0].id, {
-          status: 'sent',
-          sent_at: new Date().toISOString()
-        });
-      } else if (!existing || existing.length === 0) {
-        // Create record if it doesn't exist
-        await createLinkedInMessage({
-          contact_name: contact.name,
-          contact_profile_url: contact.profileUrl,
-          contact_linkedin_id: contact.linkedinId || null,
-          message_type: contact.messageType,
-          original_template: null,
-          enhanced_message: null,
-          status: 'sent',
-          sent_at: new Date().toISOString(),
-          error_message: null,
-          linkedin_job_id: null
-        }).catch(() => {}); // Ignore duplicate key errors
+      if (overlayVisible) {
+        console.log('   ⚠️  Messaging overlay is open, closing it...');
+        const closeButtons = page.locator('button[aria-label*="Close"][aria-label*="conversation" i], button[aria-label*="Close"][aria-label*="message" i]').first();
+        const count = await closeButtons.count();
+        if (count > 0) {
+          console.log(`   🔄 Closing existing messaging overlay...`);
+          
+          // CRITICAL: Aggressive blur before clicking close button to prevent Finder popup
+          for (let i = 0; i < 10; i++) {
+            await page.evaluate(() => {
+              if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                document.activeElement.blur();
+              }
+              document.body.blur();
+              const buttons = document.querySelectorAll('button');
+              buttons.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+              const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+              inputs.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+              // Blur all focusable elements
+              const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
+              focusable.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+            });
+            await humanPause(30, 50);
+          }
+          await humanPause(300, 400);
+          
+          // CRITICAL: Use synthetic mouse event instead of click() to avoid keyboard events
+          await closeButtons.evaluate((el: any) => {
+            // Blur everything first
+            if (document.activeElement && document.activeElement instanceof HTMLElement) {
+              document.activeElement.blur();
+            }
+            document.body.blur();
+            
+            // Blur all buttons
+            const buttons = document.querySelectorAll('button');
+            buttons.forEach((btn: any) => {
+              if (btn && btn.blur) btn.blur();
+            });
+            
+            // Use synthetic mouse event instead of click()
+            const mouseEvent = new MouseEvent('click', {
+              view: window,
+              bubbles: true,
+              cancelable: true,
+              buttons: 1
+            });
+            el.dispatchEvent(mouseEvent);
+          });
+          
+          // CRITICAL: Aggressive blur immediately after clicking close button
+          for (let i = 0; i < 10; i++) {
+            await page.evaluate(() => {
+              if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                document.activeElement.blur();
+              }
+              document.body.blur();
+              const buttons = document.querySelectorAll('button');
+              buttons.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+              const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+              inputs.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+              // Blur all focusable elements
+              const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
+              focusable.forEach((el: any) => {
+                if (el && el.blur) el.blur();
+              });
+            });
+            await humanPause(30, 50);
+          }
+          await humanPause(200, 300);
+          
+          await humanPause(500, 1000);
+        }
       }
-
-      return { success: true }; // Counted as success (already messaged)
+    } catch (e) {
+      // Ignore errors - overlay might not be open
     }
 
-    // No need to check database - if we have a message button, they haven't been messaged
+    // Proceed to send message
     console.log(`   ✅ ${contact.name} has message button - proceeding to send message...`);
     
     // Click message link/button to open dialog
-    console.log(`   🖱️  Clicking message button for ${contact.name}...`);
-    if (contact.messageButton) {
-      try {
-        await contact.messageButton.scrollIntoViewIfNeeded({ timeout: 5000 });
-        await humanPause(300, 500);
+    // Based on browser inspection: message links have href="/messaging/compose/..." and aria-label="Message [Name]: [message]"
+    console.log(`   🖱️  Finding and clicking message button for ${contact.name}...`);
+    
+    // Extract LinkedIn ID from profile URL for matching
+    const profileUrlParts = contact.profileUrl.split('/in/');
+    const linkedinId = profileUrlParts.length > 1 ? profileUrlParts[1].split('/')[0].split('?')[0] : null;
+    
+    // Wait for message links to be present on the page (they may load dynamically)
+    // Note: Links can have full URLs (https://www.linkedin.com/messaging/compose/...) or relative (/messaging/compose/...)
+    console.log(`   🔍 Waiting for message links to be available...`);
+    try {
+      await page.waitForSelector('a[href*="messaging/compose"]', { timeout: 10000, state: 'attached' });
+    } catch (e) {
+      console.log(`   ⚠️  Message links not immediately available, continuing anyway...`);
+    }
+    
+    let messageLink: Locator | null = null;
+    
+    // Always find the button fresh - don't use stored locators as they can become stale
+    // CRITICAL: Exclude links that are inside the messaging overlay dialog - only get links from the catch-up list
+    // The messaging overlay has a dialog with role="dialog" and aria-label="Messaging"
+    // We want links from the main catch-up list, NOT from any overlay
+    
+    // Strategy 1: Find by aria-label containing contact name (most reliable based on browser inspection)
+    // Links have aria-label like "Message Angela (Yusi) Liu: Congrats on..."
+    // Exclude links inside messaging overlay dialog
+    if (!messageLink && contact.name && contact.name !== 'Unknown') {
+      // Find links that are NOT inside the messaging overlay dialog
+      const linkByAria = page.locator(`main a[href*="messaging/compose"][aria-label*="${contact.name}"]:not([role="dialog"] a)`).first();
+      const nameCount = await linkByAria.count();
+      if (nameCount > 0) {
+        // Verify it's not inside a dialog
+        const isInDialog = await linkByAria.evaluate((el) => {
+          return !!el.closest('[role="dialog"]');
+        }).catch(() => false);
         
-        // Try to click with multiple strategies
-        try {
-          await contact.messageButton.click({ timeout: 10000 });
-        } catch (e: any) {
-          console.log(`   ⚠️  First click attempt failed, trying with force...`);
-          await contact.messageButton.click({ force: true, timeout: 10000 });
+        if (!isInDialog) {
+          const isVisible = await linkByAria.isVisible({ timeout: 5000 }).catch(() => false);
+          if (isVisible) {
+            messageLink = linkByAria;
+            console.log(`   ✅ Found message link by aria-label containing name: ${contact.name}`);
+          } else {
+            console.log(`   ⚠️  Found link by aria-label but it's not visible, trying to scroll into view...`);
+            try {
+              await linkByAria.scrollIntoViewIfNeeded({ timeout: 3000 });
+              await humanPause(500, 800);
+              const isVisibleAfterScroll = await linkByAria.isVisible({ timeout: 2000 }).catch(() => false);
+              if (isVisibleAfterScroll) {
+                messageLink = linkByAria;
+                console.log(`   ✅ Found message link by aria-label after scrolling: ${contact.name}`);
+              }
+            } catch (e) {
+              // Continue to next strategy
+            }
+          }
         }
+      }
+    }
+    
+    // Strategy 2: Find by href containing LinkedIn ID (from profile URL)
+    // Exclude links inside messaging overlay dialog
+    if (!messageLink && linkedinId) {
+      const linkById = page.locator(`main a[href*="messaging/compose"][href*="${linkedinId}"]:not([role="dialog"] a)`).first();
+      const idCount = await linkById.count();
+      if (idCount > 0) {
+        // Verify it's not inside a dialog
+        const isInDialog = await linkById.evaluate((el) => {
+          return !!el.closest('[role="dialog"]');
+        }).catch(() => false);
         
-        await humanPause(2000, 3000); // Wait for dialog to open
-      } catch (e: any) {
-        console.log(`   ⚠️  Error clicking message button: ${e.message}, trying to find link directly...`);
-        // Fall through to find link directly
+        if (!isInDialog) {
+          const isVisible = await linkById.isVisible({ timeout: 5000 }).catch(() => false);
+          if (isVisible) {
+            messageLink = linkById;
+            console.log(`   ✅ Found message link by LinkedIn ID: ${linkedinId}`);
+          } else {
+            // Try scrolling into view
+            try {
+              await linkById.scrollIntoViewIfNeeded({ timeout: 3000 });
+              await humanPause(500, 800);
+              const isVisibleAfterScroll = await linkById.isVisible({ timeout: 2000 }).catch(() => false);
+              if (isVisibleAfterScroll) {
+                messageLink = linkById;
+                console.log(`   ✅ Found message link by LinkedIn ID after scrolling: ${linkedinId}`);
+              }
+            } catch (e) {
+              // Continue to next strategy
+            }
+          }
+        }
       }
     }
     
-    // If clicking button didn't work or button wasn't available, find the link directly
-    if (!contact.messageButton || true) {
-      // Try to find message link/button again
-      const messageLink = page.locator(`a[href*="/messaging/compose/"]`).first();
-      const messageBtn = page.locator(`button:has-text("Message"), button[aria-label*="Message"]`).first();
+    // Strategy 3: Find by text content containing contact name
+    // Exclude links inside messaging overlay dialog
+    if (!messageLink && contact.name && contact.name !== 'Unknown') {
+      // Try has-text selector (Playwright-specific)
+      const linkByText = page.locator(`main a[href*="messaging/compose"]:has-text("${contact.name}")`).first();
+      const textCount = await linkByText.count();
+      if (textCount > 0) {
+        // Verify it's not inside a dialog
+        const isInDialog = await linkByText.evaluate((el) => {
+          return !!el.closest('[role="dialog"]');
+        }).catch(() => false);
+        
+        if (!isInDialog) {
+          const isVisible = await linkByText.isVisible({ timeout: 5000 }).catch(() => false);
+          if (isVisible) {
+            messageLink = linkByText;
+            console.log(`   ✅ Found message link by text containing name: ${contact.name}`);
+          }
+        }
+      }
+    }
+    
+    // Strategy 4: Fallback to first visible message link from main content (NOT from overlay)
+    if (!messageLink) {
+      // Get all links from main content area, excluding any in dialogs
+      const allLinks = page.locator(`main a[href*="messaging/compose"]`);
+      const totalCount = await allLinks.count();
+      console.log(`   🔍 Found ${totalCount} total message compose links in main content`);
       
-      if (await messageLink.count() > 0) {
-        await messageLink.click();
-        await humanPause(2000, 3000);
-      } else if (await messageBtn.count() > 0) {
-        await messageBtn.click();
-        await humanPause(2000, 3000);
+      // Try to find first visible one that's NOT in a dialog
+      for (let i = 0; i < Math.min(totalCount, 10); i++) {
+        const link = allLinks.nth(i);
+        
+        // Verify it's not inside a dialog
+        const isInDialog = await link.evaluate((el) => {
+          return !!el.closest('[role="dialog"]');
+        }).catch(() => false);
+        
+        if (!isInDialog) {
+          const isVisible = await link.isVisible({ timeout: 2000 }).catch(() => false);
+          if (isVisible) {
+            messageLink = link;
+            console.log(`   ⚠️  Using message link #${i + 1} as fallback`);
+            break;
       } else {
-        throw new Error('Message button/link not found');
+            // Try scrolling into view
+            try {
+              await link.scrollIntoViewIfNeeded({ timeout: 2000 });
+        await humanPause(300, 500);
+              const isVisibleAfterScroll = await link.isVisible({ timeout: 2000 }).catch(() => false);
+              if (isVisibleAfterScroll) {
+                messageLink = link;
+                console.log(`   ⚠️  Using message link #${i + 1} after scrolling as fallback`);
+                break;
+              }
+            } catch (e) {
+              // Continue to next link
+            }
+          }
+        }
       }
     }
     
-    // Wait for message dialog to load and be visible
-    console.log('   ⏳ Waiting for message dialog...');
-    const messageDialog = page.locator('dialog[role="dialog"], [role="dialog"]').first();
+    if (!messageLink) {
+      throw new Error(`Could not find message link for ${contact.name} (tried multiple strategies)`);
+    }
+    
+    // CRITICAL: Verify the link is actually for THIS contact before clicking
+    // CRITICAL: Blur before accessing link attributes to prevent Finder popup
+    console.log(`   🔍 Verifying message link is for ${contact.name}...`);
+    
+    // Blur before getting link attributes
+    await page.evaluate(() => {
+      if (document.activeElement && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      document.body.blur();
+    });
+    await humanPause(100, 200);
+    
+    // Get link attributes using evaluate to avoid triggering events
+    const linkInfo = await messageLink.evaluate((el: any) => {
+      return {
+        href: el.getAttribute('href') || '',
+        ariaLabel: el.getAttribute('aria-label') || '',
+        textContent: el.textContent?.trim() || ''
+      };
+    }).catch(() => ({ href: '', ariaLabel: '', textContent: '' }));
+    
+    const href = linkInfo.href;
+    const linkAriaLabel = linkInfo.ariaLabel;
+    const linkText = linkInfo.textContent;
+    
+    console.log(`   🔗 Link href: ${href.substring(0, 100)}...`);
+    console.log(`   🔗 Link aria-label: ${linkAriaLabel?.substring(0, 100) || 'none'}...`);
+    
+    // Blur again after getting attributes
+    await page.evaluate(() => {
+      if (document.activeElement && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      document.body.blur();
+    });
+    await humanPause(100, 200);
+    
+    // VERIFY: Check that this link is actually for the contact we're processing
+    if (contact.name && contact.name !== 'Unknown') {
+      const linkContainsName = 
+        (linkAriaLabel && linkAriaLabel.includes(contact.name)) ||
+        (linkText && linkText.includes(contact.name)) ||
+        (href && href.includes(contact.name.split(' ')[0])); // Check first name in URL
+      
+      if (!linkContainsName) {
+        console.error(`   ❌ ERROR: Message link does not match contact name!`);
+        console.error(`      Contact: ${contact.name}`);
+        console.error(`      Link aria-label: ${linkAriaLabel || 'none'}`);
+        console.error(`      Link text: ${linkText || 'none'}`);
+        throw new Error(`Message link found but does not match contact "${contact.name}" - wrong link detected!`);
+      }
+      console.log(`   ✅ Verified link is for ${contact.name}`);
+    }
+    
+    // Also verify the link contains the LinkedIn ID if we have it
+    if (linkedinId && href) {
+      if (!href.includes(linkedinId)) {
+        console.warn(`   ⚠️  Link href does not contain LinkedIn ID ${linkedinId}, but continuing...`);
+      } else {
+        console.log(`   ✅ Verified link contains LinkedIn ID`);
+      }
+    }
+    
+    // Close any open messaging dialogs to avoid switching context
+    console.log('   🔒 Closing existing message dialogs before opening a new one...');
+    try {
+      const closeButtons = page.locator(
+        [
+          '.msg-overlay-conversation-bubble button[aria-label*=\"Dismiss\" i]',
+          '.msg-overlay-conversation-bubble button[aria-label*=\"Close\" i]',
+          '.msg-overlay-conversation-bubble button[aria-label*=\"Minimize\" i]',
+          '.msg-overlay-conversation-bubble button.msg-overlay-bubble-header__control',
+          '.msg-overlay-bubble-header__details button.msg-overlay-bubble-header__control',
+          '[role=\"dialog\"] button[aria-label*=\"Close\" i]',
+        ].join(', ')
+      );
+      const count = await closeButtons.count();
+      if (count > 0) {
+        for (let i = 0; i < count; i++) {
+          const btn = closeButtons.nth(i);
+          const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
+          if (!visible) continue;
+          // Try direct click; if it has a child SVG or text, click center
+          try {
+            await btn.click({ timeout: 1000 });
+          } catch {
+            const box = await btn.boundingBox().catch(() => null);
+            if (box) {
+              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            }
+          }
+          await humanPause(150, 250);
+        }
+      }
+      await humanPause(200, 300);
+    } catch (e) {
+      console.log('   ⚠️  Could not close dialogs, continuing...');
+    }
+    
+    // Ensure no other message links are focused/hovered
+    console.log('   🔒 Ensuring no other message links are active...');
+    try {
+      await page.evaluate(() => {
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      });
+      await humanPause(200, 300);
+    } catch (e) {
+      // Ignore
+    }
+    // Ensure element is visible and ready - but DON'T scroll if it causes issues
+    // Instead, just check if it's visible and click it
+    const isLinkVisible = await messageLink.isVisible({ timeout: 3000 }).catch(() => false);
+    if (!isLinkVisible) {
+      console.log('   ⚠️  Link not visible, trying scrollIntoViewIfNeeded...');
+      await messageLink.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+      await humanPause(500, 800);
+      } else {
+      console.log('   ✅ Link is already visible, no scrolling needed');
+    }
+    
+    // Wait for element to be actionable
+    try {
+      await messageLink.waitFor({ state: 'visible', timeout: 10000 });
+    } catch (e) {
+      console.log(`   ⚠️  Element not visible, trying anyway...`);
+    }
+    
+    // CRITICAL: Verify we're still on the correct link after any scrolling
+    const hrefAfterScroll = await messageLink.getAttribute('href').catch(() => '');
+    const ariaLabelAfterScroll = await messageLink.getAttribute('aria-label').catch(() => '');
+    if (contact.name && contact.name !== 'Unknown') {
+      const stillMatches = 
+        (ariaLabelAfterScroll && ariaLabelAfterScroll.includes(contact.name)) ||
+        (hrefAfterScroll && hrefAfterScroll.includes(contact.name.split(' ')[0]));
+      if (!stillMatches) {
+        throw new Error(`Link changed after scroll! Expected ${contact.name}, got aria-label: ${ariaLabelAfterScroll}`);
+      }
+    }
+    
+    // CRITICAL: Before clicking, verify no other message links are being hovered/clicked
+    // This prevents accidentally clicking another contact's link
+    console.log('   🔒 Verifying no other message links are active...');
+    const allMessageLinks = page.locator('main a[href*="messaging/compose"]');
+    const totalLinks = await allMessageLinks.count();
+    console.log(`   📊 Total message links on page: ${totalLinks}`);
+    
+    // Verify our link is still the correct one
+    const finalHref = await messageLink.getAttribute('href').catch(() => '');
+    const finalAriaLabel = await messageLink.getAttribute('aria-label').catch(() => '');
+    if (contact.name && contact.name !== 'Unknown') {
+      const stillCorrect = 
+        (finalAriaLabel && finalAriaLabel.includes(contact.name)) ||
+        (finalHref && finalHref.includes(contact.name.split(' ')[0]));
+      if (!stillCorrect) {
+        throw new Error(`Link changed before clicking! Expected ${contact.name}, got: ${finalAriaLabel}`);
+      }
+    }
+    
+    // CRITICAL: Aggressive blur before clicking message link to prevent Finder popup
+    console.log('   🔒 Blurring all elements before clicking message link...');
+    for (let i = 0; i < 10; i++) {
+      await page.evaluate(() => {
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        document.body.blur();
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+        inputs.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur all focusable elements
+        const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
+        focusable.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+      });
+      await humanPause(30, 50);
+    }
+    await humanPause(300, 400);
+    
+    // CRITICAL: Use JavaScript click instead of Playwright click to avoid keyboard events
+    // This prevents Finder popup from being triggered
+    try {
+      console.log(`   🎯 Clicking message link for ${contact.name} (href: ${finalHref.substring(0, 80)}...)...`);
+      
+      // Use JavaScript click with synthetic mouse event
+      await messageLink.evaluate((el: any) => {
+        // Blur everything first
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        document.body.blur();
+        
+        // Blur all other links
+        const links = document.querySelectorAll('a');
+        links.forEach((link: any) => {
+          if (link !== el && link.blur) link.blur();
+        });
+        
+        // Use synthetic mouse event instead of click()
+        const mouseEvent = new MouseEvent('click', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          buttons: 1
+        });
+        el.dispatchEvent(mouseEvent);
+      });
+      
+      console.log(`   ✅ Click succeeded for ${contact.name}`);
+      
+      // CRITICAL: Aggressive blur immediately after clicking message link
+      for (let i = 0; i < 10; i++) {
+        await page.evaluate(() => {
+          if (document.activeElement && document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+          document.body.blur();
+          const buttons = document.querySelectorAll('button');
+          buttons.forEach((el: any) => {
+            if (el && el.blur) el.blur();
+          });
+          const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+          inputs.forEach((el: any) => {
+            if (el && el.blur) el.blur();
+          });
+          const links = document.querySelectorAll('a');
+          links.forEach((el: any) => {
+            if (el && el.blur) el.blur();
+          });
+        });
+        await humanPause(30, 50);
+      }
+      
+      // Immediately after clicking, verify we didn't accidentally click another link
+      // by checking if any other message links are now focused/hovered
+      await humanPause(500, 800);
+      
+    } catch (e) {
+      console.error(`   ❌ Click failed: ${(e as Error).message}`);
+      console.log(`   ⚠️  Playwright click failed: ${(e as Error).message}`);
+      
+      // Fallback: Try JavaScript click with proper event sequence
+      try {
+        console.log('   🎯 Trying JavaScript click with event sequence...');
+        await messageLink.evaluate((el: HTMLElement) => {
+          const anchor = el instanceof HTMLAnchorElement ? el : el.closest('a');
+          if (anchor) {
+            // Create proper mouse events with all required properties
+            const rect = anchor.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            // Dispatch events in correct order with proper coordinates
+            const mouseDown = new MouseEvent('mousedown', {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+              buttons: 1,
+              clientX: centerX,
+              clientY: centerY,
+              button: 0
+            });
+            
+            const mouseUp = new MouseEvent('mouseup', {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+              buttons: 0,
+              clientX: centerX,
+              clientY: centerY,
+              button: 0
+            });
+            
+            const clickEvent = new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+              buttons: 0,
+              clientX: centerX,
+              clientY: centerY,
+              button: 0
+            });
+            
+            anchor.dispatchEvent(mouseDown);
+            anchor.dispatchEvent(mouseUp);
+            anchor.dispatchEvent(clickEvent);
+            
+            // Also call native click as fallback
+            anchor.click();
+          }
+        });
+        console.log('   ✅ JavaScript click succeeded');
+      } catch (e2) {
+        console.log(`   ⚠️  JavaScript click failed: ${(e2 as Error).message}`);
+        throw new Error(`Failed to click message link: ${(e2 as Error).message}`);
+      }
+    }
+    
+    // Wait for message dialog to open (LinkedIn needs time to process the click)
+    console.log('   ⏳ Waiting for message dialog to open for ' + contact.name + '...');
+    await humanPause(1500, 2500); // Give LinkedIn time to open the dialog
+    
+    // CRITICAL: Find the NEW message dialog that matches THIS specific contact
+    // We must verify the dialog contains the contact's name to prevent switching to wrong contact
+    let messageDialog: Locator | null = null;
+    
+    // Strategy 1: Find dialog that contains the contact's name in recipient field (MOST RELIABLE)
+    // This ensures we get the dialog for the contact we just clicked
+    if (contact.name && contact.name !== 'Unknown') {
+      console.log(`   🔍 Looking for dialog with contact name: ${contact.name}...`);
+      
+      // Try multiple ways to find the contact name in the dialog
+      const contactNameInDialog = [
+        `[role="dialog"]:has([aria-label*="Remove ${contact.name}" i])`,
+        `[role="dialog"]:has-text("${contact.name}")`,
+        `[role="dialog"]:has([aria-label*="${contact.name}" i])`,
+      ];
+      
+      for (const selector of contactNameInDialog) {
+        const dialogWithContact = page.locator(selector).first();
+        const contactDialogCount = await dialogWithContact.count();
+        if (contactDialogCount > 0) {
+          const isVisible = await dialogWithContact.isVisible({ timeout: 3000 }).catch(() => false);
+          if (isVisible) {
+            // VERIFY: Check that the dialog actually contains the contact's name
+            const dialogText = await dialogWithContact.textContent().catch(() => '');
+            if (dialogText.includes(contact.name)) {
+              messageDialog = dialogWithContact;
+              console.log(`   ✅ Found message dialog for ${contact.name} (verified by name in dialog)`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    // Strategy 2: Find dialog with "New message" heading AND verify it's for this contact
+    if (!messageDialog) {
+      console.log('   🔍 Looking for dialog with "New message" heading...');
+      const newMessageDialog = page.locator('[role="dialog"]:has(h2:has-text("New message"))').first();
+      const newDialogCount = await newMessageDialog.count();
+      if (newDialogCount > 0) {
+        const isVisible = await newMessageDialog.isVisible({ timeout: 3000 }).catch(() => false);
+        if (isVisible) {
+          // VERIFY: Check that this dialog contains the contact's name
+          if (contact.name && contact.name !== 'Unknown') {
+            const dialogText = await newMessageDialog.textContent().catch(() => '');
+            if (dialogText.includes(contact.name)) {
+              messageDialog = newMessageDialog;
+              console.log(`   ✅ Found new message dialog with "New message" heading (verified for ${contact.name})`);
+      } else {
+              console.log(`   ⚠️  Found dialog with "New message" but it doesn't contain ${contact.name}, skipping...`);
+            }
+          } else {
+            // If we don't have contact name, use it as fallback
+            messageDialog = newMessageDialog;
+            console.log('   ⚠️  Found new message dialog by "New message" heading (no contact name to verify)');
+          }
+        }
+      }
+    }
+    
+    // Strategy 3: Find the most recently opened dialog AND verify it's for this contact
+    if (!messageDialog) {
+      console.log('   🔍 Looking for most recently opened dialog...');
+      const allDialogs = page.locator('[role="dialog"]');
+      const dialogCount = await allDialogs.count();
+      if (dialogCount > 0) {
+        // Check dialogs from newest to oldest
+        for (let i = dialogCount - 1; i >= 0; i--) {
+          const candidateDialog = allDialogs.nth(i);
+          const isVisible = await candidateDialog.isVisible({ timeout: 2000 }).catch(() => false);
+          if (isVisible) {
+            // VERIFY: Check that this dialog contains the contact's name
+            if (contact.name && contact.name !== 'Unknown') {
+              const dialogText = await candidateDialog.textContent().catch(() => '');
+              if (dialogText.includes(contact.name)) {
+                messageDialog = candidateDialog;
+                console.log(`   ✅ Found dialog #${i + 1} for ${contact.name} (verified by name)`);
+                break;
+              }
+            } else {
+              // If we don't have contact name, use the newest visible dialog
+              messageDialog = candidateDialog;
+              console.log(`   ⚠️  Using dialog #${i + 1} as fallback (no contact name to verify)`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    if (!messageDialog) {
+      throw new Error(`Could not find message dialog for ${contact.name} after clicking message link`);
+    }
+    
+    // FINAL VERIFICATION: Double-check the dialog contains the contact's name
+    if (contact.name && contact.name !== 'Unknown') {
+      const finalDialogText = await messageDialog.textContent().catch(() => '');
+      if (!finalDialogText.includes(contact.name)) {
+        throw new Error(`Dialog found but does not contain contact name "${contact.name}" - wrong contact dialog detected! Dialog text: ${finalDialogText.substring(0, 100)}...`);
+      }
+      console.log(`   ✅ Verified dialog is for ${contact.name}`);
+    }
+    
     await messageDialog.waitFor({ state: 'visible', timeout: 15000 });
     await humanPause(1000, 2000);
     
     // Wait for message input field - try multiple selectors
+    console.log('   🔍 Looking for message input field...');
     const messageInputSelectors = [
+      'textbox[placeholder*="Write a message" i]',
+      'textbox[placeholder*="message" i]',
       'textbox[role="textbox"]',
       'div[contenteditable="true"][role="textbox"]',
       'div[contenteditable="true"]',
@@ -801,29 +2463,38 @@ async function processContact(
       const input = messageDialog.locator(selector).first();
       const count = await input.count();
       if (count > 0) {
-        await input.waitFor({ state: 'visible', timeout: 5000 });
+        const isVisible = await input.isVisible({ timeout: 5000 }).catch(() => false);
+        if (isVisible) {
         messageInput = input;
         console.log(`   ✅ Found message input with selector: ${selector}`);
         break;
+        }
       }
     }
     
     if (!messageInput) {
-      throw new Error('Message input field not found in dialog');
+      throw new Error('Message input field not found - tried multiple selectors');
     }
     
     await humanPause(500, 1000);
     
-    // Extract LinkedIn's pre-filled template
+    // Extract LinkedIn's pre-filled template (we'll append below it, not clear)
     const originalTemplate = await messageInput.textContent().catch(() => '') || 
-                           await messageInput.inputValue().catch(() => '') || '';
+                           await messageInput.inputValue().catch(() => '') || 
+                           await messageInput.evaluate((el: any) => el.innerText || el.textContent || el.value || '').catch(() => '');
     
-    if (!originalTemplate.trim()) {
-      console.warn(`   ⚠️  No pre-filled template found`);
-      // Continue anyway with just our links
+    if (originalTemplate.trim()) {
+      console.log(`   📝 Extracted LinkedIn template (${originalTemplate.trim().length} chars): "${originalTemplate.trim().substring(0, 50)}..."`);
+    } else {
+      console.warn(`   ⚠️  No pre-filled template found - will send only our links`);
     }
     
-    // Enhance message
+    // Get the text to append (our links only, not the template again)
+    const profileText = (settings.message_template_profile || '').replace('{profile_url}', settings.profile_url || '');
+    const companyText = (settings.message_template_company || '').replace('{company_url}', settings.company_url || '');
+    const textToAppend = '\n\n' + profileText + (companyText ? '\n\n' + companyText : '');
+    
+    // Enhance message (for database record only - we won't type the full message)
     const enhancedMessage = enhanceMessage(
       originalTemplate,
       settings.profile_url || '',
@@ -885,68 +2556,626 @@ async function processContact(
       }
     }
     
-    // Clear existing content and type enhanced message
-    await messageInput.click();
-    await humanPause(200, 400);
+    // Type enhanced message - clear existing content and type full message
+    console.log('   📝 Filling message input with full enhanced message...');
     
-    // Clear existing content - select all and delete
-    // Use Meta+A (Cmd+A) on Mac, Control+A on Windows/Linux
-    const isMac = process.platform === 'darwin';
-    await messageInput.click({ clickCount: 3 }); // Triple click to select all text
-    await humanPause(200, 400);
-    await page.keyboard.press(isMac ? 'Meta+A' : 'Control+A');
-    await humanPause(100, 200);
-    await page.keyboard.press('Backspace'); // Clear selected content
-    await humanPause(300, 500);
-    
-    // Type enhanced message with human-like delays
-    // For textbox role elements, use fill; for contenteditable, use type or innerText
     const tagName = await messageInput.evaluate((el: any) => el.tagName?.toLowerCase()).catch(() => '');
     const role = await messageInput.getAttribute('role').catch(() => '');
+    const isContentEditable = await messageInput.evaluate((el: any) => el.contentEditable === 'true').catch(() => false);
     
-    if (tagName === 'textarea' || role === 'textbox') {
-      // Use fill for standard inputs
-      await messageInput.fill(enhancedMessage);
+    if (isContentEditable || (tagName === 'div' && role === 'textbox')) {
+      console.log('   ⌨️  Typing full message in contenteditable div...');
+      
+      // CRITICAL: Prevent page scrolling or clicking other elements while typing
+      // Lock the page to prevent any interactions that might switch contacts
+      console.log('   🔒 Locking page interactions to prevent contact switching...');
+      
+      // Ensure input is in view - but DON'T scroll the main page, only scroll within dialog if needed
+      try {
+        // Get the dialog element to ensure it's stable
+        const dialogVisible = await messageDialog.isVisible({ timeout: 2000 }).catch(() => false);
+        if (!dialogVisible) {
+          throw new Error('Message dialog disappeared - cannot continue typing');
+        }
+        
+        // Scroll the input into view within the dialog (not the main page)
+        await messageInput.scrollIntoViewIfNeeded({ timeout: 3000 });
+        await humanPause(200, 300);
+      } catch (e) {
+        console.log('   ⚠️  Scrolling failed, but continuing...');
+      }
+      
+      // CRITICAL: Position cursor at the END of the content using a reliable method
+      // For contenteditable divs, we need to find the last text node and place cursor there
+      console.log('   📝 Positioning cursor at END of existing content using reliable method...');
+      
+      // Get the current text content BEFORE focusing
+      const textBefore = await messageInput.evaluate((el: any) => {
+        return (el.textContent || el.innerText || '').trim();
+      }).catch(() => '');
+      
+      const textLengthBefore = textBefore.length;
+      console.log(`   📏 Current content length: ${textLengthBefore} chars`);
+      if (textLengthBefore > 0) {
+        console.log(`   📝 Current content preview: "${textBefore.substring(0, 50)}${textBefore.length > 50 ? '...' : ''}"`);
+      }
+      
+      // Step 1: Focus the element (but don't click - clicking can place cursor in middle)
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+      });
+      await humanPause(300, 500); // Wait for LinkedIn to potentially restore cursor position
+      
+      // Step 2: Use a more reliable method to place cursor at end
+      // This works for contenteditable divs with complex HTML structure
+      const cursorPositioned = await messageInput.evaluate((el: any) => {
+        // Get selection
+        const sel = window.getSelection();
+        if (!sel) return false;
+        
+        // Find the last text node in the element (most reliable method)
+        const walker = document.createTreeWalker(
+          el,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+        
+        let lastTextNode: Node | null = null;
+        let node: Node | null;
+        while (node = walker.nextNode()) {
+          lastTextNode = node;
+        }
+        
+        if (lastTextNode && lastTextNode.textContent) {
+          // Place cursor at the end of the last text node
+          const range = document.createRange();
+          const textLength = lastTextNode.textContent.length;
+          range.setStart(lastTextNode, textLength);
+          range.setEnd(lastTextNode, textLength);
+          range.collapse(true); // Collapse to start (which is the end position)
+          
+          sel.removeAllRanges();
+          sel.addRange(range);
+          
+          // Verify cursor is at the end
+          const currentRange = sel.getRangeAt(0);
+          const textContent = el.textContent || el.innerText || '';
+          const isAtEnd = currentRange.endOffset >= textContent.length - 1;
+          
+          return isAtEnd;
+        }
+        
+        // Fallback: No text nodes found, try selecting all content and collapsing to end
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return true;
+      }).catch(() => false);
+      
+      if (!cursorPositioned) {
+        console.log('   ⚠️  First cursor positioning attempt failed, trying alternative method...');
+        await humanPause(200, 300);
+        // Alternative: Select all content, then collapse to end
+        await messageInput.evaluate((el: any) => {
+          el.focus();
+          const sel = window.getSelection();
+          const range = document.createRange();
+          
+          // Select all content
+          range.selectNodeContents(el);
+          
+          // Collapse to end (this moves cursor to the very end)
+          range.collapse(false);
+          
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+        });
+        await humanPause(200, 300);
+      }
+      
+      // Step 3: Verify cursor position by checking selection offset
+      const cursorVerified = await messageInput.evaluate((el: any) => {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+        
+        const range = sel.getRangeAt(0);
+        const textContent = el.textContent || el.innerText || '';
+        const textLength = textContent.length;
+        
+        // Check if cursor is at or near the end (within 2 chars is acceptable for edge cases)
+        const isAtEnd = range.endOffset >= textLength - 2 && range.startOffset >= textLength - 2;
+        
+        if (!isAtEnd) {
+          // Cursor is not at end - try one more time with the last text node method
+          const walker = document.createTreeWalker(
+            el,
+            NodeFilter.SHOW_TEXT,
+            null
+          );
+          
+          let lastTextNode: Node | null = null;
+          let node: Node | null;
+          while (node = walker.nextNode()) {
+            lastTextNode = node;
+          }
+          
+          if (lastTextNode && lastTextNode.textContent) {
+            const newRange = document.createRange();
+            const textLength = lastTextNode.textContent.length;
+            newRange.setStart(lastTextNode, textLength);
+            newRange.setEnd(lastTextNode, textLength);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+            
+            // Check again
+            const finalRange = sel.getRangeAt(0);
+            return finalRange.endOffset >= textContent.length - 2;
+          }
+        }
+        
+        return isAtEnd;
+      }).catch(() => false);
+      
+      if (!cursorVerified) {
+        console.log('   ⚠️  Cursor verification failed, making final aggressive attempt...');
+        // Final attempt: Use the deepest last node method
+        await messageInput.evaluate((el: any) => {
+          el.focus();
+          const sel = window.getSelection();
+          
+          // Try to find the deepest last node
+          let lastNode: any = el;
+          while (lastNode.lastChild) {
+            lastNode = lastNode.lastChild;
+          }
+          
+          // If it's a text node, use it
+          if (lastNode.nodeType === Node.TEXT_NODE && lastNode.textContent) {
+            const range = document.createRange();
+            const textLength = lastNode.textContent.length;
+            range.setStart(lastNode, textLength);
+            range.setEnd(lastNode, textLength);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
     } else {
-      // For contenteditable divs, set innerText and trigger input event
+            // Fallback: select all and collapse to end
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }
+        });
+        await humanPause(400, 500);
+      }
+      
+      // Final check: Get text after positioning to ensure it hasn't changed
+      const textAfter = await messageInput.evaluate((el: any) => {
+        return (el.textContent || el.innerText || '').trim();
+      }).catch(() => '');
+      
+      const textLengthAfter = textAfter.length;
+      
+      if (textLengthBefore !== textLengthAfter) {
+        console.log(`   ⚠️  Text length changed (${textLengthBefore} -> ${textLengthAfter}), LinkedIn may have modified content`);
+      }
+      
+      console.log(`   ✅ Cursor positioned at end (before: ${textLengthBefore} chars, after: ${textLengthAfter} chars)`);
+      await humanPause(300, 400); // Extra wait before typing to ensure cursor is stable
+      
+      // Type the text to append instantly (preserves newlines and spacing)
+      await messageInput.type(textToAppend, { delay: 0 });
+      
+      // Trigger input event
+      await messageInput.evaluate((el: any) => {
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
+      
+      await humanPause(500, 800);
+      console.log('   ✅ Appended our links below LinkedIn template');
+      
+      await humanPause(300, 500);
+      
+      // Verify the message was typed
+      const typedContent = (await messageInput.textContent().catch(() => '')) || 
+                          (await messageInput.evaluate((el: any) => el.innerText || el.textContent || '').catch(() => ''));
+      
+      if (typedContent.length < enhancedMessage.length * 0.8) {
+        console.log(`   ⚠️  Message not fully typed (got ${typedContent.length} chars, expected ~${enhancedMessage.length}), setting directly...`);
+        // Fallback: set content directly with proper formatting
       await messageInput.evaluate((el: any, text: string) => {
         el.focus();
-        el.innerText = text;
-        // Trigger input and change events
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+          if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+            el.value = text;
+          } else {
+            // Convert newlines to <br> tags for contenteditable divs
+            let formattedHTML = text
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/\n\n+/g, '<br><br>') // Multiple newlines = paragraph break
+              .replace(/\n/g, '<br>'); // Single newline = line break
+            el.innerHTML = formattedHTML;
+            el.textContent = text;
+          }
+          // Move cursor to end
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          sel?.removeAllRanges();
+          sel?.addRange(range);
       }, enhancedMessage);
+        await humanPause(500, 800);
+      } else {
+        console.log(`   ✅ Message typed successfully (${typedContent.length} characters)`);
+      }
+      
+      // Trigger input events to ensure LinkedIn recognizes the change
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
+      await humanPause(300, 500);
+    } else if (tagName === 'textarea') {
+      // Just append - don't clear content
+      console.log(`   📝 Appending message below LinkedIn template in ${tagName}...`);
+      
+      // CRITICAL: Position cursor at end for textarea/input using reliable method
+      console.log('   📝 Positioning cursor at END of textarea/input content...');
+      
+      const textareaLength = await messageInput.evaluate((el: any) => {
+        return el.value.length;
+      }).catch(() => 0);
+      
+      console.log(`   📏 Textarea content length: ${textareaLength} chars`);
+      
+      // Focus and set cursor to end with verification
+      const textareaCursorAtEnd = await messageInput.evaluate((el: any) => {
+        el.focus();
+        
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const length = el.value.length;
+          
+          // Set cursor to end
+          el.setSelectionRange(length, length);
+          
+          // Verify it's actually at the end
+          const start = el.selectionStart || 0;
+          const end = el.selectionEnd || 0;
+          
+          // If not at end, try again
+          if (start !== length || end !== length) {
+            el.setSelectionRange(length, length);
+            // Check again
+            return (el.selectionStart || 0) === length && (el.selectionEnd || 0) === length;
+          }
+          
+          return true;
+        }
+        
+        return false;
+      }).catch(() => false);
+      
+      if (!textareaCursorAtEnd) {
+        console.log('   ⚠️  Textarea cursor positioning failed, retrying...');
+        await messageInput.evaluate((el: any) => {
+          el.focus();
+          const length = el.value.length;
+          el.setSelectionRange(length, length);
+          // Force it by setting multiple times
+          setTimeout(() => {
+            el.setSelectionRange(length, length);
+          }, 0);
+        });
+        await humanPause(300, 400);
+      }
+      
+      // Final verification
+      const finalCheck = await messageInput.evaluate((el: any) => {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const length = el.value.length;
+          return (el.selectionStart || 0) === length && (el.selectionEnd || 0) === length;
+        }
+        return false;
+      }).catch(() => false);
+      
+      if (!finalCheck) {
+        console.log('   ⚠️  Final cursor check failed, but proceeding...');
+      } else {
+        console.log('   ✅ Cursor verified at end of textarea');
+      }
+      
+      await humanPause(200, 300);
+      
+      // Type the text to append instantly (preserves newlines and spacing)
+      await messageInput.type(textToAppend, { delay: 0 });
+      
+      // Trigger input events
+      await messageInput.evaluate((el: any) => {
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
+      await humanPause(150, 250);
+      console.log(`   ✅ Message typed instantly (${enhancedMessage.length} characters)`);
+      console.log(`   ✅ Message set via fallback method (${enhancedMessage.length} characters)`);
     }
     
-    await humanPause(1000, 2000); // Wait for text to be set
+    await humanPause(800, 1200); // Wait for Send to enable after typing
     
-    // Find and click send button - look in dialog first
-    console.log('   🔍 Looking for Send button...');
+    // Verify message was set - try multiple ways to read content
+    const messageText = (await messageInput.evaluate((el: any) => {
+      // Try different properties to get the text
+      return el.innerText || el.textContent || el.value || '';
+    }).catch(() => '')) || 
+    (await messageInput.textContent().catch(() => '')) || 
+    (await messageInput.inputValue().catch(() => '')) || '';
+    
+    const trimmedText = messageText.trim();
+    const expectedMinLength = enhancedMessage.length * 0.7; // Allow some tolerance
+    
+    if (!trimmedText || trimmedText.length < expectedMinLength) {
+      console.warn(`   ⚠️  Message text may not have been set correctly (got ${trimmedText.length} chars, expected ~${enhancedMessage.length})`);
+      console.log(`   🔄 Retrying with direct innerText method...`);
+      
+      // Final fallback: just append (don't clear)
+      console.log('   🔄 Retrying by appending message below template...');
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+        // Move cursor to end - verify it's at the end
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const length = el.value.length;
+          el.setSelectionRange(length, length);
+          // Verify
+          if (el.selectionStart !== length || el.selectionEnd !== length) {
+            el.setSelectionRange(length, length);
+          }
+        } else {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false); // Collapse to end
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          // Verify cursor is at end
+          const textLength = (el.textContent || el.innerText || '').length;
+          if (range.endOffset < textLength - 1) {
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }
+        }
+      });
+      await humanPause(200, 300);
+      await messageInput.type(textToAppend, { delay: 0 });
+      await messageInput.evaluate((el: any) => {
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
+      
+      await humanPause(1000, 1500);
+      
+      // Verify again
+      const retryText = (await messageInput.evaluate((el: any) => {
+        return el.innerText || el.textContent || el.value || '';
+      }).catch(() => '')) || '';
+      
+      if (retryText.trim().length < expectedMinLength) {
+        throw new Error(`Failed to set message text: got ${retryText.trim().length} chars, expected at least ${expectedMinLength}`);
+      } else {
+        console.log(`   ✅ Message text set after retry (${retryText.trim().length} characters)`);
+      }
+    } else {
+      console.log(`   ✅ Message text verified (${trimmedText.length} characters)`);
+    }
+    
+    // Wait a bit more and check if Send button is enabled
+    await humanPause(1000, 1500);
+    
+    // Check if Send button is enabled before trying to click
+    // IMPORTANT: Search within the messageDialog, not the page, to avoid finding buttons in other dialogs
+    // CRITICAL: Based on browser investigation, send button has className "msg-form__send-button" and NO aria-label
+    // Attach buttons have className "msg-form__footer-action" and aria-label containing "Attach"
+    console.log('   🔍 Looking for Send button in message dialog (excluding attachment buttons)...');
     const sendButtonSelectors = [
-      'button:has-text("Send")',
-      'button[aria-label*="Send" i]',
-      'button[type="submit"]'
+      // PRIMARY: Use className selector - most reliable (send button has "msg-form__send-button" class)
+      'button.msg-form__send-button:not([disabled])',
+      // Alternative: check for send-button in class
+      'button[class*="send-button"]:not([disabled]):not([class*="footer-action"])',
+      // Fallback: text content "Send" but exclude footer-action buttons (attach buttons)
+      'button:has-text("Send"):not([disabled]):not([class*="footer-action"])',
+      // Last resort: any button with "Send" in aria-label (but send button might not have one)
+      'button[aria-label*="Send" i]:not([disabled]):not([class*="footer-action"])',
     ];
     
     let sendButton: Locator | null = null;
     for (const selector of sendButtonSelectors) {
-      // Try in dialog first
+      try {
+        // Search within the messageDialog (the new message dialog we found)
       const btn = messageDialog.locator(selector).first();
       const count = await btn.count();
       if (count > 0) {
-        await btn.waitFor({ state: 'visible', timeout: 3000 });
+          const isVisible = await btn.isVisible({ timeout: 2000 }).catch(() => false);
+          if (isVisible) {
+            // CRITICAL: Verify it's actually the send button and NOT an attachment button
+            const btnText = await btn.textContent().catch(() => '');
+            const btnAriaLabel = await btn.getAttribute('aria-label').catch(() => '');
+            const btnClass = await btn.getAttribute('class').catch(() => '');
+            
+            const lowerText = (btnText || '').trim().toLowerCase();
+            const lowerAria = (btnAriaLabel || '').toLowerCase();
+            const lowerClass = (btnClass || '').toLowerCase();
+            
+            // CRITICAL: Check if it's an attachment button (EXCLUDE these)
+            // Attach buttons have "msg-form__footer-action" class or aria-label with "attach"
+            const isAttachmentButton = 
+              lowerClass.includes('footer-action') || // Attach buttons have this class
+              lowerAria.includes('attach') || 
+              lowerAria.includes('image') || 
+              lowerAria.includes('file') || 
+              lowerAria.includes('upload');
+            
+            // CRITICAL: Check if it's a send button (INCLUDE these)
+            // Send button has "msg-form__send-button" class or text "Send"
+            const isSendButton = 
+              lowerClass.includes('msg-form__send-button') || // Primary identifier
+              lowerClass.includes('send-button') ||
+              (lowerText === 'send' && !isAttachmentButton); // Text is "Send" and not an attach button
+            
+            if (isSendButton && !isAttachmentButton) {
         sendButton = btn;
         console.log(`   ✅ Found Send button with selector: ${selector}`);
+        console.log(`      - className: "${btnClass}"`);
+        console.log(`      - textContent: "${btnText}"`);
+        console.log(`      - aria-label: "${btnAriaLabel || '(none)'}"`);
         break;
+            } else if (isAttachmentButton) {
+              console.log(`   ⚠️  Skipping attachment button (class: "${btnClass}", aria-label: "${btnAriaLabel}")`);
+            } else {
+              console.log(`   ⚠️  Skipping non-send button (class: "${btnClass}", text: "${btnText}", aria-label: "${btnAriaLabel}")`);
+            }
+          }
+        }
+      } catch (e) {
+        // Continue to next selector
+        continue;
       }
     }
     
     if (!sendButton) {
-      // Try page-level search as fallback
-      sendButton = page.locator('button:has-text("Send")').first();
-      const count = await sendButton.count();
-      if (count === 0) {
-        throw new Error('Send button not found');
+      throw new Error('Send button not found in message dialog - tried multiple selectors (excluding attachment buttons)');
+    }
+    
+    // Wait for Send button to be enabled (LinkedIn enables it after detecting text input)
+    console.log('   ⏳ Waiting for Send button to be enabled...');
+    let isEnabled = false;
+    const maxAttempts = 15; // Increased attempts
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const isDisabled = await sendButton.evaluate((el: any) => {
+        return el.disabled || 
+               el.getAttribute('aria-disabled') === 'true' ||
+               el.classList.contains('artdeco-button--disabled') ||
+               el.hasAttribute('disabled');
+      }).catch(() => true);
+      
+      if (!isDisabled) {
+        isEnabled = true;
+        console.log(`   ✅ Send button is enabled (attempt ${attempt + 1})`);
+        break;
+      }
+      
+      if (attempt < maxAttempts - 1) {
+        if (attempt % 3 === 0) {
+          console.log(`   ⏳ Send button still disabled, waiting... (attempt ${attempt + 1}/${maxAttempts})`);
+        }
+        
+        await humanPause(1500, 2000);
+        
+        // Try triggering input events periodically to wake up LinkedIn
+        if (attempt % 3 === 0) {
+          // Verify text is still there
+          const currentText = await messageInput.evaluate((el: any) => el.innerText || el.textContent || '').catch(() => '');
+          if (currentText.length < enhancedMessage.length * 0.8) {
+            console.log(`   ⚠️  Text seems incomplete, appending again...`);
+            // DON'T click - just focus and move cursor to end
+            await messageInput.evaluate((el: any) => {
+              el.focus();
+              if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                const length = el.value.length;
+                el.setSelectionRange(length, length);
+                if (el.selectionStart !== length || el.selectionEnd !== length) {
+                  el.setSelectionRange(length, length);
+                }
+              } else {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false); // Collapse to end
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+                // Verify
+                const textLength = (el.textContent || el.innerText || '').length;
+                if (range.endOffset < textLength - 1) {
+                  range.selectNodeContents(el);
+                  range.collapse(false);
+                  sel?.removeAllRanges();
+                  sel?.addRange(range);
+                }
+              }
+            });
+            await humanPause(200, 300);
+            await messageInput.type(textToAppend, { delay: 0 });
+            await messageInput.evaluate((el: any) => {
+              el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+            });
+            await humanPause(1000, 1500);
+          } else {
+            // Text is there, just trigger events (NO SPACE KEY - it triggers Finder)
+            await messageInput.evaluate((el: any) => {
+              el.focus();
+              // Trigger input events to simulate user activity (NO keyboard events with Space)
+              el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+              el.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
+            });
+            await humanPause(500, 800);
+          }
+        }
+      }
+    }
+    
+    if (!isEnabled) {
+      // Last attempt: trigger input events to wake up LinkedIn
+      // NEVER use keyboard.press() here - it can trigger system shortcuts (Finder/Spotlight)
+      // DON'T click - clicking might place cursor in the middle
+      // Always use JavaScript events instead
+      console.log(`   🔄 Last attempt: triggering input events via JavaScript (no keyboard shortcuts, no clicking)...`);
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+        // Ensure cursor is at end
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const length = el.value.length;
+          el.setSelectionRange(length, length);
+        } else {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+        }
+      });
+      await humanPause(200, 400);
+      
+      // Use JavaScript events instead of keyboard to prevent Finder/Spotlight from opening
+      // NO SPACE KEY EVENTS - they trigger Finder on macOS
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+        // Trigger multiple events to simulate user input (NO keyboard events with Space)
+        el.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
+      await humanPause(1000, 1500);
+      
+      const stillDisabled = await sendButton.evaluate((el: any) => {
+        return el.disabled || 
+               el.getAttribute('aria-disabled') === 'true' ||
+               el.classList.contains('artdeco-button--disabled');
+      }).catch(() => true);
+      
+      if (stillDisabled) {
+        throw new Error('Send button is still disabled after all attempts - message input may not be recognized by LinkedIn');
+      } else {
+        console.log(`   ✅ Send button enabled after space trigger!`);
+        isEnabled = true;
       }
     }
     
@@ -957,14 +3186,211 @@ async function processContact(
     // Check if button is disabled (might be if message is empty)
     const isDisabled = await sendButton.isDisabled().catch(() => false);
     if (isDisabled) {
-      console.warn('   ⚠️  Send button is disabled, message might be empty');
-      // Try typing the message again
-      await messageInput.fill(enhancedMessage);
+      console.warn('   ⚠️  Send button is disabled, trying to append message again...');
+      // DON'T click - just focus and move cursor to end, then append
+      await messageInput.evaluate((el: any) => {
+        el.focus();
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const length = el.value.length;
+          el.setSelectionRange(length, length);
+          if (el.selectionStart !== length || el.selectionEnd !== length) {
+            el.setSelectionRange(length, length);
+          }
+        } else {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false); // Collapse to end
+          sel?.removeAllRanges();
+          sel?.addRange(range);
+          // Verify
+          const textLength = (el.textContent || el.innerText || '').length;
+          if (range.endOffset < textLength - 1) {
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }
+        }
+      });
+      await humanPause(200, 300);
+      await messageInput.type(textToAppend, { delay: 0 });
       await humanPause(500, 1000);
     }
     
     console.log(`   🖱️  Clicking Send button for ${contact.name}...`);
-    await sendButton.click();
+    
+    // CRITICAL: Blur elements BEFORE clicking send to prevent Finder popup
+    // BUT: DO NOT blur the send button itself - we need to click it!
+    // Based on browser investigation: send button has class "msg-form__send-button"
+    // Attach buttons have class "msg-form__footer-action"
+    console.log('   🔒 Blurring other elements (but NOT the send button with class "msg-form__send-button")...');
+    
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => {
+        // Blur active element (but not if it's the send button)
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          const activeClass = document.activeElement.className || '';
+          // Don't blur if it's the send button (has msg-form__send-button class)
+          if (!activeClass.includes('msg-form__send-button')) {
+            document.activeElement.blur();
+          }
+        }
+        // Blur all input elements (message input, etc.)
+        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+        inputs.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur all buttons EXCEPT the send button (identified by class)
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach((el: any) => {
+          const btnClass = el.className || '';
+          // Only blur if it's NOT the send button (doesn't have msg-form__send-button class)
+          // Also blur attach buttons (msg-form__footer-action) to prevent accidental clicks
+          if (el && el.blur && !btnClass.includes('msg-form__send-button')) {
+            el.blur();
+          }
+        });
+        // Blur body
+        if (document.body) {
+          document.body.blur();
+        }
+      });
+      await humanPause(50, 100);
+    }
+    
+    // Verify we're clicking the send button, not an attachment button
+    const finalCheck = await sendButton.evaluate((el: any) => {
+      const ariaLabel = el.getAttribute('aria-label') || '';
+      const title = el.getAttribute('title') || '';
+      const className = el.getAttribute('class') || '';
+      const lowerAria = ariaLabel.toLowerCase();
+      const lowerTitle = title.toLowerCase();
+      const lowerClass = className.toLowerCase();
+      
+      const isAttachment = 
+        lowerAria.includes('attach') || lowerAria.includes('image') || lowerAria.includes('file') || lowerAria.includes('upload') ||
+        lowerTitle.includes('attach') || lowerTitle.includes('image') || lowerTitle.includes('file') || lowerTitle.includes('upload') ||
+        lowerClass.includes('attach') || lowerClass.includes('image') || lowerClass.includes('file') || lowerClass.includes('upload');
+      
+      return !isAttachment;
+    }).catch(() => true);
+    
+    if (!finalCheck) {
+      throw new Error('Send button verification failed - appears to be an attachment button');
+    }
+    
+    // Scroll send button into view
+    await sendButton.scrollIntoViewIfNeeded();
+    await humanPause(200, 300);
+    
+    // CRITICAL: Final verification - double check it's the send button and not attachment
+    const finalVerification = await sendButton.evaluate((el: any) => {
+      const ariaLabel = el.getAttribute('aria-label') || '';
+      const title = el.getAttribute('title') || '';
+      const className = el.getAttribute('class') || '';
+      const text = el.textContent || '';
+      
+      const lowerAria = ariaLabel.toLowerCase();
+      const lowerTitle = title.toLowerCase();
+      const lowerClass = className.toLowerCase();
+      const lowerText = text.toLowerCase();
+      
+      // Check if it's an attachment button (exclude these)
+      const isAttachment = 
+        lowerAria.includes('attach') || lowerAria.includes('image') || lowerAria.includes('file') || lowerAria.includes('upload') ||
+        lowerTitle.includes('attach') || lowerTitle.includes('image') || lowerTitle.includes('file') || lowerTitle.includes('upload') ||
+        lowerClass.includes('attach') || lowerClass.includes('image') || lowerClass.includes('file') || lowerClass.includes('upload') ||
+        lowerText.includes('attach') || lowerText.includes('image') || lowerText.includes('file') || lowerText.includes('upload');
+      
+      // Check if it's a send button (include these)
+      const isSend = 
+        lowerAria.includes('send') || lowerTitle.includes('send') || lowerText.includes('send') ||
+        lowerClass.includes('send-button') || lowerClass.includes('msg-form__send-button');
+      
+      return {
+        isSend: isSend && !isAttachment,
+        ariaLabel,
+        className,
+        isAttachment
+      };
+    }).catch(() => ({ isSend: false, ariaLabel: '', className: '', isAttachment: false }));
+    
+    if (!finalVerification.isSend || finalVerification.isAttachment) {
+      throw new Error(`Send button verification failed - found button with aria-label: "${finalVerification.ariaLabel}", class: "${finalVerification.className}" (isAttachment: ${finalVerification.isAttachment})`);
+    }
+    
+    console.log(`   ✅ Verified Send button (aria-label: "${finalVerification.ariaLabel}", class: "${finalVerification.className}")`);
+    
+    // CRITICAL: Use synthetic MouseEvent instead of click() to avoid keyboard events
+    // This prevents Finder popup from being triggered
+    // DO NOT blur the send button itself - we need to click it!
+    // Based on browser investigation: send button has class "msg-form__send-button"
+    await sendButton.evaluate((el: any) => {
+      // Blur everything EXCEPT the send button (identified by class)
+      if (document.activeElement && document.activeElement instanceof HTMLElement) {
+        const activeClass = document.activeElement.className || '';
+        // Don't blur if it's the send button
+        if (!activeClass.includes('msg-form__send-button')) {
+          document.activeElement.blur();
+        }
+      }
+      document.body.blur();
+      
+      // Blur all other buttons (but NOT the send button - identified by class)
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach((btn: any) => {
+        const btnClass = btn.className || '';
+        // Only blur if it's NOT the send button (doesn't have msg-form__send-button class)
+        if (btn && btn.blur && !btnClass.includes('msg-form__send-button')) {
+          btn.blur();
+        }
+      });
+      
+      // Blur all input elements
+      const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+      inputs.forEach((input: any) => {
+        if (input && input.blur) input.blur();
+      });
+      
+      // Use synthetic MouseEvent instead of click() - this doesn't trigger keyboard events
+      const mouseEvent = new MouseEvent('click', {
+        view: window,
+        bubbles: true,
+        cancelable: true,
+        buttons: 1
+      });
+      el.dispatchEvent(mouseEvent);
+    });
+    
+    // CRITICAL: Immediately blur again multiple times after clicking to prevent any keyboard events
+    for (let i = 0; i < 7; i++) {
+      await page.evaluate(() => {
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        // Blur all input elements
+        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+        inputs.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur all buttons
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur body
+        if (document.body) {
+          document.body.blur();
+        }
+        // Blur any dialogs
+        const dialogs = document.querySelectorAll('[role="dialog"]');
+        dialogs.forEach((dialog: any) => {
+          if (dialog && dialog.blur) dialog.blur();
+        });
+      });
+      await humanPause(100, 150);
+    }
     
     // Wait for confirmation - look for "Message sent" indicator or dialog closing
     console.log(`   ⏳ Waiting for message confirmation for ${contact.name}...`);
@@ -984,29 +3410,199 @@ async function processContact(
     await humanPause(1500, 2500);
     
     // Verify the message was sent by checking if dialog is closed or "Message sent" appears on page
-    const dialogStillOpen = await messageDialog.isVisible().catch(() => false);
-    if (dialogStillOpen) {
-      console.log(`   ⚠️  Dialog still open for ${contact.name}, trying to close...`);
-      const closeButton = messageDialog.locator('button[aria-label*="Close"], button:has-text("Close")').first();
-      if (await closeButton.count() > 0) {
-        await closeButton.click();
-        await humanPause(500, 1000);
-      }
-    } else {
-      console.log(`   ✅ Dialog closed for ${contact.name}, message likely sent`);
+    // Try to actively close the dialog if it doesn't close automatically
+    console.log(`   ⏳ Waiting for message to send and dialog to close...`);
+    
+    // CRITICAL: Blur ALL elements IMMEDIATELY after sending to prevent Finder popup
+    // Do this multiple times throughout the dialog closing process
+    for (let i = 0; i < 7; i++) {
+      await page.evaluate(() => {
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        // Blur all input elements
+        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"], button, a');
+        inputs.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur body
+        if (document.body) {
+          document.body.blur();
+        }
+        // Blur any focused elements in dialogs
+        const dialogs = document.querySelectorAll('[role="dialog"]');
+        dialogs.forEach((dialog: any) => {
+          if (dialog && dialog.blur) dialog.blur();
+          const focused = dialog.querySelector(':focus');
+          if (focused && focused.blur) focused.blur();
+        });
+      });
+      await humanPause(50, 100);
     }
     
-    // Close dialog if still open (click outside or close button)
-    try {
-      const closeButton = messageDialog.locator('button[aria-label*="Close"], button:has-text("Close")').first();
-      const closeCount = await closeButton.count();
-      if (closeCount > 0 && await closeButton.isVisible().catch(() => false)) {
-        await closeButton.click();
-        await humanPause(500, 1000);
+    await humanPause(2000, 3000); // Wait for message to send
+    
+    // Check if dialog is still open
+    let dialogStillOpen = await messageDialog.isVisible().catch(() => false);
+    
+    if (dialogStillOpen) {
+      console.log(`   ⚠️  Dialog still open for ${contact.name}, attempting to close it...`);
+      
+      // Try to find and click the close button (but NOT using keyboard shortcuts that trigger Finder)
+      const closeButtonSelectors = [
+        'button[aria-label*="Close" i]',
+        'button[aria-label*="Dismiss" i]',
+        'button[aria-label*="Minimize" i]',
+        'button[title*="Close" i]',
+        'button[title*="Dismiss" i]',
+        'button[class*="close"]',
+        'button[class*="dismiss"]',
+        'button[data-testid*="close"]'
+      ];
+      
+      let dialogClosed = false;
+      for (const selector of closeButtonSelectors) {
+        try {
+          const closeBtn = messageDialog.locator(selector).first();
+          const count = await closeBtn.count();
+          if (count > 0) {
+            const isVisible = await closeBtn.isVisible({ timeout: 2000 }).catch(() => false);
+            if (isVisible) {
+              // CRITICAL: Blur before clicking close button, but NOT the close button itself
+              // Get the close button's aria-label to identify it
+              const closeBtnAriaLabel = await closeBtn.getAttribute('aria-label').catch(() => '');
+              
+              for (let blurI = 0; blurI < 3; blurI++) {
+                await page.evaluate((excludeAriaLabel: string) => {
+                  // Blur active element (but not if it's the close button)
+                  if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                    const activeAria = document.activeElement.getAttribute('aria-label') || '';
+                    // Don't blur if it's the close button
+                    if (activeAria !== excludeAriaLabel) {
+                      document.activeElement.blur();
+                    }
+                  }
+                  document.body.blur();
+                  
+                  // Blur all buttons EXCEPT the close button
+                  const buttons = document.querySelectorAll('button');
+                  buttons.forEach((el: any) => {
+                    const btnAria = el.getAttribute('aria-label') || '';
+                    // Only blur if it's NOT the close button
+                    if (el && el.blur && btnAria !== excludeAriaLabel) {
+                      el.blur();
+                    }
+                  });
+                  
+                  // Blur all input elements
+                  const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                  inputs.forEach((el: any) => {
+                    if (el && el.blur) el.blur();
+                  });
+                }, closeBtnAriaLabel);
+                await humanPause(50, 100);
+              }
+              await humanPause(200, 300);
+              
+              // CRITICAL: Use synthetic MouseEvent instead of click() to avoid keyboard events
+              await closeBtn.evaluate((el: any) => {
+                // Blur everything EXCEPT this close button
+                if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                  if (document.activeElement !== el) {
+                    document.activeElement.blur();
+                  }
+                }
+                document.body.blur();
+                
+                // Blur all other buttons (but NOT this close button)
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach((btn: any) => {
+                  if (btn && btn !== el && btn.blur) btn.blur();
+                });
+                
+                // Blur all input elements
+                const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                inputs.forEach((input: any) => {
+                  if (input && input.blur) input.blur();
+                });
+                
+                // Use synthetic MouseEvent instead of click() - this doesn't trigger keyboard events
+                const mouseEvent = new MouseEvent('click', {
+                  view: window,
+                  bubbles: true,
+                  cancelable: true,
+                  buttons: 1
+                });
+                el.dispatchEvent(mouseEvent);
+              });
+              await humanPause(500, 800);
+              
+              // Blur after clicking
+              for (let j = 0; j < 5; j++) {
+                await page.evaluate(() => {
+                  if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                    document.activeElement.blur();
+                  }
+                  document.body.blur();
+                  const buttons = document.querySelectorAll('button');
+                  buttons.forEach((el: any) => {
+                    if (el && el.blur) el.blur();
+                  });
+                  const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                  inputs.forEach((el: any) => {
+                    if (el && el.blur) el.blur();
+                  });
+                });
+                await humanPause(50, 100);
+              }
+              
+              // Check if dialog closed
+              dialogStillOpen = await messageDialog.isVisible().catch(() => false);
+              if (!dialogStillOpen) {
+                dialogClosed = true;
+                console.log(`   ✅ Dialog closed using ${selector}`);
+                break;
+              }
+            }
       }
     } catch (e) {
-      // Dialog might already be closed
+          // Continue to next selector
+          continue;
+        }
+      }
+      
+      if (!dialogClosed) {
+        console.log(`   ⚠️  Could not close dialog for ${contact.name}, but continuing - will close when processing next contact`);
+      }
+    } else {
+      console.log(`   ✅ Dialog closed automatically for ${contact.name}`);
     }
+    
+    // CRITICAL: Blur multiple times AFTER dialog closes to prevent Finder popup
+    for (let i = 0; i < 7; i++) {
+      await page.evaluate(() => {
+        if (document.activeElement && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        // Blur all input elements
+        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"], button, a');
+        inputs.forEach((el: any) => {
+          if (el && el.blur) el.blur();
+        });
+        // Blur body
+        if (document.body) {
+          document.body.blur();
+        }
+        // Blur any remaining dialogs
+        const dialogs = document.querySelectorAll('[role="dialog"]');
+        dialogs.forEach((dialog: any) => {
+          if (dialog && dialog.blur) dialog.blur();
+        });
+      });
+      await humanPause(50, 100);
+    }
+    
+    await humanPause(500, 800); // Final wait after closing
     
     // Only mark as sent if we got confirmation OR dialog closed
     if (!messageId) {
@@ -1028,8 +3624,8 @@ async function processContact(
       });
       throw new Error('Message confirmation not received');
     }
-    return { success: true };
     
+    return { success: true };
   } catch (error: any) {
     const errorMsg = error.message || 'Unknown error';
     console.error(`   ❌ Error processing contact: ${errorMsg}`);
@@ -1142,7 +3738,38 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     console.log('⚠️  DRY RUN MODE - No messages will be sent');
   }
   
-  // Launch browser with stealth
+  // Get dynamic user agent (removes "Headless" to avoid detection)
+  // Use a simpler approach that doesn't launch a separate browser
+  const getUserAgent = async () => {
+    try {
+      // Use a realistic Chrome user agent without "Headless"
+      // This avoids launching a separate browser instance
+      const chromeVersion = '131.0.0.0'; // Update periodically
+      const osInfo = process.platform === 'darwin' 
+        ? 'Macintosh; Intel Mac OS X 10_15_7'
+        : process.platform === 'win32'
+        ? 'Windows NT 10.0; Win64; x64'
+        : 'X11; Linux x86_64';
+      
+      return `Mozilla/5.0 (${osInfo}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    } catch (e) {
+      console.warn('   ⚠️  Could not generate user agent, using default');
+      return undefined;
+    }
+  };
+
+  // Launch browser similar to PG scraper (non-persistent, stealth plugins)
+  const dynamicUserAgent = await getUserAgent();
+  console.log(`   🔒 Using enhanced stealth mode${dynamicUserAgent ? ' with dynamic user agent' : ''}`);
+  
+  const browserArgs = [
+    '--disable-blink-features=AutomationControlled',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-gpu'
+  ];
+
   const browser = await chromium.launch({
     headless: headlessMode,
     plugins: plugins.recommended({
@@ -1152,25 +3779,18 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         dialog: { delay: { min: 800, max: 2000 } }
       }
     }),
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-gpu'
-    ]
+    args: browserArgs
   });
   
   const storagePath = getStorageStatePath();
   let hasSavedSession = hasStorageState();
   
   // Try to use saved session first - only clear if explicitly needed
-  // (Previously was clearing every time which caused login failures on EC2)
   const shouldClearSession = process.env.CLEAR_LINKEDIN_SESSION === 'true';
   if (shouldClearSession && hasSavedSession) {
     console.log('   🧹 Clearing saved session (CLEAR_LINKEDIN_SESSION=true)...');
     deleteStorageState();
-    hasSavedSession = false; // Update flag after clearing
+    hasSavedSession = false;
   } else if (hasSavedSession) {
     console.log('   💾 Found saved session, will try to use it first');
   } else {
@@ -1178,25 +3798,10 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   }
 
   const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 },
+    viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
     locale: 'en-US',
     timezoneId: settings.timezone || 'Asia/Singapore',
-    // Load saved storage state if exists (only if we didn't clear it)
-    ...(hasSavedSession ? { storageState: storagePath } : {}),
-    // Additional headers to appear more like a real browser
-    extraHTTPHeaders: {
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Cache-Control': 'max-age=0',
-    }
+    ...(hasSavedSession ? { storageState: storagePath } : {})
   });
   
   // Restore sessionStorage if it was saved
@@ -1228,13 +3833,39 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     }
   }
   
+  // Enhanced stealth scripts to make browser appear more like real Chrome
   await context.addInitScript(() => {
+    // Remove webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
+    
+    // Override permissions API
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+      parameters.name === 'notifications' ?
+        Promise.resolve({ state: Notification.permission } as PermissionStatus) :
+        originalQuery(parameters)
+    );
+    
+    // Override plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    
+    // Override languages
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+    
+    // Override chrome object
+    (window as any).chrome = {
+      runtime: {},
+    };
   });
   
   const page = await context.newPage();
+  
   const result: ProcessResult = {
     success: false,
     contactsFound: 0,
@@ -1251,8 +3882,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     } else {
       console.log('🔍 Verifying session...');
       try {
-        await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await humanPause(2000, 3000);
+        await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 5000 });
+        await humanPause(2000, 2000); // 2 second wait before navigating to catch-up page
       } catch (timeoutError: any) {
         console.log('   ⚠️  Feed page load slow, trying catch-up page directly...');
         try {
@@ -1322,6 +3953,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     const maxScrollAttempts = 200; // Increased limit to allow extensive scrolling
     const processedProfileUrls = new Set<string>(); // Track processed contacts to avoid duplicates
     let stopRequested = false;
+    let currentTab = 'All'; // Track which tab we're currently on: 'All', 'Job changes', 'Birthdays'
+    let tabScrollAttempts = 0; // Track scroll attempts per tab
+    const maxTabScrollAttempts = 10; // Max scroll attempts per tab before trying next tab
     
     // Use messages_per_job (default 50) instead of daily_limit
     const messagesPerJob = settings.messages_per_job || 50;
@@ -1349,6 +3983,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       let visibleContacts: Contact[] = [];
       try {
         visibleContacts = await extractContacts(page, maxBatchSize);
+        visibleContacts = visibleContacts.filter(c => !processedProfileUrls.has(c.profileUrl));
       } catch (error: any) {
         if (error.message?.includes('Target page, context or browser has been closed')) {
           console.error('\n❌ Browser/page closed during contact extraction, stopping automation');
@@ -1359,12 +3994,86 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       }
       
       if (visibleContacts.length === 0) {
-        console.log('   ℹ️  No contacts found on page. Scrolling to load more...');
+        console.log(`   ℹ️  No contacts found on ${currentTab} tab (scroll attempt ${tabScrollAttempts + 1}/${maxTabScrollAttempts}).`);
+        
+        // NEW LOGIC: Scroll on current tab first, only switch tabs if no contacts after scrolling
+        if (tabScrollAttempts < maxTabScrollAttempts) {
+          // Still scrolling on current tab
+          console.log(`   📜 Scrolling down on ${currentTab} tab to load more contacts...`);
+          tabScrollAttempts++;
         scrollAttempts++;
-        // Scroll to load more even if no contacts found
         await scrollToLoadMore(page, container);
         await humanPause(2000, 3000);
         continue;
+        } else {
+          // Exhausted scroll attempts on current tab, try next tab
+          console.log(`   ⚠️  No contacts found after ${maxTabScrollAttempts} scroll attempts on ${currentTab} tab.`);
+          
+          if (currentTab === 'All') {
+            // Try "Job changes" tab next
+            console.log('   🔄 Switching to "Job changes" tab...');
+            try {
+              await page.goto('https://www.linkedin.com/mynetwork/catch-up/job_changes/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await humanPause(2000, 3000);
+              
+              // Try clicking the tab button if available
+              const tabButton = page.locator('button:has-text("Job changes"), button[aria-label*="Job changes" i]').first();
+              const tabCount = await tabButton.count();
+              if (tabCount > 0) {
+                const isSelected = await tabButton.getAttribute('aria-selected').catch(() => 'false');
+                if (isSelected !== 'true') {
+                  await tabButton.click().catch(() => {});
+                  await humanPause(2000, 3000);
+                }
+              }
+              
+              currentTab = 'Job changes';
+              tabScrollAttempts = 0; // Reset scroll attempts for new tab
+              continue; // Go back to extract contacts on new tab
+            } catch (tabError: any) {
+              console.log(`   ⚠️  Error switching to Job changes tab: ${tabError.message}`);
+              // Fall through to try Birthdays tab
+            }
+          }
+          
+          if (currentTab === 'Job changes') {
+            // Try "Birthdays" tab next
+            console.log('   🔄 Switching to "Birthdays" tab...');
+            try {
+              await page.goto('https://www.linkedin.com/mynetwork/catch-up/birthday/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await humanPause(2000, 3000);
+              
+              // Try clicking the tab button if available
+              const tabButton = page.locator('button:has-text("Birthdays"), button[aria-label*="Birthday" i]').first();
+              const tabCount = await tabButton.count();
+              if (tabCount > 0) {
+                const isSelected = await tabButton.getAttribute('aria-selected').catch(() => 'false');
+                if (isSelected !== 'true') {
+                  await tabButton.click().catch(() => {});
+                  await humanPause(2000, 3000);
+                }
+              }
+              
+              currentTab = 'Birthdays';
+              tabScrollAttempts = 0; // Reset scroll attempts for new tab
+              continue; // Go back to extract contacts on new tab
+            } catch (tabError: any) {
+              console.log(`   ⚠️  Error switching to Birthdays tab: ${tabError.message}`);
+              // No more tabs to try, break
+              console.log('   ⚠️  No more tabs to try. Stopping contact search.');
+              break;
+            }
+          }
+          
+          if (currentTab === 'Birthdays') {
+            // Already tried all tabs, no more contacts
+            console.log('   ⚠️  Exhausted all tabs (All, Job changes, Birthdays). No more contacts found.');
+            break;
+          }
+        }
+      } else {
+        // Found contacts - reset tab scroll attempts
+        tabScrollAttempts = 0;
       }
       
       // Filter out already processed contacts
@@ -1421,6 +4130,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           console.log(`   [DRY RUN] Would process: ${contact.name} (${contact.messageType})`);
           totalSent++;
           result.messagesSent++;
+          processedProfileUrls.add(contact.profileUrl);
         } else {
           console.log(`   💬 Calling processContact for ${contact.name}...`);
           let processResult;
@@ -1445,6 +4155,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
             totalSent++;
             result.messagesSent++;
             lockData.messagesSent++;
+            processedProfileUrls.add(contact.profileUrl);
             console.log(`   ✅ Message sent to ${contact.name} (${totalSent}/${messagesPerJob} this job)`);
           } else {
             result.messagesFailed++;
@@ -1568,7 +4279,6 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
 }
 
 // Run if executed directly (Bun check)
-// @ts-ignore - Bun extends ImportMeta with 'main' property
 if ((import.meta as any).main || process.argv[1]?.includes('linkedin.ts')) {
   const dryRun = process.argv.includes('--dry-run');
   automateLinkedInMessages(dryRun)
@@ -1583,4 +4293,3 @@ if ((import.meta as any).main || process.argv[1]?.includes('linkedin.ts')) {
 }
 
 export { automateLinkedInMessages };
-

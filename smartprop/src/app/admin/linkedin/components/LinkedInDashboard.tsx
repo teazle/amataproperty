@@ -108,6 +108,7 @@ export function LinkedInDashboard() {
   const [showLogs, setShowLogs] = useState(false);
   const [runHeaded, setRunHeaded] = useState(false);
   const [autoRunTime, setAutoRunTime] = useState(DEFAULT_SCHEDULE_TIME);
+  const logsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Form state
   const [formData, setFormData] = useState<Partial<LinkedInSettings>>({});
@@ -119,21 +120,21 @@ export function LinkedInDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Extract isRunning to a stable value for dependencies
+  const isRunning = status?.isRunning ?? false;
+
   // Poll status every 5 seconds if running
   useEffect(() => {
-    if (!status?.isRunning) return;
+    if (!isRunning) return;
     
     const interval = setInterval(() => {
       loadStatus();
       loadHistory();
-      if (showLogs) {
-        loadLogs();
-      }
     }, 5000);
     
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status?.isRunning, showLogs]);
+  }, [isRunning]);
 
   useEffect(() => {
     setAutoRunTime(scheduleToTime(settings?.auto_run_schedule));
@@ -141,20 +142,32 @@ export function LinkedInDashboard() {
 
   // Load logs when showing logs and refresh every 3 seconds if automation is running
   useEffect(() => {
+    // Clear any existing interval
+    if (logsIntervalRef.current) {
+      clearInterval(logsIntervalRef.current);
+      logsIntervalRef.current = null;
+    }
+
     if (!showLogs) return;
     
     // Load immediately
     loadLogs();
     
     // Refresh logs every 3 seconds if automation is running
-    if (status?.isRunning) {
-      const interval = setInterval(() => {
+    if (isRunning) {
+      logsIntervalRef.current = setInterval(() => {
         loadLogs();
       }, 3000);
-      return () => clearInterval(interval);
     }
+    
+    return () => {
+      if (logsIntervalRef.current) {
+        clearInterval(logsIntervalRef.current);
+        logsIntervalRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLogs, status?.isRunning]);
+  }, [showLogs, isRunning]);
 
   const loadStatus = async () => {
     try {
@@ -240,9 +253,23 @@ export function LinkedInDashboard() {
   };
 
   const loadLogs = async () => {
-    setLogsLoading(true);
+    // Don't set loading state if we're in auto-refresh mode to avoid flickering
+    const isAutoRefresh = logsIntervalRef.current !== null;
+    if (!isAutoRefresh) {
+      setLogsLoading(true);
+    }
     try {
-      const res = await fetch('/api/linkedin/logs?lines=500&tail=true');
+      const res = await fetch('/api/linkedin/logs?lines=500&tail=true', {
+        cache: 'no-store', // Prevent caching
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      
       const data = await res.json();
       if (data.success) {
         setLogs(data.logs || []);
@@ -258,8 +285,14 @@ export function LinkedInDashboard() {
       }
     } catch (error: any) {
       console.error('Error loading logs:', error);
+      // Don't show toast on every auto-refresh failure to avoid spam
+      if (!isAutoRefresh) {
+        toast.error('Failed to load logs. Please try refreshing manually.');
+      }
     } finally {
-      setLogsLoading(false);
+      if (!isAutoRefresh) {
+        setLogsLoading(false);
+      }
     }
   };
 

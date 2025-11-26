@@ -68,6 +68,11 @@ After researching job queue solutions for Node.js/TypeScript, two primary option
 bun add pg-boss
 ```
 
+**DB considerations (Supabase):**
+- Use a dedicated DB role and schema for pg-boss tables to isolate permissions.
+- Ensure pgBouncer is on; cap boss connections (`max`, `monitorStateInterval`) to stay under Supabase rate limits.
+- Prefer SSL/TLS connection strings and keep credentials in env vars.
+
 #### 1.2 Create Queue Manager Service
 **File**: `src/lib/queue/scraper-queue.ts`
 
@@ -76,20 +81,26 @@ bun add pg-boss
 - Create scraper queues (one per platform or unified)
 - Configure queue policies (singleton for preventing concurrent jobs)
 - Set up retry mechanisms
+- Expose start/stop/shutdown helpers so workers can drain gracefully on deploy restarts (SIGTERM/SIGINT).
+
+**Deployment topology:**
+- Run a single dedicated worker process (PM2/systemd) per environment to enforce singleton across instances. Next.js/API instances are producers only.
 
 **Key Features:**
 - Singleton policy: Only 1 job active at a time (prevents OOM)
 - Priority system: Manual jobs (priority 1) > Scheduled jobs (priority 5)
 - Retry: 3 attempts with exponential backoff
 - Dead letter queue: Failed jobs after all retries
+- Heartbeat/timeout: configure `expireInSeconds` + periodic job heartbeat to detect stuck scrapes and fail them cleanly.
 
 #### 1.3 Update Scheduler
 **File**: `src/lib/scheduler/scraper-scheduler.ts`
 
 **Changes:**
-- Instead of calling `startScrapeJob` directly, add jobs to queue
+- Instead of calling `startScrapeJob` directly, add jobs to queue (for PG, enqueue one job per district)
 - Scheduler becomes a "job producer" (adds to queue)
 - Queue processor handles actual execution
+- Keep backoff/retry on producer side if enqueue fails due to rate limits.
 
 #### 1.4 Create Queue Worker
 **File**: `src/lib/queue/scraper-worker.ts`
@@ -99,6 +110,9 @@ bun add pg-boss
 - Call existing scraper workers (`pg.districts.ts`, `ep.live.ts`)
 - Handle job completion/failure
 - Update database job status
+- Map pg-boss events to `scraper_jobs` table (queued → running → completed/failed) and push final failures to DLQ.
+- Add per-job idempotency key to avoid duplicate side effects on retries.
+- Graceful shutdown: stop taking new work, finish current job, release boss.
 
 ### Phase 2: Queue Architecture
 
@@ -169,6 +183,7 @@ interface ScraperJobData {
 - **Priority 1**: Manual job starts (user-initiated)
 - **Priority 5**: Scheduled jobs
 - **Priority 10**: Retry jobs
+- Starvation guard: allow scheduled jobs to run when manual queue is empty; consider aging long-waiting jobs up one level.
 
 #### 3.4 Worker Implementation
 
@@ -204,6 +219,7 @@ await boss.work('scraper-jobs', async (job) => {
 - Keep existing `startScrapeJob` function
 - Modify it to add jobs to queue instead of spawning processes directly
 - Existing code continues to work
+- Status mapping: enqueue → `queued`; worker start → `running`; success → `completed`; retry attempts increment error_message/attempts; final fail → `failed` + DLQ entry.
 
 #### 4.2 Gradual Rollout
 1. Deploy queue system alongside existing system
@@ -230,6 +246,7 @@ await boss.work('scraper-jobs', async (job) => {
 - ✅ **Dead Letter Queue**: Failed jobs preserved for analysis
 - ✅ **Job History**: pg-boss tracks all job states
 - ✅ **Scalability**: Can add more workers later if needed
+- ✅ **Operational Safety**: Graceful shutdown prevents mid-scrape corruption
 
 ### Phase 6: Code Structure
 
@@ -254,13 +271,17 @@ src/
 2. **Integration Tests**: Full job lifecycle
 3. **Load Tests**: Multiple concurrent job requests
 4. **Failure Tests**: Job failures, retries, dead letter queue
+5. **Concurrency Tests**: Rapid-fire enqueue + verify singleton execution
+6. **Graceful Shutdown**: Send SIGTERM during a job and ensure it drains cleanly
+7. **Idempotency**: Retry same payload twice and ensure no duplicate DB side-effects
 
 ### Phase 8: Monitoring & Observability
 
-- Queue statistics API endpoint
-- Dashboard for queue status
-- Alerts for failed jobs
-- Metrics: job completion rate, average processing time
+- Queue statistics API endpoint (expose boss state + in-flight job)
+- Dashboard for queue status and DLQ contents
+- Alerts for failed jobs and DLQ growth
+- Metrics: job completion rate, average processing time, retry count, time-to-start
+- Logs: centralize worker stdout/stderr; ship to CloudWatch/Logtail; include jobId in all log lines for correlation
 
 ## Implementation Timeline
 
@@ -291,4 +312,3 @@ src/
 2. Approve pg-boss as solution
 3. Begin Phase 1 implementation
 4. Test locally before EC2 deployment
-

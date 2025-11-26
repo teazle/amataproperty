@@ -209,32 +209,51 @@ if (fs.existsSync(envPath)) {
 }
 
 module.exports = {
-  apps: [{
-    name: 'smartprop',
-    script: 'bun',
-    args: 'start',
-    cwd: '/opt/smartprop/app/smartprop',
-    interpreter: 'none',
-    env: {
-      NODE_ENV: 'production',
-      PORT: 3000,
-      ...envVars
+  apps: [
+    {
+      name: 'smartprop',
+      script: 'bun',
+      args: 'start',
+      cwd: '/opt/smartprop/app/smartprop',
+      interpreter: 'none',
+      env: {
+        NODE_ENV: 'production',
+        PORT: 3000,
+        ...envVars
+      },
+      error_file: '/home/ec2-user/.pm2/logs/smartprop-error.log',
+      out_file: '/home/ec2-user/.pm2/logs/smartprop-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+      autorestart: true,
+      max_memory_restart: '1G'
     },
-    error_file: '/home/ec2-user/.pm2/logs/smartprop-error.log',
-    out_file: '/home/ec2-user/.pm2/logs/smartprop-out.log',
-    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    merge_logs: true,
-    autorestart: true,
-    max_memory_restart: '1G'
-  }]
+    {
+      name: 'scraper-worker',
+      script: 'bun',
+      args: 'src/lib/queue/scraper-worker.ts',
+      cwd: '/opt/smartprop/app/smartprop',
+      interpreter: 'none',
+      env: {
+        NODE_ENV: 'production',
+        ...envVars
+      },
+      error_file: '/home/ec2-user/.pm2/logs/scraper-worker-error.log',
+      out_file: '/home/ec2-user/.pm2/logs/scraper-worker-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+      autorestart: true,
+      max_memory_restart: '1G'
+    }
+  ]
 };
 ECOSYSTEM
 
 # Restart application with PM2 (for updates, use restart instead of stop/delete/start)
 echo "Restarting application with PM2..."
 if pm2 list | grep -q smartprop; then
-    # App already exists, just restart it
-    pm2 restart smartprop
+    # App already exists, reload ecosystem to update all processes
+    pm2 startOrReload ecosystem.config.js
 else
     # First time setup, start with ecosystem file
     pm2 start ecosystem.config.js
@@ -249,7 +268,8 @@ pm2 status
 
 echo ""
 echo "To view logs: pm2 logs smartprop"
-echo "To restart: pm2 restart smartprop"
+echo "To view scraper logs: pm2 logs scraper-worker"
+echo "To restart: pm2 restart smartprop && pm2 restart scraper-worker"
 ENDSSH
 
 if [ $? -ne 0 ]; then
@@ -263,4 +283,3 @@ echo -e "  - View logs: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 logs smartp
 echo -e "  - Check status: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 status'"
 echo -e "  - Restart app: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 restart smartprop'"
 echo -e "  - Access app: http://${EC2_IP}:3000"
-

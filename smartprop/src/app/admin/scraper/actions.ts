@@ -2,10 +2,12 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
-import { exec, spawn } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import { enqueueScraperJob } from '@/lib/queue/scraper-queue';
+import type { ScraperJobPayload } from '@/lib/queue/queue-types';
 
 /**
  * Safely revalidate a path - only works in request context, fails silently in background jobs
@@ -177,92 +179,15 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
   return { cleaned, errors };
 }
 
-export async function startScrapeJob(config: ScraperConfig) {
+export async function startScrapeJob(
+  config: ScraperConfig,
+  source: ScraperJobPayload['source'] = 'manual'
+) {
   try {
     // First, check and clean up any stale locks
     const cleanupResult = await checkAndCleanStaleLocks();
     if (cleanupResult.cleaned > 0) {
       console.log(`🧹 Cleaned up ${cleanupResult.cleaned} stale lock file(s)`);
-    }
-    
-    // Check for active jobs (after cleanup) - check ALL active jobs, not just one
-    const { data: activeJobs } = await supabase
-      .from('scraper_jobs')
-      .select('id, platform, started_at')
-      .in('status', ['queued', 'running'])
-      .order('started_at', { ascending: false });
-
-    if (activeJobs && activeJobs.length > 0) {
-      // Check ALL active jobs to see if any are actually running
-      // If multiple jobs exist, we need to verify which ones are really running
-      const runningJobs: Array<{ id: string; platform: string; pid?: number }> = [];
-      
-      for (const job of activeJobs) {
-        const lockFile = path.join(process.cwd(), 'storage', 
-          job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-        
-        if (fs.existsSync(lockFile)) {
-          try {
-            const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-            const pid = lockData.pid;
-            if (pid && typeof pid === 'number') {
-              const isRunning = await isProcessRunning(pid);
-              if (isRunning) {
-                // This job is actually running
-                runningJobs.push({ id: job.id, platform: job.platform, pid });
-                continue; // Skip cleanup for this one
-              } else {
-                // Process is dead, clean it up
-                console.log(`🧹 Found dead process ${pid} for active job ${job.id}, cleaning up...`);
-                fs.unlinkSync(lockFile);
-                await supabase
-                  .from('scraper_jobs')
-                  .update({
-                    status: 'failed',
-                    completed_at: new Date().toISOString(),
-                    error_message: 'Process died - cleaned up stale lock'
-                  })
-                  .eq('id', job.id);
-              }
-            }
-          } catch (error) {
-            console.error('Error checking lock file:', error);
-            // If we can't read lock file, remove it and mark job as failed
-            try {
-              fs.unlinkSync(lockFile);
-            } catch {}
-            await supabase
-              .from('scraper_jobs')
-              .update({
-                status: 'failed',
-                completed_at: new Date().toISOString(),
-                error_message: 'Corrupted lock file - cleaned up'
-              })
-              .eq('id', job.id);
-          }
-        } else {
-          // No lock file but database says running - mark as failed
-          await supabase
-            .from('scraper_jobs')
-            .update({
-              status: 'failed',
-              completed_at: new Date().toISOString(),
-              error_message: 'No lock file found but job marked as running - cleaning up'
-            })
-            .eq('id', job.id);
-        }
-      }
-      
-      // After cleaning up dead jobs, check if there are any actually running jobs
-      if (runningJobs.length > 0) {
-        // Get the most recent running job
-        const job = runningJobs[0];
-        return {
-          success: false,
-          error: `${runningJobs.length} scraper(s) (${runningJobs.map(j => j.platform).join(', ')}) are already running. Please wait for them to complete or use Force Reset.`
-        };
-      }
-      // All active jobs were cleaned up, continue to start new job
     }
 
     // Validate config
@@ -301,101 +226,45 @@ export async function startScrapeJob(config: ScraperConfig) {
       throw jobError;
     }
 
-    // Trigger the scraper in background
-    const cwd = path.join(process.cwd());
-    // Find bun path - try common locations or use PATH
-    const homeDir = process.env.HOME || '/home/ec2-user';
-    const bunPath = process.env.BUN_PATH || `${homeDir}/.bun/bin/bun`;
-    
-    if (config.platform === 'propertyguru') {
-      const district = config.district!.replace('D', '');
-      // Use xvfb-run for headless environments (same as pg.districts.ts uses for auth)
-      const logFile = `/tmp/pg-scraper-${job.id}.log`;
-      const logFd = fs.openSync(logFile, 'a');
-      
-      const env = {
-        ...process.env,
-        PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
-        PG_DISTRICTS: district,
-        PG_MAX_PAGES: config.pages.toString(),
-        ...(config.maxListings && { PG_MAX_LISTINGS: config.maxListings.toString() }),
-        PG_JOB_ID: job.id,
-        HOME: homeDir,
-        HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments
-        NODE_ENV: process.env.NODE_ENV || 'production', // Ensure production mode
-        // xvfb-run will handle DISPLAY automatically
-      };
-      
-      // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
-      const isLinux = process.platform === 'linux';
-      const command = isLinux ? 'xvfb-run' : bunPath;
-      const args = isLinux ? ['-a', bunPath, 'src/workers/pg.districts.ts'] : ['src/workers/pg.districts.ts'];
-      
-      const child = spawn(command, args, {
-        cwd,
-        env,
-        detached: true,
-        stdio: ['ignore', logFd, logFd],
-      });
-      
-      // Close the file descriptor in the parent process
-      fs.closeSync(logFd);
-      child.unref(); // Allow parent process to exit independently
-      
-      console.log(`Started PG scraper with job ID: ${job.id}, PID: ${child.pid}, using xvfb-run`);
-    } else {
-      // EdgeProp scraper
-      // Note: ep.live.ts uses headless: true by default, but we use xvfb-run for consistency
-      // and in case auth.ep.ts needs to run (which may use headed mode)
-      const logFile = `/tmp/ep-scraper-${job.id}.log`;
-      const logFd = fs.openSync(logFile, 'a');
-      
-      const env = {
-        ...process.env,
-        PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
-        EP_MAX_PAGES: config.pages.toString(),
-        ...(config.maxListings && { EP_MAX_LISTINGS: config.maxListings.toString() }),
-        EP_JOB_ID: job.id,
-        HOME: homeDir,
-        HEADLESS: 'true', // Explicitly set headless mode for EC2/server environments
-        NODE_ENV: process.env.NODE_ENV || 'production', // Ensure production mode
-        // xvfb-run will handle DISPLAY automatically
-      };
-      
-      // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
-      const isLinux = process.platform === 'linux';
-      const command = isLinux ? 'xvfb-run' : bunPath;
-      const args = isLinux ? ['-a', bunPath, 'src/workers/ep.live.ts'] : ['src/workers/ep.live.ts'];
-      
-      const child = spawn(command, args, {
-        cwd,
-        env,
-        detached: true,
-        stdio: ['ignore', logFd, logFd],
-      });
-      
-      // Don't create lock file here - let the worker (ep.live.ts) create it with its own PID
-      // The xvfb-run PID exits quickly, so checking it would give false positives
-      
-      // Close the file descriptor in the parent process
-      fs.closeSync(logFd);
-      child.unref(); // Allow parent process to exit independently
-      
-      console.log(`Started EP scraper with job ID: ${job.id}, PID: ${child.pid}, using xvfb-run`);
-    }
+    // Starvation guard: keep priorities close so scheduled jobs still run under manual load
+    const priority = source === 'manual' ? 1 : source === 'scheduled' ? 3 : 5;
+    const enqueueResult = await enqueueScraperJob({
+      platform: config.platform,
+      config: {
+        district: config.district,
+        pages: config.pages,
+        maxListings: config.maxListings,
+        minPrice: config.minPrice,
+        maxPrice: config.maxPrice,
+      },
+      jobId: job.id,
+      priority,
+      source,
+      idempotencyKey: job.id,
+    });
 
-    // Update job status to running
-    await supabase
-      .from('scraper_jobs')
-      .update({ status: 'running', started_at: new Date().toISOString() })
-      .eq('id', job.id);
+    if (!enqueueResult.success) {
+      await supabase
+        .from('scraper_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: enqueueResult.error,
+        })
+        .eq('id', job.id);
+
+      return {
+        success: false,
+        error: `Failed to enqueue scraper job: ${enqueueResult.error}`,
+      };
+    }
 
     safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
       jobId: job.id,
-      message: `Scraper started for ${config.platform}${config.district ? ` - District ${config.district}` : ''}`
+      message: `Queued scraper for ${config.platform}${config.district ? ` - District ${config.district}` : ''}`
     };
 
   } catch (error) {
@@ -2018,4 +1887,3 @@ export async function reloadScheduler(): Promise<{ success: boolean; error?: str
     };
   }
 }
-

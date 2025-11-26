@@ -282,22 +282,24 @@ class ScraperScheduler {
 
       // Add platform-specific config
       if (schedule.platform === 'propertyguru' && schedule.config.districts) {
-        // For PG, we need to handle multiple districts
-        // The startScrapeJob function expects a single district, so we'll call it for each district
+        // For PG, enqueue one job per district
         for (const district of schedule.config.districts) {
-          const result = await startScrapeJob({
-            ...scraperConfig,
-            district: `D${district}`,
-          });
-          
+          const result = await startScrapeJob(
+            {
+              ...scraperConfig,
+              district: `D${district}`,
+            },
+            'scheduled'
+          );
+
           if (!result.success) {
             throw new Error(result.error || 'Failed to start scraper job');
           }
         }
       } else {
         // For EP, just call once
-        const result = await startScrapeJob(scraperConfig);
-        
+        const result = await startScrapeJob(scraperConfig, 'scheduled');
+
         if (!result.success) {
           throw new Error(result.error || 'Failed to start scraper job');
         }
@@ -480,4 +482,3 @@ export async function reloadScheduler(): Promise<void> {
   const scheduler = getScheduler();
   await scheduler.reload();
 }
-

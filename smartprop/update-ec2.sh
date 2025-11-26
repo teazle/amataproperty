@@ -38,7 +38,7 @@ echo "🔨 Building application..."
 NODE_ENV=production bunx next build
 
 echo "🔄 Restarting application..."
-pm2 restart smartprop || pm2 start bun --name smartprop -- start
+pm2 startOrReload ecosystem.config.js || pm2 start ecosystem.config.js
 pm2 save
 
 echo "✅ Update complete!"
@@ -48,6 +48,7 @@ pm2 status
 echo ""
 echo "Recent logs:"
 pm2 logs smartprop --lines 20 --nostream
+pm2 logs scraper-worker --lines 20 --nostream
 ENDSSH
 
 if [ $? -ne 0 ]; then
@@ -57,4 +58,3 @@ fi
 
 echo -e "${GREEN}🎉 Update completed successfully!${NC}"
 echo -e "${BLUE}📝 Access your app at: http://${EC2_IP}${NC}"
-

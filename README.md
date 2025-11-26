@@ -71,6 +71,7 @@ Then access:
 
 ## 📖 Documentation
 
+- `smartprop/ADMIN_USER_GUIDE.md` - **👥 FOR ADMINS** Complete user guide for system administrators
 - `smartprop/USE_BUN.md` - **READ THIS!** How to use Bun properly
 - `smartprop/ARTICLE_SCRAPER_V2.md` - Article scraper technical details
 - `smartprop/ARCHITECTURE_COMPARISON.md` - Why scrapers are built this way

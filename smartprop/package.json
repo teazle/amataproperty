@@ -25,6 +25,7 @@
     "test:card-info": "bun scripts/test-card-info.ts",
     "test:single": "bun scripts/test-single-property.ts",
     "worker": "bun worker.ts",
+    "scraper:worker": "bun src/lib/queue/scraper-worker.ts",
     "linkedin:scan": "bun src/workers/linkedin.ts",
     "linkedin:auth": "HEADLESS=false bun src/workers/linkedin-auth.ts"
   },
@@ -61,6 +62,7 @@
     "next-themes": "^0.4.6",
     "node-cron": "^4.2.1",
     "pdf-lib": "^1.17.1",
+    "pg-boss": "^12.4.0",
     "playwright": "^1.56.1",
     "playwright-ghost": "^0.15.0",
     "react": "19.1.0",

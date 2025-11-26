@@ -432,6 +432,7 @@ Contributions welcome! Please open an issue or PR.
 ## Support 💬
 
 For issues and questions:
+- **👥 Admins**: See [ADMIN_USER_GUIDE.md](./ADMIN_USER_GUIDE.md) for complete user guide
 - Open a GitHub issue
 - See [WAHA_SETUP.md](./WAHA_SETUP.md) for WhatsApp help
 - Check [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md) for deployment help

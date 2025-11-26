@@ -1,9 +1,20 @@
+import dns from 'node:dns';
 import { PgBoss, type Queue, type StopOptions } from 'pg-boss';
 import { SCRAPER_DLQ_NAME, SCRAPER_QUEUE_NAME, type ScraperJobPayload } from './queue-types';
+import dns from 'dns';
 
 let bossInstance: PgBoss | null = null;
 let bossPromise: Promise<PgBoss> | null = null;
 let shuttingDown = false;
+
+// Force IPv4 resolution if IPv6 fails in your environment (e.g., EC2 without IPv6 route)
+if (process.env.PG_FORCE_IPV4 !== 'false') {
+  try {
+    dns.setDefaultResultOrder('ipv4first');
+  } catch (err) {
+    console.warn('[pg-boss] Could not set DNS result order to ipv4first', err);
+  }
+}
 
 function getConnectionString(): string {
   // Prefer PG_BOSS_DATABASE_URL if explicitly set

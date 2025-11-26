@@ -24,6 +24,12 @@ if (process.env.PG_FORCE_IPV4 !== 'false') {
   }
 }
 
+// If SSL verification is disabled, also disable global TLS verification for this process.
+// This is a last-resort fix for SELF_SIGNED_CERT_IN_CHAIN on some EC2 images.
+if (process.env.PG_SSL_REJECT_UNAUTHORIZED === 'false') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 function getConnectionString(): string {
   // Prefer PG_BOSS_DATABASE_URL if explicitly set
   if (process.env.PG_BOSS_DATABASE_URL) {

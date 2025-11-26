@@ -92,49 +92,65 @@ function getConnectionString(): string {
   throw new Error(errorMessage);
 }
 
-// Remove any sslmode parameter so PgBoss uses the provided ssl config instead of the URI
-function stripSslMode(connectionString: string): string {
-  const stripped = connectionString.replace(/[?&]sslmode=[^&]*/gi, '');
-  // Remove trailing ? or & if left behind
-  return stripped.replace(/[?&]$/, '');
+// Parse connection string into individual parameters for better control
+function parseConnectionString(connectionString: string): {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+} {
+  const url = new URL(connectionString);
+  return {
+    host: url.hostname,
+    port: parseInt(url.port) || 5432,
+    user: url.username,
+    password: decodeURIComponent(url.password),
+    database: url.pathname.slice(1) || 'postgres',
+  };
 }
 
 async function createBoss(): Promise<PgBoss> {
-  // Use existing DATABASE_URL connection and specify jobqueue schema
-  // pg-boss will automatically create tables in the jobqueue schema
-  let connectionString = stripSslMode(getConnectionString());
+  // Get connection string and parse it into individual parameters
+  // Using individual parameters gives us better control over SSL and connection options
+  const connectionString = getConnectionString();
   const sslRejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false';
   const sslCa = process.env.PG_SSL_CA;
   
-  // For pooler connections, ensure SSL is properly configured
-  // Note: Supabase pooler requires SSL but certificate chain validation may fail
-  const isPooler = connectionString.includes('pooler.supabase.com');
+  // Parse connection string
+  const connParams = parseConnectionString(connectionString);
+  const isPooler = connParams.host.includes('pooler.supabase.com');
   
-  // Configure SSL options for pg-boss
-  // When using connection string, SSL options must be passed as an object, not in the URI
-  // sslRejectUnauthorized=true means reject unauthorized certs (default), false means don't reject
+  // Configure SSL options
+  // For pooler connections, always configure SSL
+  // For direct connections, configure SSL if rejectUnauthorized is false or CA is provided
   const sslConfig = isPooler
     ? {
-        rejectUnauthorized: sslRejectUnauthorized, // Use the env var value directly
+        rejectUnauthorized: !sslRejectUnauthorized, // If PG_SSL_REJECT_UNAUTHORIZED=false, set rejectUnauthorized=false
         ...(sslCa ? { ca: sslCa } : {}),
       }
     : sslRejectUnauthorized && !sslCa
-      ? undefined
+      ? true // Use SSL but with default validation
       : {
-          rejectUnauthorized: sslRejectUnauthorized,
+          rejectUnauthorized: !sslRejectUnauthorized,
           ...(sslCa ? { ca: sslCa } : {}),
         };
 
+  console.log(`[pg-boss] Connecting to ${connParams.host}:${connParams.port} (${isPooler ? 'pooler' : 'direct'})`);
+
   const boss = new PgBoss({
-    connectionString,
+    host: connParams.host,
+    port: connParams.port,
+    user: connParams.user,
+    password: connParams.password,
+    database: connParams.database,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
     max: Number(process.env.PG_BOSS_POOL_MAX || 5),
     newJobCheckIntervalSeconds: Number(process.env.PG_BOSS_POLL_INTERVAL || 5),
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
-    // SSL configuration for Supabase pooler
-    // Note: ssl object takes precedence over connection string sslmode parameter
+    // SSL configuration
     ssl: sslConfig,
   });
 

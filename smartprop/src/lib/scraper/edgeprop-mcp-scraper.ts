@@ -2260,6 +2260,22 @@ export async function scrapeEdgePropMCP(
       // Ignore errors removing listeners
     }
   }
+  } catch (outerError: any) {
+    // Handle any errors from the outer try block (browser initialization, etc.)
+    console.error('❌ Outer scraper error:', outerError);
+    browserClosed = true;
+    try {
+      if (context) {
+        await context.close().catch(() => {});
+      }
+      if (browser && browser.isConnected()) {
+        await browser.close();
+      }
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+    throw outerError;
+  }
 }
 
 /**

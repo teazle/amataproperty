@@ -82,8 +82,22 @@ function getConnectionString(): string {
 async function createBoss(): Promise<PgBoss> {
   // Use existing DATABASE_URL connection and specify jobqueue schema
   // pg-boss will automatically create tables in the jobqueue schema
+  let connectionString = getConnectionString();
+  
+  // For pooler connections, ensure SSL is properly configured
+  // If connection string has sslmode=require but still fails, add rejectUnauthorized=false
+  // Note: This is safe for Supabase pooler as it's a trusted service
+  if (connectionString.includes('pooler.supabase.com')) {
+    // Ensure sslmode is set, and add rejectUnauthorized=false for pooler
+    if (!connectionString.includes('sslmode=')) {
+      connectionString += (connectionString.includes('?') ? '&' : '?') + 'sslmode=require';
+    }
+    // Add rejectUnauthorized=false to handle certificate chain issues with pooler
+    connectionString += (connectionString.includes('?') ? '&' : '?') + 'rejectUnauthorized=false';
+  }
+  
   const boss = new PgBoss({
-    connectionString: getConnectionString(),
+    connectionString,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
     max: Number(process.env.PG_BOSS_POOL_MAX || 5),

@@ -8,6 +8,7 @@ import { LiveProgressPanel } from './LiveProgressPanel';
 import { RecentListingsPreview } from './RecentListingsPreview';
 import { HistoryTable } from './HistoryTable';
 import { ScheduledJobsSection } from './ScheduledJobsSection';
+import { ChromiumProcessManager } from './ChromiumProcessManager';
 import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob, syncCompletedJobs } from '../actions';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -358,6 +359,9 @@ export function ScraperDashboard({
             </div>
           )}
         </div>
+
+      {/* Chromium Process Manager */}
+      <ChromiumProcessManager />
 
       {/* Authentication Status */}
       <AuthStatusCard 

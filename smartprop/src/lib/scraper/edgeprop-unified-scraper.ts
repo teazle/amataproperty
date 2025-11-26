@@ -4,7 +4,7 @@
  * Combines metadata discovery with full content extraction
  */
 
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { type ArticleContent as _ArticleContent } from './edgeprop-content-scraper';
 import { cleanArticleParagraphs, sanitizeHtmlContent, extractCleanTextContent } from '@/lib/utils/content-parser';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from '@/workers/flaresolverr';
@@ -81,6 +81,7 @@ export async function scrapeEdgePropUnified(
   const seenIds = new Set<string>();
   let capturedData: CapturedApiData | any[] | null = null;
   let currentPage: Page | null = null;
+  let context: BrowserContext | null = null;
   let articlesFailed = 0;
   
   // Import database functions if session ID provided
@@ -119,7 +120,7 @@ export async function scrapeEdgePropUnified(
       ]
     });
     // Create context with realistic user agent and settings
-    const context = await currentBrowser.newContext({
+    context = await currentBrowser.newContext({
       userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
       viewport: { width: 1280, height: 720 },
       extraHTTPHeaders: {
@@ -479,9 +480,10 @@ export async function scrapeEdgePropUnified(
             message: `Page ${pageNum}: Scraping article ${i + 1}/${articlesToScrape.length}: ${article.title.substring(0, 50)}...`
           });
           
+          let articlePage: Page | null = null;
           try {
             // Open article page in new tab with better error handling
-            const articlePage = await currentBrowser.newPage();
+            articlePage = await currentBrowser.newPage();
             const fullUrl = `https://www.edgeprop.sg/${article.path}`;
             
             console.log(`📖 Opening article: ${fullUrl}`);
@@ -1014,7 +1016,11 @@ export async function scrapeEdgePropUnified(
               };
             });
             
-            await articlePage.close();
+            // Close articlePage after content extraction
+            if (articlePage) {
+              await articlePage.close().catch(() => {});
+              articlePage = null;
+            }
             
             // Clean the paragraphs using the Node.js function (outside browser context)
             if (contentData && contentData.paragraphs && Array.isArray(contentData.paragraphs)) {
@@ -1187,14 +1193,20 @@ export async function scrapeEdgePropUnified(
             await new Promise(resolve => setTimeout(resolve, 2000));
             
           } catch (error: unknown) {
+            // Ensure articlePage is closed even on error
+            if (articlePage) {
+              await articlePage.close().catch(() => {});
+              articlePage = null;
+            }
             console.error(`❌ Failed to scrape article ${article.nid}:`, error instanceof Error ? error.message : String(error));
             articlesFailed++;
             
             // Try one retry with simpler navigation for timeout issues
             if (error instanceof Error && error.message.includes('Timeout')) {
               console.log(`🔄 Retrying article ${article.nid} with simpler navigation...`);
+              let retryPage: Page | null = null;
               try {
-                const retryPage = await currentBrowser.newPage();
+                retryPage = await currentBrowser.newPage();
                 const fullUrl = `https://www.edgeprop.sg/${article.path}`;
                 
                 // Simple navigation for retry
@@ -1230,8 +1242,6 @@ export async function scrapeEdgePropUnified(
                   };
                 });
                 
-                await retryPage.close();
-                
                 if (retryContentData && retryContentData.text_content && retryContentData.text_content.length > 30) {
                   console.log(`✅ Retry successful for article ${article.nid}`);
                   articlesFailed--; // Decrease failed count
@@ -1266,6 +1276,11 @@ export async function scrapeEdgePropUnified(
                 }
               } catch (retryError) {
                 console.log(`❌ Retry also failed for article ${article.nid}`);
+              } finally {
+                // Always close retry page
+                if (retryPage) {
+                  await retryPage.close().catch(() => {});
+                }
               }
             }
             
@@ -1444,17 +1459,9 @@ export async function scrapeEdgePropUnified(
       message: `Completed! Scraped ${allArticles.length} articles with full content (${articlesFailed} failed)`
     });
     
-    await currentBrowser.close();
-    currentBrowser = null;
-    
     return allArticles;
     
   } catch (_error) {
-    if (currentBrowser) {
-      await currentBrowser.close();
-      currentBrowser = null;
-    }
-    
     onProgress({
       currentPage: 0,
       totalPages: maxPages,
@@ -1467,6 +1474,25 @@ export async function scrapeEdgePropUnified(
     });
     
     throw _error;
+  } finally {
+    // CRITICAL: Always close context and browser to prevent resource leaks
+    // Close in reverse order: pages -> context -> browser
+    try {
+      if (currentPage) {
+        await currentPage.close().catch(() => {});
+        currentPage = null;
+      }
+      if (context) {
+        await context.close().catch(() => {});
+        context = null;
+      }
+      if (currentBrowser) {
+        await currentBrowser.close().catch(() => {});
+        currentBrowser = null;
+      }
+    } catch (cleanupError) {
+      console.error('Error during cleanup:', cleanupError);
+    }
   }
 }
 
@@ -1475,9 +1501,7 @@ export async function scrapeEdgePropUnified(
  */
 export async function stopUnifiedScraper() {
   shouldStop = true;
-  if (currentBrowser) {
-    await currentBrowser.close();
-    currentBrowser = null;
-  }
+  // Browser will be closed in finally block of scrapeEdgePropUnified
+  // This function just signals to stop
 }
 

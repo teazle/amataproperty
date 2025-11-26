@@ -85,9 +85,15 @@ export async function scrapeEdgePropMCP(
   
   // Ensure browser is closed on process exit (prevents memory leaks)
   let browserClosed = false;
+  let context: Awaited<ReturnType<typeof browser.newContext>> | null = null;
   const cleanup = async () => {
     if (browserClosed) return;
     try {
+      // Close context first, then browser
+      if (context) {
+        await context.close().catch(() => {});
+        context = null;
+      }
       if (browser && browser.isConnected()) {
         await browser.close();
         browserClosed = true;
@@ -101,8 +107,9 @@ export async function scrapeEdgePropMCP(
   process.on('SIGTERM', cleanup);
   process.on('uncaughtException', cleanup);
   
-  // Create context with stealth configuration (same as EP live scraper)
-  const context = await browser.newContext({
+  try {
+    // Create context with stealth configuration (same as EP live scraper)
+    context = await browser.newContext({
     // Add init script to prevent __name errors
     javaScriptEnabled: true,
     userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
@@ -2232,8 +2239,13 @@ export async function scrapeEdgePropMCP(
   } finally {
     browserClosed = true; // Mark as closed to prevent double cleanup
     try {
+      // Close context first, then browser
+      if (context) {
+        await context.close().catch(() => {});
+        context = null;
+      }
       if (browser && browser.isConnected()) {
-    await browser.close();
+        await browser.close();
       }
     } catch (e) {
       console.error('Error closing browser:', e);

@@ -19,7 +19,7 @@
  *   PG_DISTRICTS="01,02,03" PG_MAX_PAGES=5 bun src/workers/pg.districts.ts
  */
 
-import { chromium, type Page, type BrowserContextOptions, type Browser } from 'playwright-ghost';
+import { chromium, type Page, type BrowserContextOptions, type Browser, type BrowserContext } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
@@ -395,12 +395,25 @@ async function scrapePropertyGuruByDistrict() {
   let shouldStop = false;
   
   // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
+  // Declare context variable outside so it's accessible in cleanup
+  let context: BrowserContext | null = null;
+  
   const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
-    if (!browserInstance) return;
-    
     try {
-      console.log(`🧹 Closing browser (${reason})...`);
-      if (browserInstance.isConnected()) {
+      console.log(`🧹 Closing browser resources (${reason})...`);
+      
+      // Close context first, then browser
+      if (context) {
+        try {
+          await context.close();
+          console.log('✅ Context closed successfully');
+        } catch (contextError) {
+          console.error('⚠️  Error closing context:', contextError);
+        }
+        context = null;
+      }
+      
+      if (browserInstance && browserInstance.isConnected()) {
         await browserInstance.close();
         console.log('✅ Browser closed successfully');
       }
@@ -734,7 +747,7 @@ async function scrapePropertyGuruByDistrict() {
   // Always use the fresh auth state after re-auth
   contextOptions.storageState = stateFilePath;
 
-  const context = await browser.newContext(contextOptions);
+  context = await browser.newContext(contextOptions);
 
   // Enhanced stealth script matching EdgeProp scraper (works on EC2)
   await context.addInitScript(() => {

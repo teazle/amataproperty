@@ -1,21 +1,14 @@
 {
-  "startedAt": "2025-11-13T07:13:59.852Z",
-  "districts": "02",
-  "pid": 51149,
-  "status": "completed",
-  "statusMessage": "Scraping completed successfully",
+  "startedAt": "2025-11-26T20:28:56.088Z",
+  "districts": "09",
+  "pid": 8513,
+  "status": "failed",
+  "statusMessage": "Re-authentication failed",
   "progress": {
-    "currentDistrict": "02",
-    "currentPage": 1,
+    "currentDistrict": null,
+    "currentPage": 0,
     "totalPages": 1,
-    "listingsProcessed": 3
+    "listingsProcessed": 0
   },
-  "completedAt": "2025-11-13T07:15:30.059Z",
-  "stats": {
-    "totalDistricts": 1,
-    "totalListings": 3,
-    "totalSuccess": 3,
-    "totalErrors": 0,
-    "totalSkippedNoPhone": 0
-  }
+  "completedAt": "2025-11-26T20:29:50.014Z"
 }

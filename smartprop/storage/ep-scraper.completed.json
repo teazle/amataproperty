@@ -1,18 +1,18 @@
 {
-  "startedAt": "2025-11-13T07:20:26.964Z",
-  "pid": 55068,
+  "startedAt": "2025-11-26T20:21:42.227Z",
+  "pid": 4124,
   "jobId": null,
   "status": "running",
   "statusMessage": "Processing page 1/1",
   "progress": {
-    "currentPage": 1,
+    "currentPage": 2,
     "totalPages": 1,
-    "listingsProcessed": 2
+    "listingsProcessed": 20
   },
   "stats": {
-    "totalSuccess": 3,
+    "totalSuccess": 19,
     "totalSkippedNoPhone": 0,
-    "totalErrors": 0
+    "totalErrors": 1
   },
-  "completedAt": "2025-11-13T07:23:23.630Z"
+  "completedAt": "2025-11-26T20:28:26.373Z"
 }

@@ -9,7 +9,7 @@ config({
   override: false  // Don't override existing env vars (set by queue worker from frontend config)
 });
 
-import { chromium, type BrowserContextOptions, type Browser } from 'playwright-ghost';
+import { chromium, type BrowserContextOptions, type Browser, type BrowserContext } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
 import { execSync } from 'child_process';
@@ -64,14 +64,27 @@ function cleanPropertyTitle(title: string): string {
  * @returns Cleaned phone number
  */
 function cleanPhoneNumber(phoneText: string): string {
+  if (!phoneText) return '';
+  
   // Remove all non-numeric characters
   const cleaned = phoneText.replace(/[^\d]/g, '');
   
-  // If it starts with 65, remove it
+  // If it starts with 65, remove it (Singapore country code)
   const withoutCountryCode = cleaned.startsWith('65') ? cleaned.slice(2) : cleaned;
   
   // Return only if it's a valid Singapore phone number (8 digits)
-  return withoutCountryCode.length === 8 ? withoutCountryCode : '';
+  // Also handle cases where phone might be in format like "+65 97400311" or "tel:+6597400311"
+  if (withoutCountryCode.length === 8) {
+    return withoutCountryCode;
+  }
+  
+  // Try to extract 8-digit number from longer strings
+  const eightDigitMatch = withoutCountryCode.match(/(\d{8})/);
+  if (eightDigitMatch) {
+    return eightDigitMatch[1];
+  }
+  
+  return '';
 }
 
 /**
@@ -111,13 +124,26 @@ async function scrapeEdgePropFinal() {
   // Flag to track if we should stop gracefully
   let shouldStop = false;
   
+  // Declare context variable outside so it's accessible in cleanup
+  let context: BrowserContext | null = null;
+  
   // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
   const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
-    if (!browserInstance) return;
-    
     try {
-      console.log(`🧹 Closing browser (${reason})...`);
-      if (browserInstance.isConnected()) {
+      console.log(`🧹 Closing browser resources (${reason})...`);
+      
+      // Close context first, then browser
+      if (context) {
+        try {
+          await context.close();
+          console.log('✅ Context closed successfully');
+        } catch (contextError) {
+          console.error('⚠️  Error closing context:', contextError);
+        }
+        context = null;
+      }
+      
+      if (browserInstance && browserInstance.isConnected()) {
         await browserInstance.close();
         console.log('✅ Browser closed successfully');
       }
@@ -432,7 +458,7 @@ async function scrapeEdgePropFinal() {
   
   // Use playwright-ghost with recommended plugins for best stealth (same as PG scraper)
   browser = await chromium.launch({
-    headless: true, // Run in headless mode for production
+    headless: process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0', // Allow headed mode for debugging
     plugins: [
       ...plugins.recommended({
         humanize: {
@@ -479,7 +505,7 @@ async function scrapeEdgePropFinal() {
     },
   };
 
-  const context = await browser.newContext(contextOptions);
+  context = await browser.newContext(contextOptions);
   
   // playwright-ghost handles most stealth automatically via plugins
   // Just add a minimal script to ensure webdriver is undefined (plugins handle the rest)
@@ -1257,7 +1283,8 @@ async function scrapeEdgePropFinal() {
                       // Scroll failed, continue anyway
                     }
                     await phoneButton.click({ timeout: 3000 });
-                    await humanPause(1000, 1500);
+                    // Wait longer after clicking for phone number to appear
+                    await humanPause(2000, 3000);
                     phoneButtonClicked = true;
                     console.log(`   ✅ Clicked phone button with selector: ${selector}`);
                     break;
@@ -1271,12 +1298,33 @@ async function scrapeEdgePropFinal() {
                 console.log(`   ⚠️  Could not find phone button to click`);
               }
               
-              // Extract phone number - try tel: link first, then fallback to old selector
-              const phoneLink = await popup.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
-              if (phoneLink) {
-                cleanPhone = cleanPhoneNumber(phoneLink);
-                console.log(`   📱 Phone: ${cleanPhone}`);
-              } else {
+              // Extract phone number - try tel: link first (get href, not text, as it's more reliable)
+              // Wait a bit longer after clicking for phone to appear
+              await humanPause(1000, 1500);
+              
+              // Try getting href from tel: link first (more reliable than text)
+              const phoneLinkHref = await popup.locator('a[href^="tel:"]').first().getAttribute('href', { timeout: 5000 }).catch(() => null);
+              if (phoneLinkHref) {
+                // Extract phone from href (e.g., "tel:+6597400311" -> "97400311")
+                cleanPhone = cleanPhoneNumber(phoneLinkHref.replace('tel:', '').replace('+', ''));
+                if (cleanPhone) {
+                  console.log(`   📱 Phone from href: ${cleanPhone}`);
+                }
+              }
+              
+              // If href didn't work, try text content
+              if (!cleanPhone) {
+                const phoneLink = await popup.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
+                if (phoneLink) {
+                  cleanPhone = cleanPhoneNumber(phoneLink);
+                  if (cleanPhone) {
+                    console.log(`   📱 Phone from text: ${cleanPhone}`);
+                  }
+                }
+              }
+              
+              // If still no phone, try other selectors
+              if (!cleanPhone) {
                 // Fallback: try other selectors for phone number
                 const phoneSelectors = [
                   '[class*="agent-contact"]',

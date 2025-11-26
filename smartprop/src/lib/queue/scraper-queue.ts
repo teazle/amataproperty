@@ -1,4 +1,4 @@
-import PgBoss, { type Queue, type StopOptions } from 'pg-boss';
+import { PgBoss, type Queue, type StopOptions } from 'pg-boss';
 import { SCRAPER_DLQ_NAME, SCRAPER_QUEUE_NAME, type ScraperJobPayload } from './queue-types';
 
 let bossInstance: PgBoss | null = null;

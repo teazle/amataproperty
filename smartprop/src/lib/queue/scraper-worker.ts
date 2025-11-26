@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import PgBoss, { type Job } from 'pg-boss';
+import { PgBoss, type Job } from 'pg-boss';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';

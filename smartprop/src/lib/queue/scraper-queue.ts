@@ -59,21 +59,25 @@ async function getConnectionString(): Promise<string> {
       
       // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
       // Session mode is compatible with pg-boss and supports IPv4
-      // Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres
+      // Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-[N]-[REGION].pooler.supabase.com:5432/postgres
       // Reference: https://supabase.com/docs/guides/database/connecting-to-postgres
       //
-      // IMPORTANT: The region must match where your Supabase project is deployed.
-      // Common regions: us-east-1, us-west-1, eu-west-1, ap-southeast-1, etc.
-      // If you get "Tenant or user not found", the region is likely incorrect.
-      // Check your project's region in Supabase Dashboard → Settings → Infrastructure
+      // IMPORTANT: The pooler endpoint format varies by region (aws-0, aws-1, etc.)
+      // For ap-southeast-1, the correct format is aws-1-ap-southeast-1
+      // Get the exact connection string from Supabase Dashboard → Connect → Session pooler
       const region = process.env.SUPABASE_REGION || 'ap-southeast-1'; // Default to ap-southeast-1 (Singapore)
+      
+      // Determine the correct pooler endpoint based on region
+      // ap-southeast-1 uses aws-1, other regions may use aws-0
+      const poolerEndpoint = region === 'ap-southeast-1' 
+        ? 'aws-1-ap-southeast-1' 
+        : `aws-0-${region}`;
       
       // Construct pooler connection string
       // Note: Username format is postgres.[PROJECT-REF] for Supavisor
-      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-${region}.pooler.supabase.com:5432/postgres?sslmode=require`;
+      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@${poolerEndpoint}.pooler.supabase.com:5432/postgres?sslmode=require`;
       
-      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${region}, IPv4-compatible)`);
-      console.log(`[pg-boss] If you get "Tenant or user not found", verify the region in Supabase Dashboard → Settings → Infrastructure`);
+      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${poolerEndpoint}, IPv4-compatible)`);
       return connectionString;
     }
   }

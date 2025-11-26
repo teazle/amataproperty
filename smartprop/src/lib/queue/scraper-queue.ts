@@ -113,15 +113,16 @@ async function createBoss(): Promise<PgBoss> {
   
   // Configure SSL options for pg-boss
   // When using connection string, SSL options must be passed as an object, not in the URI
+  // sslRejectUnauthorized=true means reject unauthorized certs (default), false means don't reject
   const sslConfig = isPooler
     ? {
-        rejectUnauthorized: !sslRejectUnauthorized, // If PG_SSL_REJECT_UNAUTHORIZED=false, set rejectUnauthorized=false
+        rejectUnauthorized: sslRejectUnauthorized, // Use the env var value directly
         ...(sslCa ? { ca: sslCa } : {}),
       }
     : sslRejectUnauthorized && !sslCa
       ? undefined
       : {
-          rejectUnauthorized: !sslRejectUnauthorized,
+          rejectUnauthorized: sslRejectUnauthorized,
           ...(sslCa ? { ca: sslCa } : {}),
         };
 

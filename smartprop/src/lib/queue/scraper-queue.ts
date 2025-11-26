@@ -1,7 +1,6 @@
 import dns from 'node:dns';
 import { PgBoss, type Queue, type StopOptions } from 'pg-boss';
 import { SCRAPER_DLQ_NAME, SCRAPER_QUEUE_NAME, type ScraperJobPayload } from './queue-types';
-import dns from 'dns';
 
 let bossInstance: PgBoss | null = null;
 let bossPromise: Promise<PgBoss> | null = null;
@@ -84,19 +83,18 @@ async function createBoss(): Promise<PgBoss> {
   // pg-boss will automatically create tables in the jobqueue schema
   let connectionString = getConnectionString();
   
-  // For pooler connections, ensure SSL is properly configured
-  // If connection string has sslmode=require but still fails, add rejectUnauthorized=false
-  // Note: This is safe for Supabase pooler as it's a trusted service
+  // For pooler connections, use sslmode=prefer (allows fallback) and configure SSL options
+  // Note: Supabase pooler requires SSL but certificate chain validation may fail
   if (connectionString.includes('pooler.supabase.com')) {
-    // Ensure sslmode is set, and add rejectUnauthorized=false for pooler
-    if (!connectionString.includes('sslmode=')) {
-      connectionString += (connectionString.includes('?') ? '&' : '?') + 'sslmode=require';
-    }
-    // Add rejectUnauthorized=false to handle certificate chain issues with pooler
-    connectionString += (connectionString.includes('?') ? '&' : '?') + 'rejectUnauthorized=false';
+    // Remove existing sslmode if present and set to prefer
+    connectionString = connectionString.replace(/[?&]sslmode=[^&]*/g, '');
+    const separator = connectionString.includes('?') ? '&' : '?';
+    connectionString += `${separator}sslmode=prefer`;
   }
   
-  const boss = new PgBoss({
+  // Configure PgBoss with connection string and SSL options
+  // For Supabase pooler, we need to handle SSL certificate validation
+  const bossConfig: any = {
     connectionString,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
@@ -104,7 +102,17 @@ async function createBoss(): Promise<PgBoss> {
     newJobCheckIntervalSeconds: Number(process.env.PG_BOSS_POLL_INTERVAL || 5),
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
-  });
+  };
+  
+  // Add SSL configuration for pooler connections
+  // Note: rejectUnauthorized needs to be set via connection options, not connection string
+  if (connectionString.includes('pooler.supabase.com')) {
+    bossConfig.ssl = {
+      rejectUnauthorized: false, // Supabase pooler uses valid certs but chain validation may fail
+    };
+  }
+  
+  const boss = new PgBoss(bossConfig);
 
   boss.on('error', (error) => {
     console.error('[pg-boss] error', error);

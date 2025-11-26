@@ -57,13 +57,12 @@ function getConnectionString(): string {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
       
-      // Use connection pooler (port 6543) which is more reliable and supports IPv4
-      // Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-      // For ap-southeast-1 (Singapore), use: aws-0-ap-southeast-1.pooler.supabase.com
-      // Pooler is preferred over direct connection for better reliability and IPv4 support
-      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require`;
+      // Try direct connection first (more reliable for pg-boss)
+      // Format: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+      // If IPv6 issues occur, we'll handle them with SSL config
+      const connectionString = `postgresql://postgres:${encodedPassword}@db.${projectRef}.supabase.co:5432/postgres?sslmode=require`;
       
-      console.log(`[pg-boss] Auto-constructed connection string using Supabase pooler (IPv4-compatible)`);
+      console.log(`[pg-boss] Auto-constructed connection string using direct Supabase connection`);
       return connectionString;
     }
   }

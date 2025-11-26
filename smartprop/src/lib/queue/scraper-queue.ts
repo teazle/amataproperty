@@ -57,14 +57,10 @@ function getConnectionString(): string {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
       
-      // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
-      // Session mode is compatible with pg-boss and supports IPv4
-      // Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres
-      // Reference: https://supabase.com/docs/guides/database/connecting-to-postgres
-      const region = process.env.SUPABASE_REGION || 'ap-southeast-1'; // Default to ap-southeast-1 (Singapore)
-      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-${region}.pooler.supabase.com:5432/postgres?sslmode=require`;
+      // Use direct DB host (Supabase provides per-project host). This avoids region guessing on pooler.
+      const connectionString = `postgresql://postgres:${encodedPassword}@db.${projectRef}.supabase.co:5432/postgres?sslmode=require`;
       
-      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${region}, IPv4-compatible)`);
+      console.log(`[pg-boss] Auto-constructed connection string using direct DB host (db.${projectRef}.supabase.co)`);
       return connectionString;
     }
   }

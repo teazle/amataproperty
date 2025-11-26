@@ -237,6 +237,11 @@ export async function stopBoss(options?: StopOptions): Promise<void> {
 
 export async function ensureScraperQueues(boss?: PgBoss): Promise<void> {
   const client = boss ?? (await getBoss());
+  
+  // Create dead letter queue first (must exist before being referenced)
+  await client.createQueue(SCRAPER_DLQ_NAME);
+  
+  // Then create main queue with dead letter reference
   const queueConfig: Queue = {
     name: SCRAPER_QUEUE_NAME,
     policy: 'singleton',
@@ -249,7 +254,6 @@ export async function ensureScraperQueues(boss?: PgBoss): Promise<void> {
   };
 
   await client.createQueue(queueConfig.name, queueConfig);
-  await client.createQueue(SCRAPER_DLQ_NAME);
 }
 
 export async function enqueueScraperJob(

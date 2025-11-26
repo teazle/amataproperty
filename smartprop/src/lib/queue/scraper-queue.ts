@@ -57,34 +57,23 @@ async function getConnectionString(): Promise<string> {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
       
-      // Use direct DB host connection to avoid pooler "Tenant or user not found" issues
-      // Direct connection: postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
-      // Note: Direct connection may only have IPv6, so we try to resolve to IPv6 explicitly
-      const dbHost = `db.${projectRef}.supabase.co`;
+      // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
+      // Session mode is compatible with pg-boss and supports IPv4
+      // Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres
+      // Reference: https://supabase.com/docs/guides/database/connecting-to-postgres
+      //
+      // IMPORTANT: The region must match where your Supabase project is deployed.
+      // Common regions: us-east-1, us-west-1, eu-west-1, ap-southeast-1, etc.
+      // If you get "Tenant or user not found", the region is likely incorrect.
+      // Check your project's region in Supabase Dashboard → Settings → Infrastructure
+      const region = process.env.SUPABASE_REGION || 'ap-southeast-1'; // Default to ap-southeast-1 (Singapore)
       
-      // Try to resolve to IPv6 address explicitly (direct connection may only have IPv6)
-      try {
-        const addresses = await new Promise<string[]>((resolve, reject) => {
-          dns.resolve6(dbHost, (err, addresses) => {
-            if (err) reject(err);
-            else resolve(addresses);
-          });
-        });
-        
-        if (addresses && addresses.length > 0) {
-          // Use IPv6 address directly (wrap in brackets for URL)
-          const ipv6Address = addresses[0];
-          const connectionString = `postgresql://postgres:${encodedPassword}@[${ipv6Address}]:5432/postgres?sslmode=require`;
-          console.log(`[pg-boss] Auto-constructed connection string using direct DB host (${dbHost} -> [${ipv6Address}]:5432)`);
-          return connectionString;
-        }
-      } catch (err) {
-        console.warn(`[pg-boss] Could not resolve ${dbHost} to IPv6, falling back to hostname:`, err);
-      }
+      // Construct pooler connection string
+      // Note: Username format is postgres.[PROJECT-REF] for Supavisor
+      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-${region}.pooler.supabase.com:5432/postgres?sslmode=require`;
       
-      // Fallback to hostname (will use DNS resolution)
-      const connectionString = `postgresql://postgres:${encodedPassword}@${dbHost}:5432/postgres?sslmode=require`;
-      console.log(`[pg-boss] Auto-constructed connection string using direct DB host (${dbHost}:5432)`);
+      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${region}, IPv4-compatible)`);
+      console.log(`[pg-boss] If you get "Tenant or user not found", verify the region in Supabase Dashboard → Settings → Infrastructure`);
       return connectionString;
     }
   }

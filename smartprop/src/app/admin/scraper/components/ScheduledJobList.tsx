@@ -15,6 +15,63 @@ import { Switch } from '@/components/ui/switch';
 import { type ScheduledJob, toggleScheduledJob, deleteScheduledJob, reloadScheduler } from '../actions';
 import { toast } from 'sonner';
 import { Edit, Trash2, RefreshCw } from 'lucide-react';
+
+// Convert cron expression to human-readable format
+const formatCronExpression = (cron: string): string => {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return cron; // Return as-is if invalid format
+  }
+
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+  // Daily at specific time: "0 10 * * *" → "Daily at 10:00 AM"
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    const hourNum = parseInt(hour, 10);
+    const minuteNum = parseInt(minute, 10);
+    const timeStr = hourNum === 0 && minuteNum === 0 
+      ? 'midnight'
+      : hourNum === 12 && minuteNum === 0
+      ? 'noon'
+      : `${hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum}:${minuteNum.toString().padStart(2, '0')} ${hourNum >= 12 ? 'PM' : 'AM'}`;
+    return `Daily at ${timeStr}`;
+  }
+
+  // Hourly: "0 * * * *" → "Every hour"
+  if (minute !== '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every hour at :${minute.padStart(2, '0')}`;
+  }
+
+  // Weekly on specific day: "0 10 * * 1" → "Every Monday at 10:00 AM"
+  if (dayOfMonth === '*' && month === '*') {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    if (dayOfWeek !== '*') {
+      const dayNum = parseInt(dayOfWeek, 10);
+      if (!isNaN(dayNum) && dayNum >= 0 && dayNum <= 6) {
+        const hourNum = parseInt(hour, 10);
+        const minuteNum = parseInt(minute, 10);
+        const timeStr = `${hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum}:${minuteNum.toString().padStart(2, '0')} ${hourNum >= 12 ? 'PM' : 'AM'}`;
+        return `Every ${days[dayNum]} at ${timeStr}`;
+      }
+    }
+  }
+
+  // Monthly on specific day: "0 10 1 * *" → "1st of every month at 10:00 AM"
+  if (month === '*' && dayOfWeek === '*') {
+    const hourNum = parseInt(hour, 10);
+    const minuteNum = parseInt(minute, 10);
+    const timeStr = `${hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum}:${minuteNum.toString().padStart(2, '0')} ${hourNum >= 12 ? 'PM' : 'AM'}`;
+    const day = parseInt(dayOfMonth, 10);
+    if (!isNaN(day)) {
+      const suffix = day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th';
+      return `${day}${suffix} of every month at ${timeStr}`;
+    }
+  }
+
+  // If we can't parse it, return a simplified version
+  return cron;
+};
+
 // Format date relative to now
 const formatDistanceToNow = (date: Date): string => {
   const now = new Date();
@@ -98,7 +155,7 @@ export function ScheduledJobList({ jobs, isLoading, onEdit, onRefresh }: Schedul
     if (!nextRunAt) return 'N/A';
     try {
       const date = new Date(nextRunAt);
-      return formatDistanceToNow(date, { addSuffix: true });
+      return formatDistanceToNow(date);
     } catch {
       return 'Invalid date';
     }
@@ -108,7 +165,7 @@ export function ScheduledJobList({ jobs, isLoading, onEdit, onRefresh }: Schedul
     if (!lastRunAt) return 'Never';
     try {
       const date = new Date(lastRunAt);
-      return formatDistanceToNow(date, { addSuffix: true });
+      return formatDistanceToNow(date);
     } catch {
       return 'Invalid date';
     }
@@ -151,7 +208,12 @@ export function ScheduledJobList({ jobs, isLoading, onEdit, onRefresh }: Schedul
                     {job.platform === 'propertyguru' ? 'PropertyGuru' : 'EdgeProp'}
                   </Badge>
                 </TableCell>
-                <TableCell className="font-mono text-sm">{job.cron_expression}</TableCell>
+                <TableCell>
+                  <div className="space-y-1">
+                    <div className="font-medium">{formatCronExpression(job.cron_expression)}</div>
+                    <div className="text-xs text-gray-500 font-mono">{job.cron_expression}</div>
+                  </div>
+                </TableCell>
                 <TableCell>{formatNextRun(job.next_run_at)}</TableCell>
                 <TableCell>
                   <div className="space-y-1">

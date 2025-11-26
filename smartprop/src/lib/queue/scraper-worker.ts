@@ -187,16 +187,17 @@ export async function startScraperWorker(): Promise<void> {
   const boss: PgBoss = await getBoss();
   await ensureScraperQueues(boss);
 
+  // When batchSize is used, callback receives array of jobs
   const workId = await boss.work<ScraperJobPayload>(
     SCRAPER_QUEUE_NAME,
-    async (job) => {
+    { batchSize: 1 },
+    async ([job]) => {
       if (!job) return;
       await handleScraperJob(job);
-    },
-    { batchSize: 1 }
+    }
   );
 
-  // DLQ tracker
+  // DLQ tracker (no batchSize, receives single job)
   await boss.work<ScraperJobPayload>(SCRAPER_DLQ_NAME, async (job) => {
     if (!job) return;
     const payload = job.data;

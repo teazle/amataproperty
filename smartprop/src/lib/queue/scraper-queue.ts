@@ -107,22 +107,21 @@ async function createBoss(): Promise<PgBoss> {
   const sslRejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false';
   const sslCa = process.env.PG_SSL_CA;
   
-  // For pooler connections, use sslmode=prefer (allows fallback) and configure SSL options
+  // For pooler connections, ensure SSL is properly configured
   // Note: Supabase pooler requires SSL but certificate chain validation may fail
-  if (connectionString.includes('pooler.supabase.com')) {
-    // Remove existing sslmode if present and set to prefer
-    connectionString = connectionString.replace(/[?&]sslmode=[^&]*/g, '');
-    const separator = connectionString.includes('?') ? '&' : '?';
-    connectionString += `${separator}sslmode=prefer`;
-  }
+  const isPooler = connectionString.includes('pooler.supabase.com');
   
-  // Configure PgBoss with connection string
-  // SSL options are handled via connection string parameters (sslmode=prefer)
-  const sslConfig =
-    sslRejectUnauthorized && !sslCa
+  // Configure SSL options for pg-boss
+  // When using connection string, SSL options must be passed as an object, not in the URI
+  const sslConfig = isPooler
+    ? {
+        rejectUnauthorized: !sslRejectUnauthorized, // If PG_SSL_REJECT_UNAUTHORIZED=false, set rejectUnauthorized=false
+        ...(sslCa ? { ca: sslCa } : {}),
+      }
+    : sslRejectUnauthorized && !sslCa
       ? undefined
       : {
-          rejectUnauthorized: sslRejectUnauthorized,
+          rejectUnauthorized: !sslRejectUnauthorized,
           ...(sslCa ? { ca: sslCa } : {}),
         };
 
@@ -135,7 +134,7 @@ async function createBoss(): Promise<PgBoss> {
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
     // SSL configuration for Supabase pooler
-    // Note: ssl: true enables SSL, but certificate validation is controlled by this object (not URI sslmode)
+    // Note: ssl object takes precedence over connection string sslmode parameter
     ssl: sslConfig,
   });
 

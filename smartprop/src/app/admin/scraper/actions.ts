@@ -7,6 +7,29 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Safely revalidate a path - only works in request context, fails silently in background jobs
+ */
+function safeRevalidatePath(path: string): void {
+  try {
+    revalidatePath(path);
+  } catch (error) {
+    // revalidatePath only works in request context (server actions called from UI)
+    // When called from background jobs (scheduler), it will fail - that's expected
+    // We can safely ignore this error
+    if (error instanceof Error && (
+      error.message.includes('revalidatePath') ||
+      error.message.includes('static generation store') ||
+      error.message.includes('during render')
+    )) {
+      // Expected error when called from background context - ignore
+      return;
+    }
+    // Unexpected error - log it but don't throw
+    console.warn(`[safeRevalidatePath] Failed to revalidate ${path}:`, error);
+  }
+}
+
 const execAsync = promisify(exec);
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -367,7 +390,7 @@ export async function startScrapeJob(config: ScraperConfig) {
       .update({ status: 'running', started_at: new Date().toISOString() })
       .eq('id', job.id);
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -908,7 +931,7 @@ export async function stopScraperJob() {
       console.log(`Removed lock file: ${lockFile}`);
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -966,7 +989,7 @@ export async function deleteScraperHistory() {
       };
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -1024,7 +1047,7 @@ export async function deleteScraperJob(jobId: string) {
       };
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -1230,11 +1253,7 @@ export async function forceResetStuckJobs() {
       console.error('Error removing EP lock file:', error);
     }
 
-    try {
-      revalidatePath('/admin/scraper');
-    } catch (revalidateError) {
-      console.error('Error revalidating path:', revalidateError);
-    }
+    safeRevalidatePath('/admin/scraper');
 
     // Final verification - make sure no jobs are still active
     await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for final propagation
@@ -1562,7 +1581,7 @@ export async function forceFixStuckJob(jobId: string) {
       };
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -1680,7 +1699,7 @@ export async function syncCompletedJobs() {
       }
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: syncedCount > 0 || errors.length === 0,
@@ -1817,7 +1836,7 @@ export async function createScheduledJob(job: {
       console.error('Failed to reload scheduler:', reloadError);
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -1925,7 +1944,7 @@ export async function updateScheduledJob(
       console.error('Failed to reload scheduler:', reloadError);
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,
@@ -1962,7 +1981,7 @@ export async function deleteScheduledJob(id: string): Promise<{ success: boolean
       };
     }
 
-    revalidatePath('/admin/scraper');
+    safeRevalidatePath('/admin/scraper');
 
     return {
       success: true,

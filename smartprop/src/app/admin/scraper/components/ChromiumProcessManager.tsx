@@ -150,10 +150,12 @@ export function ChromiumProcessManager() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-5 w-5" />
-              Chromium Process Manager
+              Scraper Chromium Process Manager
             </CardTitle>
             <CardDescription>
-              Monitor and kill orphaned Chromium processes (not part of active scraping jobs)
+              Monitor and kill orphaned Chromium processes from scrapers only (Playwright/Playwright-Ghost processes)
+              <br />
+              <span className="text-xs text-amber-600">⚠️ Only targets scraper-related processes, not system Chrome or other services</span>
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -300,14 +302,18 @@ export function ChromiumProcessManager() {
           {/* No orphaned processes message */}
           {processes.counts.orphaned === 0 && processes.counts.total > 0 && (
             <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center text-sm text-green-700">
-              ✅ No orphaned processes found. All Chromium processes are part of active scraping jobs.
+              ✅ No orphaned scraper processes found. All Playwright Chromium processes are part of active scraping jobs.
             </div>
           )}
 
           {/* No processes at all */}
           {processes.counts.total === 0 && (
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center text-sm text-gray-600">
-              No Chromium processes found. All processes have been cleaned up.
+              No scraper-related Chromium processes found. All processes have been cleaned up.
+              <br />
+              <span className="text-xs text-gray-500 mt-1 block">
+                Note: System Chrome/Chromium and other services are not monitored here.
+              </span>
             </div>
           )}
         </div>

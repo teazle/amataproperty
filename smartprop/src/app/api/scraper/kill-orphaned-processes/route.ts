@@ -77,11 +77,15 @@ async function getActiveJobPids(): Promise<Set<number>> {
     }
     
     // Also check for processes by pattern (in case lock files are missing)
+    // Only check for our scraper scripts - these are the only ones we care about
     try {
       const { stdout: pgProcesses } = await execAsync('pgrep -f "pg.districts.ts" || true');
       const { stdout: epProcesses } = await execAsync('pgrep -f "ep.live.ts" || true');
+      const { stdout: articleProcesses } = await execAsync('pgrep -f "edgeprop.*scraper" || true');
       
-      [...pgProcesses.trim().split('\n'), ...epProcesses.trim().split('\n')].forEach((pidStr) => {
+      [...pgProcesses.trim().split('\n'), 
+       ...epProcesses.trim().split('\n'),
+       ...articleProcesses.trim().split('\n')].forEach((pidStr) => {
         const pid = parseInt(pidStr.trim());
         if (!isNaN(pid)) activePids.add(pid);
       });
@@ -110,6 +114,23 @@ async function getAllChromiumProcesses(): Promise<ProcessInfo[]> {
     const processes: ProcessInfo[] = [];
     const lines = stdout.trim().split('\n').filter(line => line.trim());
     
+    // First, get all parent PIDs that are our scraper scripts (for faster lookup)
+    const scraperParentPids = new Set<number>();
+    try {
+      const { stdout: pgProcesses } = await execAsync('pgrep -f "pg.districts.ts" || true');
+      const { stdout: epProcesses } = await execAsync('pgrep -f "ep.live.ts" || true');
+      const { stdout: articleProcesses } = await execAsync('pgrep -f "edgeprop.*scraper" || true');
+      
+      [...pgProcesses.trim().split('\n'), 
+       ...epProcesses.trim().split('\n'),
+       ...articleProcesses.trim().split('\n')].forEach((pidStr) => {
+        const pid = parseInt(pidStr.trim());
+        if (!isNaN(pid)) scraperParentPids.add(pid);
+      });
+    } catch {
+      // Error getting scraper PIDs
+    }
+    
     for (const line of lines) {
       const parts = line.trim().split(/\s+/);
       if (parts.length >= 5) {
@@ -120,9 +141,32 @@ async function getAllChromiumProcesses(): Promise<ProcessInfo[]> {
         // Command starts from column 5 onwards
         const cmd = parts.slice(4).join(' ');
         
-        // Filter out our scraper processes and keep only Chromium processes
+        // CRITICAL: Only target Chromium processes from Playwright/scrapers, NOT system Chrome
+        // Filter criteria - process must be:
+        // 1. From Playwright cache (.cache/ms-playwright) - this is where Playwright installs Chromium
+        // 2. OR parent process is one of our scraper scripts
+        // EXCLUDE: System Chrome, Flaresolverr (runs in Docker), or other system processes
+        
+        const isPlaywrightChromium = cmd.includes('/.cache/ms-playwright') && 
+                                      (cmd.includes('chromium') || cmd.includes('chrome'));
+        
+        // Check if parent is a scraper script (fast lookup)
+        const isScraperChild = scraperParentPids.has(ppid);
+        
+        // Exclude system Chrome and Flaresolverr
+        const isSystemChrome = (cmd.includes('chromium') || cmd.includes('chrome')) && 
+                               !cmd.includes('/.cache/ms-playwright') && 
+                               !cmd.includes('playwright') &&
+                               !isScraperChild;
+        
+        const isFlaresolverr = cmd.includes('flaresolverr') || cmd.includes('8191');
+        
+        // Only include Playwright Chromium processes that are from scrapers
+        // This ensures we ONLY target scraper-related processes, not system Chrome
         if (!isNaN(pid) && !isNaN(ppid) && 
-            (cmd.includes('chromium') || cmd.includes('chrome') || cmd.includes('/.cache/ms-playwright') || cmd.includes('playwright'))) {
+            (isPlaywrightChromium || isScraperChild) &&
+            !isSystemChrome && 
+            !isFlaresolverr) {
           const memoryMB = rss ? Math.round(parseInt(rss) / 1024) : 0;
           processes.push({
             pid,

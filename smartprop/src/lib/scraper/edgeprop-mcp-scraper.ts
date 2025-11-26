@@ -108,7 +108,7 @@ export async function scrapeEdgePropMCP(
   process.on('uncaughtException', cleanup);
   
   try {
-    // Create context with stealth configuration (same as EP live scraper)
+  // Create context with stealth configuration (same as EP live scraper)
     context = await browser.newContext({
     // Add init script to prevent __name errors
     javaScriptEnabled: true,
@@ -2245,7 +2245,7 @@ export async function scrapeEdgePropMCP(
         context = null;
       }
       if (browser && browser.isConnected()) {
-        await browser.close();
+    await browser.close();
       }
     } catch (e) {
       console.error('Error closing browser:', e);

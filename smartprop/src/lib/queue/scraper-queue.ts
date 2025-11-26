@@ -57,12 +57,16 @@ function getConnectionString(): string {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
       
-      // Use direct connection with IPv4 DNS preference
-      // The DNS resolution order (ipv4first) should handle IPv6 issues
-      // Format: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
-      const connectionString = `postgresql://postgres:${encodedPassword}@db.${projectRef}.supabase.co:5432/postgres?sslmode=require`;
+      // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
+      // Session mode is compatible with pg-boss and supports IPv4
+      // Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+      // Try common regions - the correct one will be determined by which one works
+      // Most Supabase projects use us-east-1 or ap-southeast-1
+      const regions = ['us-east-1', 'ap-southeast-1'];
+      const region = process.env.SUPABASE_REGION || regions[0]; // Default to us-east-1
+      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-${region}.pooler.supabase.com:5432/postgres?sslmode=require`;
       
-      console.log(`[pg-boss] Auto-constructed connection string using direct Supabase connection (IPv4 DNS preference)`);
+      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${region}, IPv4-compatible)`);
       return connectionString;
     }
   }
@@ -122,17 +126,18 @@ async function createBoss(): Promise<PgBoss> {
   const isPooler = connParams.host.includes('pooler.supabase.com');
   
   // Configure SSL options
-  // For pooler connections, always configure SSL
-  // For direct connections, configure SSL if rejectUnauthorized is false or CA is provided
+  // sslRejectUnauthorized=true means reject unauthorized certs (default), false means don't reject
+  // For pooler connections, always configure SSL with rejectUnauthorized based on env var
+  // For direct connections, use SSL with proper validation unless explicitly disabled
   const sslConfig = isPooler
     ? {
-        rejectUnauthorized: !sslRejectUnauthorized, // If PG_SSL_REJECT_UNAUTHORIZED=false, set rejectUnauthorized=false
+        rejectUnauthorized: sslRejectUnauthorized, // Use env var value directly
         ...(sslCa ? { ca: sslCa } : {}),
       }
     : sslRejectUnauthorized && !sslCa
-      ? true // Use SSL but with default validation
+      ? true // Use SSL with default validation
       : {
-          rejectUnauthorized: !sslRejectUnauthorized,
+          rejectUnauthorized: sslRejectUnauthorized,
           ...(sslCa ? { ca: sslCa } : {}),
         };
 

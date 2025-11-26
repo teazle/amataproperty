@@ -57,12 +57,13 @@ function getConnectionString(): string {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
       
-      // Try direct connection first (more reliable for pg-boss)
-      // Format: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
-      // If IPv6 issues occur, we'll handle them with SSL config
-      const connectionString = `postgresql://postgres:${encodedPassword}@db.${projectRef}.supabase.co:5432/postgres?sslmode=require`;
+      // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
+      // Session mode is compatible with pg-boss and supports IPv4
+      // Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+      // For ap-southeast-1 (Singapore), use: aws-0-ap-southeast-1.pooler.supabase.com
+      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require`;
       
-      console.log(`[pg-boss] Auto-constructed connection string using direct Supabase connection`);
+      console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (IPv4-compatible)`);
       return connectionString;
     }
   }

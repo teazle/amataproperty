@@ -1430,8 +1430,9 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
 }
 
 // Load environment variables
-config({ path: path.resolve(process.cwd(), '.env') });
-config({ path: path.resolve(process.cwd(), '.env.local') });
+// CRITICAL: override: false ensures job-specific env vars (from queue worker) take precedence
+config({ path: path.resolve(process.cwd(), '.env'), override: false });
+config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
 
 interface Contact {
   name: string;

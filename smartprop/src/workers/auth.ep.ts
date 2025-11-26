@@ -2,8 +2,9 @@ import { config } from 'dotenv';
 import path from 'path';
 
 // Load environment variables - try .env first, then .env.local
-config({ path: path.resolve(process.cwd(), '.env') });
-config({ path: path.resolve(process.cwd(), '.env.local') });
+// CRITICAL: override: false ensures job-specific env vars (from queue worker) take precedence
+config({ path: path.resolve(process.cwd(), '.env'), override: false });
+config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
 
 import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';

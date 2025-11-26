@@ -122,9 +122,18 @@ function parseConnectionString(connectionString: string): {
   password: string;
   database: string;
 } {
+  // Handle IPv6 addresses in brackets (e.g., [2406:da18:...])
+  // URL parser needs brackets removed for hostname
   const url = new URL(connectionString);
+  let host = url.hostname;
+  
+  // If hostname is wrapped in brackets (IPv6), remove them
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+  
   return {
-    host: url.hostname,
+    host: host,
     port: parseInt(url.port) || 5432,
     user: url.username,
     password: decodeURIComponent(url.password),

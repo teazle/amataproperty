@@ -35,6 +35,7 @@ import { useGlobalStore } from '@/lib/stores/global-store';
 import { useRealtimeData } from '@/hooks/useRealtimeSync';
 import { useConversationSelectors } from '@/lib/stores/conversation-store';
 import { useNotificationsSelectors } from '@/lib/stores/global-store';
+import { ServiceStatus } from '@/components/ServiceStatus';
 
 interface DashboardStats {
   listings: {
@@ -407,7 +408,9 @@ export default function EnhancedDashboard() {
       </div>
 
       {/* System Status */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <ServiceStatus />
+        
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -422,44 +425,6 @@ export default function EnhancedDashboard() {
             </div>
             <div className="text-xs text-gray-500 mt-1">
               Last sync: {lastUpdate ? lastUpdate.toLocaleTimeString() : 'Loading...'}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Zap className="h-5 w-5 mr-2" />
-              Scraper Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full ${stats.scraper.isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-              <span className="text-sm font-medium">
-                {stats.scraper.isRunning ? 'Running' : 'Idle'}
-              </span>
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              {stats.scraper.newListings} new listings today
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <MessageSquare className="h-5 w-5 mr-2" />
-              WAHA Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-sm font-medium">Connected</span>
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              {stats.conversations.active} active chats
             </div>
           </CardContent>
         </Card>

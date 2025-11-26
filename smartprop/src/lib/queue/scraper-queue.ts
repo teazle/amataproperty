@@ -82,6 +82,7 @@ async function createBoss(): Promise<PgBoss> {
   // Use existing DATABASE_URL connection and specify jobqueue schema
   // pg-boss will automatically create tables in the jobqueue schema
   let connectionString = getConnectionString();
+  const sslRejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false';
   
   // For pooler connections, use sslmode=prefer (allows fallback) and configure SSL options
   // Note: Supabase pooler requires SSL but certificate chain validation may fail
@@ -92,9 +93,9 @@ async function createBoss(): Promise<PgBoss> {
     connectionString += `${separator}sslmode=prefer`;
   }
   
-  // Configure PgBoss with connection string and SSL options
-  // For Supabase pooler, we need to handle SSL certificate validation
-  const bossConfig: any = {
+  // Configure PgBoss with connection string
+  // SSL options are handled via connection string parameters (sslmode=prefer)
+  const boss = new PgBoss({
     connectionString,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
@@ -102,17 +103,14 @@ async function createBoss(): Promise<PgBoss> {
     newJobCheckIntervalSeconds: Number(process.env.PG_BOSS_POLL_INTERVAL || 5),
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
-  };
-  
-  // Add SSL configuration for pooler connections
-  // Note: rejectUnauthorized needs to be set via connection options, not connection string
-  if (connectionString.includes('pooler.supabase.com')) {
-    bossConfig.ssl = {
-      rejectUnauthorized: false, // Supabase pooler uses valid certs but chain validation may fail
-    };
-  }
-  
-  const boss = new PgBoss(bossConfig);
+    // SSL configuration for Supabase pooler
+    // Note: ssl: true enables SSL, but certificate validation is controlled by connection string
+    ssl: connectionString.includes('pooler.supabase.com')
+      ? { rejectUnauthorized: sslRejectUnauthorized }
+      : sslRejectUnauthorized
+        ? undefined
+        : { rejectUnauthorized: false },
+  });
 
   boss.on('error', (error) => {
     console.error('[pg-boss] error', error);

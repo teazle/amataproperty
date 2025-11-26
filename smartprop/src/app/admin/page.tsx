@@ -15,6 +15,7 @@ import {
   Star,
   Linkedin
 } from 'lucide-react';
+import { ServiceStatus } from '@/components/ServiceStatus';
 
 export default function AdminDashboard() {
   return (
@@ -37,6 +38,11 @@ export default function AdminDashboard() {
             <span className="text-sm text-gray-600">Co-Broking Status Tracking</span>
           </div>
         </div>
+      </div>
+
+      {/* Service Status */}
+      <div className="max-w-4xl mx-auto">
+        <ServiceStatus />
       </div>
 
       {/* Primary Pages (Old/Reliable) */}

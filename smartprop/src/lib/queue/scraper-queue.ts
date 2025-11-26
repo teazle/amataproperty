@@ -87,11 +87,19 @@ function getConnectionString(): string {
   throw new Error(errorMessage);
 }
 
+// Remove any sslmode parameter so PgBoss uses the provided ssl config instead of the URI
+function stripSslMode(connectionString: string): string {
+  const stripped = connectionString.replace(/[?&]sslmode=[^&]*/gi, '');
+  // Remove trailing ? or & if left behind
+  return stripped.replace(/[?&]$/, '');
+}
+
 async function createBoss(): Promise<PgBoss> {
   // Use existing DATABASE_URL connection and specify jobqueue schema
   // pg-boss will automatically create tables in the jobqueue schema
-  let connectionString = getConnectionString();
+  let connectionString = stripSslMode(getConnectionString());
   const sslRejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false';
+  const sslCa = process.env.PG_SSL_CA;
   
   // For pooler connections, use sslmode=prefer (allows fallback) and configure SSL options
   // Note: Supabase pooler requires SSL but certificate chain validation may fail
@@ -104,6 +112,14 @@ async function createBoss(): Promise<PgBoss> {
   
   // Configure PgBoss with connection string
   // SSL options are handled via connection string parameters (sslmode=prefer)
+  const sslConfig =
+    sslRejectUnauthorized && !sslCa
+      ? undefined
+      : {
+          rejectUnauthorized: sslRejectUnauthorized,
+          ...(sslCa ? { ca: sslCa } : {}),
+        };
+
   const boss = new PgBoss({
     connectionString,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
@@ -113,12 +129,8 @@ async function createBoss(): Promise<PgBoss> {
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
     // SSL configuration for Supabase pooler
-    // Note: ssl: true enables SSL, but certificate validation is controlled by connection string
-    ssl: connectionString.includes('pooler.supabase.com')
-      ? { rejectUnauthorized: sslRejectUnauthorized }
-      : sslRejectUnauthorized
-        ? undefined
-        : { rejectUnauthorized: false },
+    // Note: ssl: true enables SSL, but certificate validation is controlled by this object (not URI sslmode)
+    ssl: sslConfig,
   });
 
   boss.on('error', (error) => {

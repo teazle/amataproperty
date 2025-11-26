@@ -1,6 +1,15 @@
 import dns from 'node:dns';
+import { config } from 'dotenv';
+import path from 'path';
 import { PgBoss, type Queue, type StopOptions } from 'pg-boss';
 import { SCRAPER_DLQ_NAME, SCRAPER_QUEUE_NAME, type ScraperJobPayload } from './queue-types';
+
+// Load environment variables from .env.local
+// This is needed for the standalone worker process (not part of Next.js)
+config({
+  path: path.resolve(process.cwd(), '.env.local'),
+  override: false, // Don't override existing env vars
+});
 
 let bossInstance: PgBoss | null = null;
 let bossPromise: Promise<PgBoss> | null = null;

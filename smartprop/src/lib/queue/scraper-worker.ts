@@ -189,7 +189,7 @@ export async function startScraperWorker(): Promise<void> {
 
   const workId = await boss.work<ScraperJobPayload>(
     SCRAPER_QUEUE_NAME,
-    async ([job]) => {
+    async (job) => {
       if (!job) return;
       await handleScraperJob(job);
     },
@@ -197,7 +197,7 @@ export async function startScraperWorker(): Promise<void> {
   );
 
   // DLQ tracker
-  await boss.work<ScraperJobPayload>(SCRAPER_DLQ_NAME, async ([job]) => {
+  await boss.work<ScraperJobPayload>(SCRAPER_DLQ_NAME, async (job) => {
     if (!job) return;
     const payload = job.data;
     await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');

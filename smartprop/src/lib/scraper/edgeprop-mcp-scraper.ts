@@ -2245,7 +2245,7 @@ export async function scrapeEdgePropMCP(
         context = null;
       }
       if (browser && browser.isConnected()) {
-    await browser.close();
+        await browser.close();
       }
     } catch (e) {
       console.error('Error closing browser:', e);

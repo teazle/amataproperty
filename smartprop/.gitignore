@@ -77,3 +77,7 @@ archive/
 
 # QR codes and temporary assets
 qr.png
+
+# Runtime storage files (authentication state, scraper status, etc.)
+storage/*.json
+!storage/.gitkeep

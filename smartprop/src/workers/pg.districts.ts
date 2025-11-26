@@ -394,10 +394,41 @@ async function scrapePropertyGuruByDistrict() {
   // Flag to track if we should stop gracefully
   let shouldStop = false;
   
-  // Handle stop signals gracefully
+  // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
+  const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
+    if (!browserInstance) return;
+    
+    try {
+      console.log(`🧹 Closing browser (${reason})...`);
+      if (browserInstance.isConnected()) {
+        await browserInstance.close();
+        console.log('✅ Browser closed successfully');
+      }
+    } catch (error) {
+      console.error('⚠️  Error closing browser gracefully:', error);
+      // Force kill Chromium processes if graceful close fails
+      try {
+        console.log('🔪 Attempting to force-kill Chromium processes...');
+        exec('pkill -f "chromium|chrome" || true', (killError) => {
+          if (killError && killError.code !== 1) { // code 1 means no processes found
+            console.error('⚠️  Failed to force-kill Chromium:', killError);
+          } else {
+            console.log('✅ Force-killed Chromium processes');
+          }
+        });
+      } catch (killError) {
+        console.error('⚠️  Failed to force-kill Chromium processes:', killError);
+      }
+    }
+  };
+
+  // Handle stop signals gracefully - CRITICAL: Close browser BEFORE exiting
   const handleStopSignal = async (signal: string) => {
     console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
     shouldStop = true;
+    
+    // CRITICAL: Close browser FIRST before doing anything else
+    await cleanupBrowser(browser, `signal: ${signal}`);
     
     // Update and remove lock file
     if (fs.existsSync(lockFile)) {
@@ -448,6 +479,20 @@ async function scrapePropertyGuruByDistrict() {
   // Register signal handlers
   process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
   process.on('SIGINT', () => handleStopSignal('SIGINT'));
+  
+  // CRITICAL: Handle uncaught exceptions - close browser before crashing
+  process.on('uncaughtException', async (error) => {
+    console.error('❌ Uncaught exception:', error);
+    await cleanupBrowser(browser, 'uncaughtException');
+    process.exit(1);
+  });
+  
+  // CRITICAL: Handle unhandled promise rejections - close browser before crashing
+  process.on('unhandledRejection', async (reason, promise) => {
+    console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
+    await cleanupBrowser(browser, 'unhandledRejection');
+    process.exit(1);
+  });
   
   console.log('🚀 Starting PropertyGuru District-based Scraper...');
   console.log(`📍 Districts to scrape: ${districts.join(', ')}`);
@@ -1183,9 +1228,21 @@ async function scrapePropertyGuruByDistrict() {
                 jobStatus.statusMessage = '🔄 Re-authenticating...';
                 fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
                 
-                await listingPage.close();
-                await page.close();
-                await browser.close();
+                // CRITICAL: Close all pages and browser BEFORE re-authenticating
+                console.log('🧹 Closing all pages and browser before re-authentication...');
+                try {
+                  await listingPage.close().catch(() => {});
+                  await page.close().catch(() => {});
+                  await cleanupBrowser(browser, 're-authentication');
+                  browser = null; // Clear browser reference
+                  
+                  // Wait a moment to ensure browser processes are fully closed
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                  console.log('✅ Browser closed, proceeding with re-authentication...');
+                } catch (closeError) {
+                  console.error('⚠️  Error closing browser before re-auth:', closeError);
+                  // Continue anyway - cleanup will happen in finally block
+                }
                 
                 // Re-authenticate
                 const reAuthSuccess = await reAuthenticate();
@@ -1213,6 +1270,10 @@ async function scrapePropertyGuruByDistrict() {
                   fs.unlinkSync(lockFile);
                 }
                 
+                // CRITICAL: Ensure browser is fully closed before spawning new process
+                // Wait additional time to ensure all Chromium processes are terminated
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
                 // Restart the entire scraping process with fresh authentication
                 // Preserve the original environment variables from the admin page
                 setTimeout(() => {
@@ -1231,9 +1292,10 @@ async function scrapePropertyGuruByDistrict() {
                       process.exit(1);
                     }
                   });
-                }, 2000); // 2 second delay to ensure auth state is settled
+                }, 1000); // Additional delay to ensure cleanup
                 
-                return;
+                // Exit this process - new one will start
+                process.exit(0);
               }
               
               await listingPage.close();
@@ -1383,14 +1445,10 @@ async function scrapePropertyGuruByDistrict() {
       }
     }
   } finally {
-    // Always close browser to prevent resource leaks
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (closeError) {
-        console.error('⚠️  Error closing browser:', closeError);
-      }
-    }
+    // CRITICAL: Always close browser to prevent resource leaks
+    // Use cleanupBrowser to ensure proper cleanup even if browser.close() fails
+    await cleanupBrowser(browser, 'finally block');
+    browser = null; // Clear reference
     
     // Update database job status BEFORE removing lock file to prevent race condition
     const jobId = process.env.PG_JOB_ID;

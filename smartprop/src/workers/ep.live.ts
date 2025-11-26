@@ -4,7 +4,7 @@ import path from 'path';
 // Load environment variables from .env.local only
 config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { chromium, type BrowserContextOptions } from 'playwright-ghost';
+import { chromium, type BrowserContextOptions, type Browser } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
 import { execSync } from 'child_process';
@@ -106,10 +106,36 @@ async function scrapeEdgePropFinal() {
   // Flag to track if we should stop gracefully
   let shouldStop = false;
   
-  // Handle stop signals gracefully
+  // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
+  const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
+    if (!browserInstance) return;
+    
+    try {
+      console.log(`🧹 Closing browser (${reason})...`);
+      if (browserInstance.isConnected()) {
+        await browserInstance.close();
+        console.log('✅ Browser closed successfully');
+      }
+    } catch (error) {
+      console.error('⚠️  Error closing browser gracefully:', error);
+      // Force kill Chromium processes if graceful close fails
+      try {
+        console.log('🔪 Attempting to force-kill Chromium processes...');
+        execSync('pkill -f "chromium|chrome" || true', { stdio: 'ignore' });
+        console.log('✅ Force-killed Chromium processes');
+      } catch (killError) {
+        console.error('⚠️  Failed to force-kill Chromium processes:', killError);
+      }
+    }
+  };
+
+  // Handle stop signals gracefully - CRITICAL: Close browser BEFORE exiting
   const handleStopSignal = async (signal: string) => {
     console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
     shouldStop = true;
+    
+    // CRITICAL: Close browser FIRST before doing anything else
+    await cleanupBrowser(browser, `signal: ${signal}`);
     
     // Update and remove lock file
     if (fs.existsSync(lockFile)) {
@@ -159,6 +185,20 @@ async function scrapeEdgePropFinal() {
   // Register signal handlers
   process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
   process.on('SIGINT', () => handleStopSignal('SIGINT'));
+  
+  // CRITICAL: Handle uncaught exceptions - close browser before crashing
+  process.on('uncaughtException', async (error) => {
+    console.error('❌ Uncaught exception:', error);
+    await cleanupBrowser(browser, 'uncaughtException');
+    process.exit(1);
+  });
+  
+  // CRITICAL: Handle unhandled promise rejections - close browser before crashing
+  process.on('unhandledRejection', async (reason, promise) => {
+    console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
+    await cleanupBrowser(browser, 'unhandledRejection');
+    process.exit(1);
+  });
   
   // Check for existing lock file
   if (fs.existsSync(lockFile)) {
@@ -382,8 +422,11 @@ async function scrapeEdgePropFinal() {
     process.exit(1);
   }
   
+  // CRITICAL: Declare browser at function scope so cleanup handlers can access it
+  let browser: Browser | null = null;
+  
   // Use playwright-ghost with recommended plugins for best stealth (same as PG scraper)
-  const browser = await chromium.launch({
+  browser = await chromium.launch({
     headless: true, // Run in headless mode for production
     plugins: [
       ...plugins.recommended({
@@ -1680,14 +1723,10 @@ async function scrapeEdgePropFinal() {
       }
     }
   } finally {
-    // Always close browser to prevent resource leaks
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (closeError) {
-        console.error('⚠️  Error closing browser:', closeError);
-      }
-    }
+    // CRITICAL: Always close browser to prevent resource leaks
+    // Use cleanupBrowser to ensure proper cleanup even if browser.close() fails
+    await cleanupBrowser(browser, 'finally block');
+    browser = null; // Clear reference
     
     const endTime = Date.now();
     const totalTime = Math.round((endTime - startTime) / 1000);

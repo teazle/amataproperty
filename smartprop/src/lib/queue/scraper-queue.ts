@@ -59,30 +59,30 @@ async function getConnectionString(): Promise<string> {
       
       // Use direct DB host connection to avoid pooler "Tenant or user not found" issues
       // Direct connection: postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
-      // Note: We resolve to IPv4 explicitly to avoid IPv6 connection issues on EC2
+      // Note: Direct connection may only have IPv6, so we try to resolve to IPv6 explicitly
       const dbHost = `db.${projectRef}.supabase.co`;
       
-      // Try to resolve to IPv4 address explicitly
+      // Try to resolve to IPv6 address explicitly (direct connection may only have IPv6)
       try {
         const addresses = await new Promise<string[]>((resolve, reject) => {
-          dns.resolve4(dbHost, (err, addresses) => {
+          dns.resolve6(dbHost, (err, addresses) => {
             if (err) reject(err);
             else resolve(addresses);
           });
         });
         
         if (addresses && addresses.length > 0) {
-          // Use IPv4 address directly
-          const ipv4Address = addresses[0];
-          const connectionString = `postgresql://postgres:${encodedPassword}@${ipv4Address}:5432/postgres?sslmode=require`;
-          console.log(`[pg-boss] Auto-constructed connection string using direct DB host (${dbHost} -> ${ipv4Address}:5432)`);
+          // Use IPv6 address directly (wrap in brackets for URL)
+          const ipv6Address = addresses[0];
+          const connectionString = `postgresql://postgres:${encodedPassword}@[${ipv6Address}]:5432/postgres?sslmode=require`;
+          console.log(`[pg-boss] Auto-constructed connection string using direct DB host (${dbHost} -> [${ipv6Address}]:5432)`);
           return connectionString;
         }
       } catch (err) {
-        console.warn(`[pg-boss] Could not resolve ${dbHost} to IPv4, falling back to hostname:`, err);
+        console.warn(`[pg-boss] Could not resolve ${dbHost} to IPv6, falling back to hostname:`, err);
       }
       
-      // Fallback to hostname (will use DNS resolution with ipv4first preference)
+      // Fallback to hostname (will use DNS resolution)
       const connectionString = `postgresql://postgres:${encodedPassword}@${dbHost}:5432/postgres?sslmode=require`;
       console.log(`[pg-boss] Auto-constructed connection string using direct DB host (${dbHost}:5432)`);
       return connectionString;

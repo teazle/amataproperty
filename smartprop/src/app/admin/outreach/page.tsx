@@ -603,7 +603,15 @@ export default function OutreachPage() {
         return;
       }
       
-      const outreachRecords = validListings.map(check => ({
+      // Limit the number of outreach records created to respect the outreachLimit setting
+      const limitedListings = validListings.slice(0, outreachLimit);
+      const skippedCount = validListings.length - limitedListings.length;
+      
+      if (skippedCount > 0) {
+        toast.info(`Limiting to ${outreachLimit} outreach records (${skippedCount} will be skipped). Adjust the limit and run again to process more.`);
+      }
+      
+      const outreachRecords = limitedListings.map(check => ({
         agent_id: check.listing.agents!.id,
         listing_id: check.listing.id,
         channel: 'whatsapp',
@@ -627,13 +635,16 @@ export default function OutreachPage() {
 
       console.log('Bulk outreach created successfully:', data);
       
-      // Automatically trigger outreach processing
+      // Automatically trigger outreach processing with the limit
       try {
         const response = await fetch('/api/outreach/process', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
+          body: JSON.stringify({
+            limit: outreachLimit
+          }),
         });
         
         if (response.ok) {

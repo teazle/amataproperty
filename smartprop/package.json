@@ -6,7 +6,7 @@
     "preinstall": "npx only-allow bun",
     "shadcn": "bunx shadcn@latest",
     "dev": "next dev --turbopack",
-    "build": "next build --turbopack",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "bun scripts/run-sql.ts migrations/001_init.sql",

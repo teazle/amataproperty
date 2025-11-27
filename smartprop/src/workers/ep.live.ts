@@ -565,7 +565,7 @@ async function scrapeEdgePropFinal() {
     }
   }
 
-  const page = await context.newPage();
+  let page = await context.newPage();
 
   try {
     // VERIFY LOGIN STATUS BEFORE SCRAPING
@@ -662,14 +662,67 @@ async function scrapeEdgePropFinal() {
           timeout: 120000 // 2 minute timeout
         });
         
-        // Reload storage state after re-auth
+        // CRITICAL: Reload storage state after re-auth by recreating the context
+        // Just adding cookies doesn't fully replace the session - we need a fresh context
         const freshStatePath = path.join(process.cwd(), 'storage', 'ep.state.json');
         if (fs.existsSync(freshStatePath)) {
-          const freshState = JSON.parse(fs.readFileSync(freshStatePath, 'utf-8'));
-          await context.addCookies(freshState.cookies || []);
-          console.log('   ✅ Re-authentication completed, cookies reloaded');
+          console.log('   🔄 Recreating browser context with fresh authentication state...');
           
-          // Verify login again after re-auth
+          // Close existing page and context
+          try {
+            await page.close();
+          } catch (e) {
+            // Ignore errors closing page
+          }
+          
+          try {
+            await context.close();
+          } catch (e) {
+            // Ignore errors closing context
+          }
+          
+          // Recreate context with fresh storage state
+          const freshContextOptions: BrowserContextOptions = {
+            userAgent: FLARESOLVERR_UA,
+            viewport: { width: 1920, height: 1080 },
+            locale: 'en-SG',
+            timezoneId: 'Asia/Singapore',
+            storageState: freshStatePath, // Use the fresh auth state
+            extraHTTPHeaders: {
+              'Accept-Language': 'en-SG,en;q=0.9',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+              'Accept-Encoding': 'gzip, deflate, br',
+              'DNT': '1',
+              'Connection': 'keep-alive',
+              'Upgrade-Insecure-Requests': '1',
+              'Sec-Fetch-Dest': 'document',
+              'Sec-Fetch-Mode': 'navigate',
+              'Sec-Fetch-Site': 'none',
+              'Sec-Fetch-User': '?1',
+              'Cache-Control': 'max-age=0',
+            },
+          };
+          
+          context = await browser.newContext(freshContextOptions);
+          
+          // Re-add init scripts to the new context
+          await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => undefined,
+            });
+            
+            // Fix __name error that EdgeProp's JavaScript expects
+            if (typeof (window as any).__name === 'undefined') {
+              (window as any).__name = function() { return ''; };
+            }
+          });
+          
+          // Create new page from fresh context
+          page = await context.newPage();
+          
+          console.log('   ✅ Browser context recreated with fresh authentication state');
+          
+          // Verify login again after re-auth with the new page
           await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
           await humanPause(2000, 3000);
           

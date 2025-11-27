@@ -140,7 +140,9 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
   });
 }
 
-async function handleScraperJob(job: Job<ScraperJobPayload>) {
+async function handleScraperJob(job: Job<ScraperJobPayload> | null) {
+  if (!job) return;
+  
   const payload = job.data;
 
   await updateJobStatus(payload.jobId, 'running');

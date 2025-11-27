@@ -187,21 +187,22 @@ export async function startScraperWorker(): Promise<void> {
   const boss: PgBoss = await getBoss();
   await ensureScraperQueues(boss);
 
-  // Process jobs one at a time (no batchSize to avoid callback issues)
+  // Process jobs one at a time
+  // pg-boss v12 requires the callback to be a function that handles the job
   const workId = await boss.work<ScraperJobPayload>(
     SCRAPER_QUEUE_NAME,
-    async (job) => {
-      if (!job) return;
-      await handleScraperJob(job);
-    }
+    handleScraperJob
   );
 
-  // DLQ tracker (receives single job)
-  await boss.work<ScraperJobPayload>(SCRAPER_DLQ_NAME, async (job) => {
-    if (!job) return;
-    const payload = job.data;
-    await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
-  });
+  // DLQ tracker
+  await boss.work<ScraperJobPayload>(
+    SCRAPER_DLQ_NAME,
+    async (job) => {
+      if (!job) return;
+      const payload = job.data;
+      await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
+    }
+  );
 
   const shutdown = async () => {
     try {

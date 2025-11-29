@@ -514,12 +514,12 @@ async function scrapeEdgePropFinal() {
     ]
   });
 
+  // Only set storageState if the file exists and is valid
   const contextOptions: BrowserContextOptions = {
     userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
-    storageState: stateFilePath, // Always use the fresh auth state
     // Enhanced HTTP headers matching Flaresolverr's browser
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
@@ -535,6 +535,23 @@ async function scrapeEdgePropFinal() {
       'Cache-Control': 'max-age=0',
     },
   };
+  
+  // Only add storageState if file exists and browser is ready
+  if (fs.existsSync(stateFilePath) && browser && !browser.isConnected() === false) {
+    try {
+      // Validate the state file before using it
+      const stateContent = fs.readFileSync(stateFilePath, 'utf-8');
+      const stateData = JSON.parse(stateContent);
+      if (stateData.cookies && Array.isArray(stateData.cookies) && stateData.cookies.length > 0) {
+        contextOptions.storageState = stateFilePath;
+        console.log(`📁 Using auth state file with ${stateData.cookies.length} cookies`);
+      } else {
+        console.log('⚠️  Auth state file invalid, will authenticate fresh');
+      }
+    } catch (e) {
+      console.log('⚠️  Could not validate auth state file, will authenticate fresh');
+    }
+  }
 
   context = await browser.newContext(contextOptions);
   

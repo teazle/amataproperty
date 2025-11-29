@@ -131,37 +131,75 @@ async function authenticatePropertyGuru() {
   console.log('📄 Navigated to PropertyGuru login page');
   
   // Wait for page to be interactive
-  await humanPause(2000, 3000);
+  await humanPause(3000, 5000);
   
   // Check for Cloudflare immediately after navigation
   const pageContent = await page.content().catch(() => '') || '';
   const pageText = await page.textContent('body').catch(() => '') || '';
+  const pageLength = pageText.length;
   
-  if (pageContent.includes('Just a moment...') || 
-      pageContent.includes('Pardon Our Interruption') ||
-      pageText.includes('Checking your browser') ||
-      pageText.includes('Just a moment')) {
+  console.log(`   📊 Page content length: ${pageLength}`);
+  
+  // Check for Cloudflare indicators
+  const cloudflareIndicators = [
+    'Just a moment...',
+    'Pardon Our Interruption',
+    'Checking your browser',
+    'Just a moment',
+    'challenge-platform',
+    'cf-browser-verification',
+    'cf-im-under-attack'
+  ];
+  
+  const hasCloudflare = cloudflareIndicators.some(indicator => 
+    pageContent.includes(indicator) || pageText.includes(indicator)
+  );
+  
+  if (hasCloudflare) {
     console.log('   🛡️  Cloudflare challenge detected after navigation!');
+    console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
     throw new Error('Cloudflare detected after navigation. Flaresolverr failed or page is still blocked.');
   }
   
-  // Wait for Cloudflare to auto-resolve (datacenter IPs need more time)
-  await humanPause(2000, 3000);
-  const hasLoginForm = await page.locator('input[type="email"], input[name="email"]').count().catch(() => 0) > 0;
-  const hasPropertyContent = pageText.length > 10000 || pageText.includes('Login') || pageText.includes('Sign in');
-  
-  if (!hasLoginForm && !hasPropertyContent) {
-    // Might be Cloudflare challenge - wait longer
-    console.log('⏳ Waiting for Cloudflare to resolve...');
-    await page.waitForTimeout(10000);
+  // Check if page is too small (likely blocked or not loaded)
+  if (pageLength < 5000) {
+    console.log(`   ⚠️  Page content is very small (${pageLength} chars) - likely blocked or not loaded`);
+    console.log(`   📄 Page content preview: ${pageText.substring(0, 500)}...`);
     
-    // Check again for Cloudflare
+    // Wait a bit longer and check again
+    await page.waitForTimeout(10000);
     const newPageContent = await page.content().catch(() => '') || '';
     const newPageText = await page.textContent('body').catch(() => '') || '';
-    if (newPageContent.includes('Just a moment...') || 
-        newPageContent.includes('Pardon Our Interruption') ||
-        newPageText.includes('Checking your browser')) {
+    const newPageLength = newPageText.length;
+    
+    console.log(`   📊 Page content length after wait: ${newPageLength}`);
+    
+    // Check for Cloudflare again
+    const stillHasCloudflare = cloudflareIndicators.some(indicator => 
+      newPageContent.includes(indicator) || newPageText.includes(indicator)
+    );
+    
+    if (stillHasCloudflare || newPageLength < 5000) {
+      console.log(`   🛡️  Cloudflare challenge still present or page still too small`);
       throw new Error('Cloudflare challenge still present after wait. Page is blocked.');
+    }
+  }
+  
+  // Check for login form
+  const hasLoginForm = await page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').count().catch(() => 0) > 0;
+  const hasPropertyContent = pageLength > 10000 || pageText.includes('Login') || pageText.includes('Sign in');
+  
+  if (!hasLoginForm && !hasPropertyContent) {
+    console.log('⏳ Login form not found, waiting for page to load...');
+    await page.waitForTimeout(10000);
+    
+    // Final check
+    const finalPageText = await page.textContent('body').catch(() => '') || '';
+    const finalHasLoginForm = await page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').count().catch(() => 0) > 0;
+    
+    if (!finalHasLoginForm && finalPageText.length < 5000) {
+      console.log(`   ⚠️  Still no login form and page is small (${finalPageText.length} chars)`);
+      throw new Error('Login form not found and page appears to be blocked or not loaded properly.');
     }
   }
 

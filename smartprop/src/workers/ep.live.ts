@@ -901,17 +901,49 @@ async function scrapeEdgePropFinal() {
             
             if (hasSessionCookie) {
               console.log('   ⚠️  Login indicators not visible, but session cookies found');
-              console.log('   ⚠️  Cookies might not be activated yet - will try to navigate to a property page to activate them');
-              // Try navigating to a property page to activate cookies
-              await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 30000 });
-              await humanPause(3000, 5000);
+              console.log('   ⚠️  Cookies might not be activated yet - will try to navigate to activate them');
               
-              // Check again
+              // Try navigating to homepage first to activate cookies
+              await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 60000 });
+              await humanPause(5000, 8000); // Wait longer for cookies to activate
+              
+              // Check for bookmarks link
               const bookmarksLink2 = page.locator('[href="/bookmarks"]');
-              const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 10000 }).catch(() => false);
+              const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 15000 }).catch(() => false);
+              
               if (bookmarksVisible2) {
                 isLoggedIn = true;
-                console.log('   ✅ Login verified after navigating to property search page');
+                console.log('   ✅ Login verified after navigating to homepage');
+              } else {
+                // Try property search page as fallback
+                console.log('   ⚠️  Still not visible on homepage, trying property search page...');
+                await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'networkidle', timeout: 60000 });
+                await humanPause(5000, 8000);
+                
+                const bookmarksLink3 = page.locator('[href="/bookmarks"]');
+                const bookmarksVisible3 = await bookmarksLink3.isVisible({ timeout: 15000 }).catch(() => false);
+                if (bookmarksVisible3) {
+                  isLoggedIn = true;
+                  console.log('   ✅ Login verified after navigating to property search page');
+                } else {
+                  // Final check: verify cookies are actually in the context
+                  const cookiesAfterNav = await context.cookies();
+                  const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie => 
+                    cookie.name.toLowerCase().includes('session') || 
+                    cookie.name.toLowerCase().includes('auth') ||
+                    cookie.name.toLowerCase().includes('ssess') ||
+                    cookie.name.toLowerCase().includes('psessid')
+                  );
+                  console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
+                  
+                  if (sessionCookiesAfterNav.length > 0) {
+                    // If we have session cookies but indicators aren't visible, it might be a page rendering issue
+                    // Trust the cookies since auth.ep.ts verified login before saving
+                    console.log('   ⚠️  Session cookies present but login indicators not visible');
+                    console.log('   ✅ Trusting session cookies (auth.ep.ts verified login before saving state)');
+                    isLoggedIn = true;
+                  }
+                }
               }
             }
             

@@ -168,6 +168,18 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null) {
   }
   
   const payload = job.data;
+  
+  // Validate payload structure
+  if (!payload) {
+    console.error('[ScraperWorker] Job has no data payload:', job);
+    throw new Error('Job payload is missing');
+  }
+  
+  if (!payload.jobId) {
+    console.error('[ScraperWorker] Job payload missing jobId:', payload);
+    throw new Error('Job payload missing jobId');
+  }
+  
   console.log(`[ScraperWorker] Processing job ${payload.jobId} for ${payload.platform}`);
 
   try {

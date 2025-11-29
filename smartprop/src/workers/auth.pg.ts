@@ -162,7 +162,8 @@ async function authenticatePropertyGuru() {
   }
   
   // Check if page is too small (likely blocked or not loaded)
-  if (pageLength < 5000) {
+  // Normal PropertyGuru login pages are 15k+ characters. Pages under 10k are likely blocked.
+  if (pageLength < 10000) {
     console.log(`   ⚠️  Page content is very small (${pageLength} chars) - likely blocked or not loaded`);
     console.log(`   📄 Page content preview: ${pageText.substring(0, 500)}...`);
     
@@ -179,7 +180,7 @@ async function authenticatePropertyGuru() {
       newPageContent.includes(indicator) || newPageText.includes(indicator)
     );
     
-    if (stillHasCloudflare || newPageLength < 5000) {
+    if (stillHasCloudflare || newPageLength < 10000) {
       console.log(`   🛡️  Cloudflare challenge still present or page still too small`);
       throw new Error('Cloudflare challenge still present after wait. Page is blocked.');
     }
@@ -197,7 +198,7 @@ async function authenticatePropertyGuru() {
     const finalPageText = await page.textContent('body').catch(() => '') || '';
     const finalHasLoginForm = await page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').count().catch(() => 0) > 0;
     
-    if (!finalHasLoginForm && finalPageText.length < 5000) {
+    if (!finalHasLoginForm && finalPageText.length < 10000) {
       console.log(`   ⚠️  Still no login form and page is small (${finalPageText.length} chars)`);
       throw new Error('Login form not found and page appears to be blocked or not loaded properly.');
     }

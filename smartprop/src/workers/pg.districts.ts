@@ -23,6 +23,7 @@ import { chromium, type Page, type BrowserContextOptions, type Browser, type Bro
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { CHROME_UA, humanPause } from './stealth.js';
 import { upsertAgentAndListing } from './upsert.js';
 import { execSync, exec } from 'child_process';
@@ -37,24 +38,34 @@ import {
 // Helper function to re-authenticate if needed
 async function reAuthenticate() {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
+  const runtimeCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bun-transpile-'));
+  const env = {
+    ...process.env,
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeCacheDir, // force Bun to compile fresh code
+    BUN_INSTALL_CACHE_DIR: '/dev/null' // disable install cache just in case
+  };
+
   try {
-    // Use xvfb-run for headless environments (EC2)
-    // Force Bun to not use cache by clearing cache and touching the file to invalidate cache
+    console.log(`   ♻️  Using fresh Bun transpiler cache at ${runtimeCacheDir}`);
     // Clear any potential cache first, then touch the file to force recompilation
-    // Use BUN_INSTALL_CACHE_DIR=/dev/null to disable cache completely
-    // Also clear Bun's internal cache by removing .bun directory
-    execSync('rm -rf .bun node_modules/.cache 2>/dev/null; touch src/workers/auth.pg.ts; true', { cwd: process.cwd() });
-    // Use bun run instead of bun directly to force recompilation
-    execSync('BUN_INSTALL_CACHE_DIR=/dev/null xvfb-run -a bun --bun --no-install-cache run src/workers/auth.pg.ts', { 
+    execSync('rm -rf .bun node_modules/.cache 2>/dev/null; touch src/workers/auth.pg.ts; true', { 
+      cwd: process.cwd(),
+      env
+    });
+    // Use bun run instead of bun directly to force recompilation, pinned to the fresh transpiler cache
+    execSync('xvfb-run -a bun --bun --no-install-cache run src/workers/auth.pg.ts', { 
       cwd: process.cwd(),
       stdio: 'inherit',
-      timeout: 600000 // 10 minutes timeout for re-authentication
+      timeout: 600000, // 10 minutes timeout for re-authentication
+      env
     });
     console.log('✅ Re-authentication complete!\n');
     return true;
   } catch (_error) {
     console.error('❌ Re-authentication failed:', _error);
     return false;
+  } finally {
+    fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
   }
 }
 
@@ -1610,4 +1621,3 @@ async function scrapePropertyGuruByDistrict() {
 
 // The function now handles all errors internally with try-catch-finally
 scrapePropertyGuruByDistrict();
-

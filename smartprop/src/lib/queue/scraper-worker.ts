@@ -124,7 +124,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
 
     console.log(`[ScraperWorker] Spawning scraper process: ${command} ${args.join(' ')}`);
     console.log(`[ScraperWorker] Log file: ${logFile}`);
-    
+
     const child = spawn(command, args, {
       cwd,
       env,
@@ -178,7 +178,7 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
   }
   
   const payload = job.data;
-  
+
   // Validate payload structure
   if (!payload) {
     console.error('[ScraperWorker] Job has no data payload:', JSON.stringify(job, null, 2));
@@ -193,7 +193,7 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
   console.log(`[ScraperWorker] Processing job ${payload.jobId} for ${payload.platform}`);
 
   try {
-    await updateJobStatus(payload.jobId, 'running');
+  await updateJobStatus(payload.jobId, 'running');
     console.log(`[ScraperWorker] Updated job ${payload.jobId} to running status`);
   } catch (error) {
     console.error(`[ScraperWorker] Failed to update job status to running:`, error);
@@ -215,7 +215,7 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
       console.error(`[ScraperWorker] Stack trace:`, error.stack);
     }
     try {
-      await updateJobStatus(payload.jobId, 'failed', message);
+    await updateJobStatus(payload.jobId, 'failed', message);
     } catch (updateError) {
       console.error(`[ScraperWorker] Failed to update job status to failed:`, updateError);
     }
@@ -259,39 +259,39 @@ export async function startScraperWorker(): Promise<void> {
     try {
       console.log(`[ScraperWorker] Attempting to start worker (attempt ${retries + 1}/${maxRetries})...`);
       
-      const boss: PgBoss = await getBoss();
-      await ensureScraperQueues(boss);
+  const boss: PgBoss = await getBoss();
+  await ensureScraperQueues(boss);
 
-      // Process jobs one at a time
-      // pg-boss v12 requires the callback to be a function that handles the job
-      const workId = await boss.work<ScraperJobPayload>(
-        SCRAPER_QUEUE_NAME,
-        handleScraperJob
-      );
+  // Process jobs one at a time
+  // pg-boss v12 requires the callback to be a function that handles the job
+  const workId = await boss.work<ScraperJobPayload>(
+    SCRAPER_QUEUE_NAME,
+    handleScraperJob
+  );
 
-      // DLQ tracker
-      await boss.work<ScraperJobPayload>(
-        SCRAPER_DLQ_NAME,
-        async (job) => {
-          if (!job) return;
-          const payload = job.data;
-          await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
-        }
-      );
+  // DLQ tracker
+  await boss.work<ScraperJobPayload>(
+    SCRAPER_DLQ_NAME,
+    async (job) => {
+      if (!job) return;
+      const payload = job.data;
+      await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
+    }
+  );
 
-      const shutdown = async () => {
-        try {
-          await boss.offWork(workId, { wait: true });
-        } catch (error) {
-          console.warn('[ScraperWorker] Error stopping worker', error);
-        } finally {
-          await stopBoss({ graceful: true, timeout: 10000 });
-          process.exit(0);
-        }
-      };
+  const shutdown = async () => {
+    try {
+      await boss.offWork(workId, { wait: true });
+    } catch (error) {
+      console.warn('[ScraperWorker] Error stopping worker', error);
+    } finally {
+      await stopBoss({ graceful: true, timeout: 10000 });
+      process.exit(0);
+    }
+  };
 
-      process.once('SIGTERM', shutdown);
-      process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 
       console.log('[ScraperWorker] ✅ Started scraper worker successfully');
       
@@ -344,7 +344,7 @@ if (import.meta.url === `file://${path.join(process.cwd(), 'src/lib/queue/scrape
     
     // Wait a bit before exiting to allow logs to flush
     setTimeout(() => {
-      process.exit(1);
+    process.exit(1);
     }, 1000);
   });
 }

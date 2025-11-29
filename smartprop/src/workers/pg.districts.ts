@@ -716,12 +716,11 @@ async function scrapePropertyGuruByDistrict() {
     ]
   });
 
-  // Match Flaresolverr's user-agent exactly for cookie compatibility
-  // Flaresolverr uses: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36
-  const FLARESOLVERR_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
+  // Don't set userAgent explicitly - let playwright-ghost handle it for better stealth
+  // This matches the approach in auth.pg.ts for cookie compatibility
   
   const contextOptions: BrowserContextOptions = {
-    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
+    // userAgent: removed - let playwright-ghost handle it
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',

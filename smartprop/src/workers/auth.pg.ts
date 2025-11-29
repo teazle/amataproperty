@@ -64,7 +64,7 @@ async function authenticatePropertyGuru() {
   });
 
   const context = await browser.newContext({
-    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
+    // Don't set userAgent explicitly - let playwright-ghost handle it for better stealth
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -130,31 +130,56 @@ async function authenticatePropertyGuru() {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
   console.log('📄 Navigated to PropertyGuru login page');
   
-  // Wait for Cloudflare to auto-resolve (datacenter IPs need more time)
-  await humanPause(3000, 5000);
+  // Wait for page to be interactive
+  await humanPause(2000, 3000);
+  
+  // Check for Cloudflare immediately after navigation
+  const pageContent = await page.content().catch(() => '') || '';
   const pageText = await page.textContent('body').catch(() => '') || '';
+  
+  if (pageContent.includes('Just a moment...') || 
+      pageContent.includes('Pardon Our Interruption') ||
+      pageText.includes('Checking your browser') ||
+      pageText.includes('Just a moment')) {
+    console.log('   🛡️  Cloudflare challenge detected after navigation!');
+    throw new Error('Cloudflare detected after navigation. Flaresolverr failed or page is still blocked.');
+  }
+  
+  // Wait for Cloudflare to auto-resolve (datacenter IPs need more time)
+  await humanPause(2000, 3000);
   const hasLoginForm = await page.locator('input[type="email"], input[name="email"]').count().catch(() => 0) > 0;
   const hasPropertyContent = pageText.length > 10000 || pageText.includes('Login') || pageText.includes('Sign in');
   
   if (!hasLoginForm && !hasPropertyContent) {
     // Might be Cloudflare challenge - wait longer
     console.log('⏳ Waiting for Cloudflare to resolve...');
-    await page.waitForTimeout(15000);
+    await page.waitForTimeout(10000);
+    
+    // Check again for Cloudflare
+    const newPageContent = await page.content().catch(() => '') || '';
+    const newPageText = await page.textContent('body').catch(() => '') || '';
+    if (newPageContent.includes('Just a moment...') || 
+        newPageContent.includes('Pardon Our Interruption') ||
+        newPageText.includes('Checking your browser')) {
+      throw new Error('Cloudflare challenge still present after wait. Page is blocked.');
+    }
   }
 
   if (isAutomated) {
     console.log('\n🤖 Performing automated login...');
     
-    // Wait for login form to load and check for Cloudflare
-    await page.waitForTimeout(3000);
+    // Wait for login form to load
+    await humanPause(2000, 3000);
     
-    // Check if page is blocked by Cloudflare
-    const pageText = await page.textContent('body').catch(() => '') || '';
-    if (pageText.includes('Pardon Our Interruption') || 
-        pageText.includes('Checking your browser') ||
-        pageText.includes('Just a moment')) {
-      console.log('   🛡️  Cloudflare challenge detected, waiting longer...');
-      await page.waitForTimeout(15000); // Wait 15 seconds for Cloudflare
+    // Final Cloudflare check before attempting login
+    const finalPageContent = await page.content().catch(() => '') || '';
+    const finalPageText = await page.textContent('body').catch(() => '') || '';
+    if (finalPageContent.includes('Just a moment...') || 
+        finalPageContent.includes('Pardon Our Interruption') ||
+        finalPageText.includes('Checking your browser') ||
+        finalPageText.includes('Just a moment')) {
+      console.log('   🛡️  Cloudflare challenge detected before login!');
+      throw new Error('Cloudflare challenge detected - page not loading properly');
     }
     
     // Step 1: Fill in email with human-like typing

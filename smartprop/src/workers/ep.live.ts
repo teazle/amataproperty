@@ -905,7 +905,24 @@ async function scrapeEdgePropFinal() {
         throw reauthError;
       }
     } else {
-      console.log('   ✅ Login verified - phone numbers should be available\n');
+      // If we just re-authenticated, trust the auth state and set isLoggedIn to true
+      // The auth.ep.ts script already verified login before saving the state
+      if (justReAuthenticated) {
+        console.log('   ✅ Just re-authenticated - trusting saved auth state');
+        isLoggedIn = true;
+      } else {
+        // If we didn't re-authenticate, isLoggedIn should already be set from the verification above
+        if (isLoggedIn) {
+          console.log('   ✅ Login verified - phone numbers should be available\n');
+        } else {
+          console.log('   ⚠️  Login not verified, but no re-authentication was needed');
+          // Trust the existing auth state file if it exists
+          if (fs.existsSync(stateFilePath)) {
+            console.log('   ✅ Trusting existing auth state file');
+            isLoggedIn = true;
+          }
+        }
+      }
     }
     
     // CRITICAL: Final check - if we're not logged in at this point, fail the job

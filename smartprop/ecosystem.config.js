@@ -29,6 +29,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
       },
+      // Note: Environment variables are loaded from .env.local by the worker code itself
       error_file: '/opt/smartprop/logs/scraper-worker-error.log',
       out_file: '/opt/smartprop/logs/scraper-worker-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
@@ -36,6 +37,10 @@ module.exports = {
       autorestart: true,
       max_memory_restart: '2G',
       watch: false,
+      // Add restart delay to prevent rapid restart loops
+      min_uptime: '10s',
+      max_restarts: 10,
+      restart_delay: 5000,
     },
   ],
 };

@@ -1,3 +1,4 @@
+import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { PgBoss, type Job } from 'pg-boss';
 import { spawn } from 'child_process';
@@ -10,11 +11,19 @@ import {
 } from './queue-types';
 import { ensureScraperQueues, getBoss, stopBoss } from './scraper-queue';
 
+// Load environment variables explicitly (needed when running as standalone process)
+// This ensures env vars are available even when not running through Next.js
+config({ path: path.resolve(process.cwd(), '.env.local') });
+config({ path: path.resolve(process.cwd(), '.env') });
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE;
 
 if (!supabaseUrl || !supabaseServiceRole) {
-  throw new Error('Missing Supabase environment variables for scraper worker');
+  const missing = [];
+  if (!supabaseUrl) missing.push('NEXT_PUBLIC_SUPABASE_URL');
+  if (!supabaseServiceRole) missing.push('SUPABASE_SERVICE_ROLE');
+  throw new Error(`Missing Supabase environment variables for scraper worker: ${missing.join(', ')}`);
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceRole, {
@@ -186,47 +195,100 @@ function startHeartbeat(jobId: string) {
 }
 
 export async function startScraperWorker(): Promise<void> {
-  const boss: PgBoss = await getBoss();
-  await ensureScraperQueues(boss);
+  const maxRetries = 5;
+  const retryDelay = 5000; // 5 seconds
+  let retries = 0;
 
-  // Process jobs one at a time
-  // pg-boss v12 requires the callback to be a function that handles the job
-  const workId = await boss.work<ScraperJobPayload>(
-    SCRAPER_QUEUE_NAME,
-    handleScraperJob
-  );
-
-  // DLQ tracker
-  await boss.work<ScraperJobPayload>(
-    SCRAPER_DLQ_NAME,
-    async (job) => {
-      if (!job) return;
-      const payload = job.data;
-      await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
-    }
-  );
-
-  const shutdown = async () => {
+  while (retries < maxRetries) {
     try {
-      await boss.offWork(workId, { wait: true });
+      console.log(`[ScraperWorker] Attempting to start worker (attempt ${retries + 1}/${maxRetries})...`);
+      
+      const boss: PgBoss = await getBoss();
+      await ensureScraperQueues(boss);
+
+      // Process jobs one at a time
+      // pg-boss v12 requires the callback to be a function that handles the job
+      const workId = await boss.work<ScraperJobPayload>(
+        SCRAPER_QUEUE_NAME,
+        handleScraperJob
+      );
+
+      // DLQ tracker
+      await boss.work<ScraperJobPayload>(
+        SCRAPER_DLQ_NAME,
+        async (job) => {
+          if (!job) return;
+          const payload = job.data;
+          await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
+        }
+      );
+
+      const shutdown = async () => {
+        try {
+          await boss.offWork(workId, { wait: true });
+        } catch (error) {
+          console.warn('[ScraperWorker] Error stopping worker', error);
+        } finally {
+          await stopBoss({ graceful: true, timeout: 10000 });
+          process.exit(0);
+        }
+      };
+
+      process.once('SIGTERM', shutdown);
+      process.once('SIGINT', shutdown);
+
+      console.log('[ScraperWorker] ✅ Started scraper worker successfully');
+      
+      // Set up error handlers for the boss instance
+      boss.on('error', (error) => {
+        console.error('[ScraperWorker] pg-boss error:', error);
+        // Don't exit on error, let it retry
+      });
+
+      boss.on('warning', (warning) => {
+        console.warn('[ScraperWorker] pg-boss warning:', warning);
+      });
+
+      // Success - break out of retry loop
+      return;
     } catch (error) {
-      console.warn('[ScraperWorker] Error stopping worker', error);
-    } finally {
-      await stopBoss({ graceful: true, timeout: 10000 });
-      process.exit(0);
+      retries++;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[ScraperWorker] ❌ Failed to start worker (attempt ${retries}/${maxRetries}):`, errorMessage);
+      
+      if (retries >= maxRetries) {
+        console.error('[ScraperWorker] ❌ Max retries reached. Exiting...');
+        throw new Error(`Failed to start scraper worker after ${maxRetries} attempts: ${errorMessage}`);
+      }
+      
+      console.log(`[ScraperWorker] ⏳ Retrying in ${retryDelay / 1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
-  };
-
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
-
-  console.log('[ScraperWorker] Started scraper worker');
+  }
 }
 
 // Allow running directly with `bun src/lib/queue/scraper-worker.ts`
 if (import.meta.url === `file://${path.join(process.cwd(), 'src/lib/queue/scraper-worker.ts')}`) {
+  // Add unhandled error handlers
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[ScraperWorker] Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit - let PM2 handle restarts
+  });
+
+  process.on('uncaughtException', (error) => {
+    console.error('[ScraperWorker] Uncaught Exception:', error);
+    // Don't exit immediately - let PM2 handle restarts
+    // But log the error for debugging
+  });
+
   startScraperWorker().catch((error) => {
-    console.error('[ScraperWorker] Failed to start worker', error);
-    process.exit(1);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[ScraperWorker] ❌ Failed to start worker:', errorMessage);
+    console.error('[ScraperWorker] Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
+    
+    // Wait a bit before exiting to allow logs to flush
+    setTimeout(() => {
+      process.exit(1);
+    }, 1000);
   });
 }

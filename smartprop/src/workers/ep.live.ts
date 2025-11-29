@@ -842,6 +842,14 @@ async function scrapeEdgePropFinal() {
       console.log('   ✅ Login verified - phone numbers should be available\n');
     }
     
+    // CRITICAL: Final check - if we're not logged in at this point, fail the job
+    // Phone numbers are required and only available when logged in
+    if (!isLoggedIn) {
+      console.error('❌ CRITICAL: Not logged in after all authentication attempts!');
+      console.error('❌ Cannot proceed - phone numbers are required and only available when logged in');
+      throw new Error('Login verification failed - cannot proceed without authentication');
+    }
+    
     // CRITICAL: If we're not logged in at this point, fail the job
     // Phone numbers are required and only available when logged in
     if (!isLoggedIn) {

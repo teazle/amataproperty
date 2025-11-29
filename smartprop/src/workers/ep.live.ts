@@ -668,17 +668,84 @@ async function scrapeEdgePropFinal() {
         if (fs.existsSync(freshStatePath)) {
           console.log('   🔄 Recreating browser context with fresh authentication state...');
           
-          // Close existing page and context
+          // Close existing page and context safely
           try {
-            await page.close();
+            if (page && !page.isClosed()) {
+              await page.close().catch(() => {});
+            }
           } catch (e) {
             // Ignore errors closing page
           }
           
           try {
-            await context.close();
+            // Check if browser is still connected before closing context
+            const browserStillConnected = browser && !browser.isConnected() === false;
+            
+            if (context) {
+              await context.close().catch(() => {});
+            }
+            
+            // If browser is not connected, recreate it
+            if (!browserStillConnected || !browser) {
+              try {
+                if (browser) {
+                  await browser.close().catch(() => {});
+                }
+              } catch (e) {
+                // Browser already closed
+              }
+              
+              browser = await chromium.launch({
+                headless: true,
+                plugins: plugins.recommended({
+                  humanize: {
+                    click: { delay: { min: 200, max: 600 } },
+                    cursor: false,
+                    dialog: { delay: { min: 800, max: 2000 } }
+                  }
+                }),
+                args: [
+                  '--disable-blink-features=AutomationControlled',
+                  '--disable-dev-shm-usage',
+                  '--no-sandbox',
+                  '--disable-setuid-sandbox',
+                  '--disable-web-security',
+                  '--disable-features=IsolateOrigins,site-per-process',
+                  '--disable-site-isolation-trials',
+                  '--disable-gpu',
+                ]
+              });
+            }
           } catch (e) {
-            // Ignore errors closing context
+            // If context close fails, browser might be closed - recreate browser
+            console.log(`   ⚠️  Error closing context, recreating browser: ${e}`);
+            try {
+              if (browser) {
+                await browser.close().catch(() => {});
+              }
+            } catch (e2) {
+              // Browser already closed
+            }
+            browser = await chromium.launch({
+              headless: true,
+              plugins: plugins.recommended({
+                humanize: {
+                  click: { delay: { min: 200, max: 600 } },
+                  cursor: false,
+                  dialog: { delay: { min: 800, max: 2000 } }
+                }
+              }),
+              args: [
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials',
+                '--disable-gpu',
+              ]
+            });
           }
           
           // Recreate context with fresh storage state

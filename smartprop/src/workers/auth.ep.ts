@@ -131,23 +131,36 @@ async function authenticateEdgeProp() {
     // Navigate to EdgeProp homepage
     console.log('📄 Navigating to EdgeProp homepage...');
     try {
-      await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      
+      // Check if page is blocked by Cloudflare
+      await humanPause(2000, 3000);
+      const pageText = await page.textContent('body').catch(() => '');
+      const isCloudflareBlocked = pageText.includes('Pardon Our Interruption') || 
+                                   pageText.includes('Verify you are human') ||
+                                   pageText.includes('challenge-platform') ||
+                                   pageText.includes('cf-browser-verification');
+      
+      if (isCloudflareBlocked) {
+        console.log('⚠️  Page is still blocked by Cloudflare after navigation');
+        console.log('   Will try to find Login button anyway (might work with existing cookies)...');
+      }
       
       // Wait for page to be interactive - check for body or main content
       await Promise.race([
-        page.waitForSelector('body', { state: 'visible', timeout: 10000 }).catch(() => null),
-        page.waitForSelector('main, [role="main"], header', { timeout: 10000 }).catch(() => null),
-        new Promise(resolve => setTimeout(resolve, 5000)) // Fallback timeout
+        page.waitForSelector('body', { state: 'visible', timeout: 5000 }).catch(() => null),
+        page.waitForSelector('main, [role="main"], header', { timeout: 5000 }).catch(() => null),
+        new Promise(resolve => setTimeout(resolve, 3000)) // Reduced fallback timeout
       ]);
       
-      await humanPause(2000, 3000);
+      await humanPause(1000, 2000); // Reduced pause
     } catch (error) {
       console.error(`⚠️  Navigation timeout, but continuing... Error: ${error instanceof Error ? error.message : String(error)}`);
       // Try to check if page loaded anyway
       const currentUrl = page.url();
       if (currentUrl.includes('edgeprop.sg')) {
         console.log('✅ Page appears to have loaded (URL check passed)');
-        await humanPause(2000, 3000);
+        await humanPause(1000, 2000);
       } else {
         throw error;
       }

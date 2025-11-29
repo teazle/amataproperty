@@ -99,6 +99,7 @@ async function authenticatePropertyGuru() {
 
   const loginUrl = 'https://www.propertyguru.com.sg/login';
   
+  let flaresolverrSucceeded = false;
   try {
     // Use Flaresolverr to solve Cloudflare before navigating
     // Use useSession: false to prevent Chrome connection issues and OOM kills
@@ -106,6 +107,7 @@ async function authenticatePropertyGuru() {
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult);
+      flaresolverrSucceeded = true;
       
       // Save Cloudflare cookies immediately (will be overwritten with full auth state after login)
       const storagePath = path.join(process.cwd(), 'storage');
@@ -121,9 +123,11 @@ async function authenticatePropertyGuru() {
       }
       
       await humanPause(500, 1000);
+    } else {
+      console.log('   ⚠️  Flaresolverr returned no cookies - page may be blocked');
     }
   } catch (error) {
-    console.log('   ⚠️  Flaresolverr failed, continuing without it...');
+    console.log('   ⚠️  Flaresolverr failed, will check if page is blocked after navigation...');
   }
 
   // Navigate to PropertyGuru login page
@@ -139,6 +143,12 @@ async function authenticatePropertyGuru() {
   const pageLength = pageText.length;
   
   console.log(`   📊 Page content length: ${pageLength}`);
+  
+  // CRITICAL: If Flaresolverr failed AND page is blocked, fail immediately
+  if (!flaresolverrSucceeded && pageLength < 10000) {
+    console.log(`   🛡️  Flaresolverr failed AND page is blocked (${pageLength} chars) - cannot proceed`);
+    throw new Error(`Flaresolverr failed and page is blocked (${pageLength} chars). Cannot proceed without Cloudflare bypass.`);
+  }
   
   // Check for Cloudflare indicators
   const cloudflareIndicators = [

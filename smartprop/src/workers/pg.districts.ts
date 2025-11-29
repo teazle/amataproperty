@@ -39,9 +39,11 @@ async function reAuthenticate() {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
   try {
     // Use xvfb-run for headless environments (EC2)
-    execSync('xvfb-run -a bun src/workers/auth.pg.ts', { 
+    // Force Bun to not use cache by adding --no-cache flag
+    execSync('xvfb-run -a bun --no-cache src/workers/auth.pg.ts', { 
       cwd: process.cwd(),
-      stdio: 'inherit' 
+      stdio: 'inherit',
+      timeout: 600000 // 10 minutes timeout for re-authentication
     });
     console.log('✅ Re-authentication complete!\n');
     return true;

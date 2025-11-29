@@ -968,11 +968,41 @@ async function scrapeEdgePropFinal() {
         throw reauthError;
       }
     } else {
-      // If we just re-authenticated, trust the auth state and set isLoggedIn to true
-      // The auth.ep.ts script already verified login before saving the state
+      // If we just re-authenticated, we still need to verify login works in the browser context
+      // The auth.ep.ts script verified login, but we need to ensure the browser context is actually logged in
       if (justReAuthenticated) {
-        console.log('   ✅ Just re-authenticated - trusting saved auth state');
-        isLoggedIn = true;
+        console.log('   ✅ Just re-authenticated - verifying login in browser context...');
+        
+        // Navigate to homepage to activate cookies
+        await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 60000 });
+        await humanPause(5000, 8000);
+        
+        // Check for bookmarks link
+        const bookmarksLink = page.locator('[href="/bookmarks"]');
+        const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 15000 }).catch(() => false);
+        
+        if (bookmarksVisible) {
+          isLoggedIn = true;
+          console.log('   ✅ Login verified in browser context after early re-authentication');
+        } else {
+          // Check for session cookies
+          const cookies = await context.cookies();
+          const sessionCookies = cookies.filter(cookie => 
+            cookie.name.toLowerCase().includes('session') || 
+            cookie.name.toLowerCase().includes('auth') ||
+            cookie.name.toLowerCase().includes('ssess') ||
+            cookie.name.toLowerCase().includes('psessid')
+          );
+          
+          if (sessionCookies.length > 0) {
+            console.log(`   ⚠️  Login indicators not visible, but ${sessionCookies.length} session cookies found`);
+            console.log('   ✅ Trusting session cookies (auth.ep.ts verified login before saving state)');
+            isLoggedIn = true;
+          } else {
+            console.error('   ❌ No session cookies found after re-authentication!');
+            throw new Error('Login verification failed - no session cookies in browser context');
+          }
+        }
       } else {
         // If we didn't re-authenticate, isLoggedIn should already be set from the verification above
         if (isLoggedIn) {

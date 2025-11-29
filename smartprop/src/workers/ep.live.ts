@@ -707,7 +707,7 @@ async function scrapeEdgePropFinal() {
         execSync(authCommand, { 
           cwd: process.cwd(),
           stdio: 'inherit',
-          timeout: 300000 // 5 minute timeout (login can take time with Cloudflare)
+          timeout: 600000 // 10 minute timeout (login with Cloudflare can take 5-8 minutes)
         });
         
         // CRITICAL: Reload storage state after re-auth by recreating the context

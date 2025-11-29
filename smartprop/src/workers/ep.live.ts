@@ -985,22 +985,23 @@ async function scrapeEdgePropFinal() {
           isLoggedIn = true;
           console.log('   ✅ Login verified in browser context after early re-authentication');
         } else {
-          // Check for session cookies
-          const cookies = await context.cookies();
-          const sessionCookies = cookies.filter(cookie => 
-            cookie.name.toLowerCase().includes('session') || 
-            cookie.name.toLowerCase().includes('auth') ||
-            cookie.name.toLowerCase().includes('ssess') ||
-            cookie.name.toLowerCase().includes('psessid')
-          );
+          // Try property search page as fallback
+          console.log('   ⚠️  Bookmarks not visible on homepage, trying property search page...');
+          await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'networkidle', timeout: 60000 });
+          await humanPause(5000, 8000);
           
-          if (sessionCookies.length > 0) {
-            console.log(`   ⚠️  Login indicators not visible, but ${sessionCookies.length} session cookies found`);
-            console.log('   ✅ Trusting session cookies (auth.ep.ts verified login before saving state)');
+          const bookmarksLink2 = page.locator('[href="/bookmarks"]');
+          const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 15000 }).catch(() => false);
+          
+          if (bookmarksVisible2) {
             isLoggedIn = true;
+            console.log('   ✅ Login verified after navigating to property search page');
           } else {
-            console.error('   ❌ No session cookies found after re-authentication!');
-            throw new Error('Login verification failed - no session cookies in browser context');
+            // CRITICAL: If login indicators aren't visible, we're not logged in
+            // Even if we have session cookies, they might not be valid or activated
+            console.error('   ❌ Login indicators not visible after re-authentication!');
+            console.error('   ❌ Browser context is not logged in, even though auth state was saved');
+            throw new Error('Login verification failed - browser context not logged in after re-authentication');
           }
         }
       } else {

@@ -1502,6 +1502,30 @@ function detectMessageType(text: string): 'birthday' | 'work_anniversary' | 'job
 }
 
 /**
+ * Extract first name from full name, handling various formats
+ */
+function extractFirstName(fullName: string): string {
+  if (!fullName || fullName.trim() === '') return '';
+  
+  // Remove parenthetical nicknames: "Angela (Yusi) Liu" → "Angela Liu"
+  let cleaned = fullName.replace(/\([^)]*\)/g, '').trim();
+  
+  // Remove common titles
+  cleaned = cleaned.replace(/^(Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.|Professor)\s+/i, '');
+  
+  // Split on spaces and take first part
+  const parts = cleaned.split(/\s+/);
+  
+  // Handle hyphenated first names like "Mary-Jane"
+  if (parts[0] && parts[0].includes('-')) {
+    return parts[0];
+  }
+  
+  // Return first part, or empty string if none
+  return parts[0] || '';
+}
+
+/**
  * Scroll to load all contacts using infinite scroll
  * CRITICAL: Don't scroll up while loading
  */
@@ -1666,6 +1690,17 @@ async function extractContacts(page: Page, maxContacts: number = 50): Promise<Co
   }
 
   console.log('🔍 Extracting contacts from catch-up tab...');
+  
+  // Add diagnostic info about current page state
+  try {
+    const currentUrl = page.url();
+    const pageTitle = await page.title().catch(() => 'unknown');
+    console.log(`   📍 Current URL: ${currentUrl}`);
+    console.log(`   📄 Page title: ${pageTitle.substring(0, 60)}${pageTitle.length > 60 ? '...' : ''}`);
+  } catch (diagError) {
+    // Ignore diagnostic errors
+  }
+  
   const messageComposeLinks = page.locator('a[href*="/messaging/compose/"]');
   const messageLinkCount = await messageComposeLinks.count().catch(() => 0);
 
@@ -1673,6 +1708,14 @@ async function extractContacts(page: Page, maxContacts: number = 50): Promise<Co
 
   if (messageLinkCount === 0) {
     console.warn('   ⚠️  No message compose links found');
+    // Additional diagnostic: check if page structure is correct
+    try {
+      const mainExists = await page.locator('main').count().catch(() => 0);
+      const catchUpContainer = await page.locator('[data-automation="catch-up-list"], [data-test-list="catch-up"]').count().catch(() => 0);
+      console.log(`   🔍 Diagnostic: Main container=${mainExists > 0 ? '✅' : '❌'}, Catch-up container=${catchUpContainer > 0 ? '✅' : '❌'}`);
+    } catch (diagError) {
+      // Ignore diagnostic errors
+    }
     return contacts;
   }
 
@@ -1797,29 +1840,41 @@ async function extractContacts(page: Page, maxContacts: number = 50): Promise<Co
 }
 
 /**
- * Enhance LinkedIn's pre-filled message with profile and company links
+ * Enhance LinkedIn's pre-filled message with greeting, profile and company links
  */
 function enhanceMessage(
   originalTemplate: string,
   profileUrl: string,
   companyUrl: string,
   profileTemplate: string,
-  companyTemplate: string
+  companyTemplate: string,
+  firstName: string = ''
 ): string {
-  // Include LinkedIn's original template (like "Congrats on...") and append our links
-  let enhanced = originalTemplate.trim();
+  // Start with greeting if firstName is provided
+  let enhanced = '';
+  if (firstName && firstName.trim()) {
+    enhanced = `Dear ${firstName.trim()},\n\n`;
+  }
+  
+  // Include LinkedIn's original template (like "Congrats on...")
+  enhanced += originalTemplate.trim();
   
   // Replace placeholders in templates
   const profileText = profileTemplate.replace('{profile_url}', profileUrl);
   const companyText = companyTemplate.replace('{company_url}', companyUrl);
   
   // Append our custom links after LinkedIn's template
-  if (enhanced) {
+  if (profileText || companyText) {
     enhanced += '\n\n';
   }
-  enhanced += profileText;
+  if (profileText) {
+    enhanced += profileText;
+  }
   if (companyText) {
-    enhanced += '\n\n' + companyText;
+    if (profileText) {
+      enhanced += '\n\n';
+    }
+    enhanced += companyText;
   }
   
   return enhanced.trim();
@@ -2547,7 +2602,7 @@ async function processContact(
     
     await humanPause(500, 1000);
     
-    // Extract LinkedIn's pre-filled template (we'll append below it, not clear)
+    // Extract LinkedIn's pre-filled template (we'll clear and rebuild with greeting)
     const originalTemplate = await messageInput.textContent().catch(() => '') || 
                            await messageInput.inputValue().catch(() => '') || 
                            await messageInput.evaluate((el: any) => el.innerText || el.textContent || el.value || '').catch(() => '');
@@ -2558,18 +2613,26 @@ async function processContact(
       console.warn(`   ⚠️  No pre-filled template found - will send only our links`);
     }
     
-    // Get the text to append (our links only, not the template again)
+    // Extract first name from contact name for personalization
+    const firstName = extractFirstName(contact.name);
+    if (firstName) {
+      console.log(`   👤 Extracted first name: "${firstName}" from "${contact.name}"`);
+    } else {
+      console.warn(`   ⚠️  Could not extract first name from "${contact.name}"`);
+    }
+    
+    // Get the text for our custom links
     const profileText = (settings.message_template_profile || '').replace('{profile_url}', settings.profile_url || '');
     const companyText = (settings.message_template_company || '').replace('{company_url}', settings.company_url || '');
-    const textToAppend = '\n\n' + profileText + (companyText ? '\n\n' + companyText : '');
     
-    // Enhance message (for database record only - we won't type the full message)
+    // Enhance message with greeting + template + links (full message to type)
     const enhancedMessage = enhanceMessage(
       originalTemplate,
       settings.profile_url || '',
       settings.company_url,
       settings.message_template_profile,
-      settings.message_template_company
+      settings.message_template_company,
+      firstName
     );
     
     // Check if record exists first (upsert logic to prevent duplicate key errors)
@@ -2654,188 +2717,44 @@ async function processContact(
         console.log('   ⚠️  Scrolling failed, but continuing...');
       }
       
-      // CRITICAL: Position cursor at the END of the content using a reliable method
-      // For contenteditable divs, we need to find the last text node and place cursor there
-      console.log('   📝 Positioning cursor at END of existing content using reliable method...');
+      // Clear the input field completely before typing full message
+      console.log('   🧹 Clearing existing content to rebuild full message with greeting...');
       
-      // Get the current text content BEFORE focusing
-      const textBefore = await messageInput.evaluate((el: any) => {
-        return (el.textContent || el.innerText || '').trim();
+      // Clear the input field
+      await messageInput.clear();
+      await humanPause(200, 300);
+      
+      // Verify it's cleared
+      const textAfterClear = await messageInput.evaluate((el: any) => {
+        return (el.textContent || el.innerText || el.value || '').trim();
       }).catch(() => '');
       
-      const textLengthBefore = textBefore.length;
-      console.log(`   📏 Current content length: ${textLengthBefore} chars`);
-      if (textLengthBefore > 0) {
-        console.log(`   📝 Current content preview: "${textBefore.substring(0, 50)}${textBefore.length > 50 ? '...' : ''}"`);
-      }
-      
-      // Step 1: Focus the element (but don't click - clicking can place cursor in middle)
-      await messageInput.evaluate((el: any) => {
-        el.focus();
-      });
-      await humanPause(300, 500); // Wait for LinkedIn to potentially restore cursor position
-      
-      // Step 2: Use a more reliable method to place cursor at end
-      // This works for contenteditable divs with complex HTML structure
-      const cursorPositioned = await messageInput.evaluate((el: any) => {
-        // Get selection
-        const sel = window.getSelection();
-        if (!sel) return false;
-        
-        // Find the last text node in the element (most reliable method)
-        const walker = document.createTreeWalker(
-          el,
-          NodeFilter.SHOW_TEXT,
-          null
-        );
-        
-        let lastTextNode: Node | null = null;
-        let node: Node | null;
-        while (node = walker.nextNode()) {
-          lastTextNode = node;
-        }
-        
-        if (lastTextNode && lastTextNode.textContent) {
-          // Place cursor at the end of the last text node
-          const range = document.createRange();
-          const textLength = lastTextNode.textContent.length;
-          range.setStart(lastTextNode, textLength);
-          range.setEnd(lastTextNode, textLength);
-          range.collapse(true); // Collapse to start (which is the end position)
-          
-          sel.removeAllRanges();
-          sel.addRange(range);
-          
-          // Verify cursor is at the end
-          const currentRange = sel.getRangeAt(0);
-          const textContent = el.textContent || el.innerText || '';
-          const isAtEnd = currentRange.endOffset >= textContent.length - 1;
-          
-          return isAtEnd;
-        }
-        
-        // Fallback: No text nodes found, try selecting all content and collapsing to end
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return true;
-      }).catch(() => false);
-      
-      if (!cursorPositioned) {
-        console.log('   ⚠️  First cursor positioning attempt failed, trying alternative method...');
-        await humanPause(200, 300);
-        // Alternative: Select all content, then collapse to end
+      if (textAfterClear.length > 0) {
+        console.log(`   ⚠️  Input not fully cleared (${textAfterClear.length} chars remaining), forcing clear...`);
+        // Force clear by setting content directly
         await messageInput.evaluate((el: any) => {
-          el.focus();
-          const sel = window.getSelection();
-          const range = document.createRange();
-          
-          // Select all content
-          range.selectNodeContents(el);
-          
-          // Collapse to end (this moves cursor to the very end)
-          range.collapse(false);
-          
-          sel?.removeAllRanges();
-          sel?.addRange(range);
+          if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+            el.value = '';
+          } else {
+            el.textContent = '';
+            el.innerText = '';
+            el.innerHTML = '';
+          }
         });
         await humanPause(200, 300);
       }
       
-      // Step 3: Verify cursor position by checking selection offset
-      const cursorVerified = await messageInput.evaluate((el: any) => {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return false;
-        
-        const range = sel.getRangeAt(0);
-        const textContent = el.textContent || el.innerText || '';
-        const textLength = textContent.length;
-        
-        // Check if cursor is at or near the end (within 2 chars is acceptable for edge cases)
-        const isAtEnd = range.endOffset >= textLength - 2 && range.startOffset >= textLength - 2;
-        
-        if (!isAtEnd) {
-          // Cursor is not at end - try one more time with the last text node method
-          const walker = document.createTreeWalker(
-            el,
-            NodeFilter.SHOW_TEXT,
-            null
-          );
-          
-          let lastTextNode: Node | null = null;
-          let node: Node | null;
-          while (node = walker.nextNode()) {
-            lastTextNode = node;
-          }
-          
-          if (lastTextNode && lastTextNode.textContent) {
-            const newRange = document.createRange();
-            const textLength = lastTextNode.textContent.length;
-            newRange.setStart(lastTextNode, textLength);
-            newRange.setEnd(lastTextNode, textLength);
-            sel.removeAllRanges();
-            sel.addRange(newRange);
-            
-            // Check again
-            const finalRange = sel.getRangeAt(0);
-            return finalRange.endOffset >= textContent.length - 2;
-          }
-        }
-        
-        return isAtEnd;
-      }).catch(() => false);
+      console.log('   ✅ Input field cleared, ready to type full message');
       
-      if (!cursorVerified) {
-        console.log('   ⚠️  Cursor verification failed, making final aggressive attempt...');
-        // Final attempt: Use the deepest last node method
-        await messageInput.evaluate((el: any) => {
-          el.focus();
-          const sel = window.getSelection();
-          
-          // Try to find the deepest last node
-          let lastNode: any = el;
-          while (lastNode.lastChild) {
-            lastNode = lastNode.lastChild;
-          }
-          
-          // If it's a text node, use it
-          if (lastNode.nodeType === Node.TEXT_NODE && lastNode.textContent) {
-            const range = document.createRange();
-            const textLength = lastNode.textContent.length;
-            range.setStart(lastNode, textLength);
-            range.setEnd(lastNode, textLength);
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-    } else {
-            // Fallback: select all and collapse to end
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            range.collapse(false);
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-          }
-        });
-        await humanPause(400, 500);
-      }
+      // Focus the element and type the full enhanced message
+      await messageInput.focus();
+      await humanPause(200, 300);
       
-      // Final check: Get text after positioning to ensure it hasn't changed
-      const textAfter = await messageInput.evaluate((el: any) => {
-        return (el.textContent || el.innerText || '').trim();
-      }).catch(() => '');
+      // Type the complete enhanced message (greeting + template + links)
+      console.log(`   ⌨️  Typing full enhanced message (${enhancedMessage.length} chars)...`);
+      await messageInput.fill(enhancedMessage);
       
-      const textLengthAfter = textAfter.length;
-      
-      if (textLengthBefore !== textLengthAfter) {
-        console.log(`   ⚠️  Text length changed (${textLengthBefore} -> ${textLengthAfter}), LinkedIn may have modified content`);
-      }
-      
-      console.log(`   ✅ Cursor positioned at end (before: ${textLengthBefore} chars, after: ${textLengthAfter} chars)`);
-      await humanPause(300, 400); // Extra wait before typing to ensure cursor is stable
-      
-      // Type the text to append instantly (preserves newlines and spacing)
-      await messageInput.type(textToAppend, { delay: 0 });
+      // Trigger input events to ensure LinkedIn recognizes the change
       
       // Trigger input event
       await messageInput.evaluate((el: any) => {
@@ -2891,87 +2810,27 @@ async function processContact(
       });
       await humanPause(300, 500);
     } else if (tagName === 'textarea') {
-      // Just append - don't clear content
-      console.log(`   📝 Appending message below LinkedIn template in ${tagName}...`);
+      // Clear and type full message for textarea
+      console.log(`   📝 Clearing and typing full message in ${tagName}...`);
       
-      // CRITICAL: Position cursor at end for textarea/input using reliable method
-      console.log('   📝 Positioning cursor at END of textarea/input content...');
-      
-      const textareaLength = await messageInput.evaluate((el: any) => {
-        return el.value.length;
-      }).catch(() => 0);
-      
-      console.log(`   📏 Textarea content length: ${textareaLength} chars`);
-      
-      // Focus and set cursor to end with verification
-      const textareaCursorAtEnd = await messageInput.evaluate((el: any) => {
-        el.focus();
-        
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-          const length = el.value.length;
-          
-          // Set cursor to end
-          el.setSelectionRange(length, length);
-          
-          // Verify it's actually at the end
-          const start = el.selectionStart || 0;
-          const end = el.selectionEnd || 0;
-          
-          // If not at end, try again
-          if (start !== length || end !== length) {
-            el.setSelectionRange(length, length);
-            // Check again
-            return (el.selectionStart || 0) === length && (el.selectionEnd || 0) === length;
-          }
-          
-          return true;
-        }
-        
-        return false;
-      }).catch(() => false);
-      
-      if (!textareaCursorAtEnd) {
-        console.log('   ⚠️  Textarea cursor positioning failed, retrying...');
-        await messageInput.evaluate((el: any) => {
-          el.focus();
-          const length = el.value.length;
-          el.setSelectionRange(length, length);
-          // Force it by setting multiple times
-          setTimeout(() => {
-            el.setSelectionRange(length, length);
-          }, 0);
-        });
-        await humanPause(300, 400);
-      }
-      
-      // Final verification
-      const finalCheck = await messageInput.evaluate((el: any) => {
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-          const length = el.value.length;
-          return (el.selectionStart || 0) === length && (el.selectionEnd || 0) === length;
-        }
-        return false;
-      }).catch(() => false);
-      
-      if (!finalCheck) {
-        console.log('   ⚠️  Final cursor check failed, but proceeding...');
-      } else {
-        console.log('   ✅ Cursor verified at end of textarea');
-      }
-      
+      // Clear the textarea
+      await messageInput.clear();
       await humanPause(200, 300);
       
-      // Type the text to append instantly (preserves newlines and spacing)
-      await messageInput.type(textToAppend, { delay: 0 });
+      // Focus and type the full enhanced message
+      await messageInput.focus();
+      await humanPause(200, 300);
+      
+      console.log(`   ⌨️  Typing full enhanced message (${enhancedMessage.length} chars) in textarea...`);
+      await messageInput.fill(enhancedMessage);
       
       // Trigger input events
       await messageInput.evaluate((el: any) => {
         el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       });
-      await humanPause(150, 250);
-      console.log(`   ✅ Message typed instantly (${enhancedMessage.length} characters)`);
-      console.log(`   ✅ Message set via fallback method (${enhancedMessage.length} characters)`);
+      await humanPause(500, 800);
+      console.log(`   ✅ Message set in textarea (${enhancedMessage.length} characters)`);
     }
     
     await humanPause(800, 1200); // Wait for Send to enable after typing
@@ -2991,41 +2850,40 @@ async function processContact(
       console.warn(`   ⚠️  Message text may not have been set correctly (got ${trimmedText.length} chars, expected ~${enhancedMessage.length})`);
       console.log(`   🔄 Retrying with direct innerText method...`);
       
-      // Final fallback: just append (don't clear)
-      console.log('   🔄 Retrying by appending message below template...');
-      await messageInput.evaluate((el: any) => {
+      // Final fallback: clear and set full message directly
+      console.log('   🔄 Retrying by clearing and setting full message directly...');
+      await messageInput.clear();
+      await humanPause(200, 300);
+      
+      // Set the full enhanced message using evaluate (more reliable for contenteditable)
+      await messageInput.evaluate((el: any, text: string) => {
         el.focus();
-        // Move cursor to end - verify it's at the end
         if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-          const length = el.value.length;
-          el.setSelectionRange(length, length);
-          // Verify
-          if (el.selectionStart !== length || el.selectionEnd !== length) {
-            el.setSelectionRange(length, length);
-          }
+          el.value = text;
         } else {
-          const sel = window.getSelection();
+          // Convert newlines to <br> tags for contenteditable divs
+          let formattedHTML = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n\n+/g, '<br><br>') // Multiple newlines = paragraph break
+            .replace(/\n/g, '<br>'); // Single newline = line break
+          el.innerHTML = formattedHTML;
+          el.textContent = text;
+        }
+        // Move cursor to end
+        const sel = window.getSelection();
+        if (sel) {
           const range = document.createRange();
           range.selectNodeContents(el);
-          range.collapse(false); // Collapse to end
-          sel?.removeAllRanges();
-          sel?.addRange(range);
-          // Verify cursor is at end
-          const textLength = (el.textContent || el.innerText || '').length;
-          if (range.endOffset < textLength - 1) {
-            range.selectNodeContents(el);
-            range.collapse(false);
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-          }
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
         }
-      });
-      await humanPause(200, 300);
-      await messageInput.type(textToAppend, { delay: 0 });
-      await messageInput.evaluate((el: any) => {
+        // Trigger events
         el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      });
+      }, enhancedMessage);
       
       await humanPause(1000, 1500);
       
@@ -3149,37 +3007,13 @@ async function processContact(
         // Try triggering input events periodically to wake up LinkedIn
         if (attempt % 3 === 0) {
           // Verify text is still there
-          const currentText = await messageInput.evaluate((el: any) => el.innerText || el.textContent || '').catch(() => '');
+          const currentText = await messageInput.evaluate((el: any) => el.innerText || el.textContent || el.value || '').catch(() => '');
           if (currentText.length < enhancedMessage.length * 0.8) {
-            console.log(`   ⚠️  Text seems incomplete, appending again...`);
-            // DON'T click - just focus and move cursor to end
-            await messageInput.evaluate((el: any) => {
-              el.focus();
-              if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-                const length = el.value.length;
-                el.setSelectionRange(length, length);
-                if (el.selectionStart !== length || el.selectionEnd !== length) {
-                  el.setSelectionRange(length, length);
-                }
-              } else {
-                const sel = window.getSelection();
-                const range = document.createRange();
-                range.selectNodeContents(el);
-                range.collapse(false); // Collapse to end
-                sel?.removeAllRanges();
-                sel?.addRange(range);
-                // Verify
-                const textLength = (el.textContent || el.innerText || '').length;
-                if (range.endOffset < textLength - 1) {
-                  range.selectNodeContents(el);
-                  range.collapse(false);
-                  sel?.removeAllRanges();
-                  sel?.addRange(range);
-                }
-              }
-            });
+            console.log(`   ⚠️  Text seems incomplete, clearing and setting full message again...`);
+            // Clear and set the full message
+            await messageInput.clear();
             await humanPause(200, 300);
-            await messageInput.type(textToAppend, { delay: 0 });
+            await messageInput.fill(enhancedMessage);
             await messageInput.evaluate((el: any) => {
               el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
@@ -3255,35 +3089,15 @@ async function processContact(
     // Check if button is disabled (might be if message is empty)
     const isDisabled = await sendButton.isDisabled().catch(() => false);
     if (isDisabled) {
-      console.warn('   ⚠️  Send button is disabled, trying to append message again...');
-      // DON'T click - just focus and move cursor to end, then append
-      await messageInput.evaluate((el: any) => {
-        el.focus();
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-          const length = el.value.length;
-          el.setSelectionRange(length, length);
-          if (el.selectionStart !== length || el.selectionEnd !== length) {
-            el.setSelectionRange(length, length);
-          }
-        } else {
-          const sel = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false); // Collapse to end
-          sel?.removeAllRanges();
-          sel?.addRange(range);
-          // Verify
-          const textLength = (el.textContent || el.innerText || '').length;
-          if (range.endOffset < textLength - 1) {
-            range.selectNodeContents(el);
-            range.collapse(false);
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-          }
-        }
-      });
+      console.warn('   ⚠️  Send button is disabled, clearing and setting full message again...');
+      // Clear and set the full message
+      await messageInput.clear();
       await humanPause(200, 300);
-      await messageInput.type(textToAppend, { delay: 0 });
+      await messageInput.fill(enhancedMessage);
+      await messageInput.evaluate((el: any) => {
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      });
       await humanPause(500, 1000);
     }
     
@@ -4133,10 +3947,15 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     let stopRequested = false;
     let currentTab = 'All'; // Track which tab we're currently on: 'All', 'Job changes', 'Birthdays'
     let tabScrollAttempts = 0; // Track scroll attempts per tab
-    const maxTabScrollAttempts = 10; // Max scroll attempts per tab before trying next tab
+    // Helper function to get max scroll attempts based on current tab
+    // Give "All" tab more attempts since it should have the most contacts
+    const getMaxTabScrollAttempts = (tab: string) => tab === 'All' ? 15 : 10;
     
     // Use messages_per_job (default 50) instead of daily_limit
-    const messagesPerJob = settings.messages_per_job || 50;
+    // Allow environment variable override for testing
+    const messagesPerJob = process.env.LINKEDIN_MAX_MESSAGES 
+      ? parseInt(process.env.LINKEDIN_MAX_MESSAGES, 10)
+      : (settings.messages_per_job || 50);
     console.log(`\n📊 LinkedIn Automation Settings:`);
     console.log(`   - Messages per job: ${messagesPerJob}`);
     console.log(`   - Batch size limit: 20 contacts per batch`);
@@ -4172,17 +3991,33 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       }
       
       if (visibleContacts.length === 0) {
-        console.log(`   ℹ️  No contacts found on ${currentTab} tab (scroll attempt ${tabScrollAttempts + 1}/${maxTabScrollAttempts}).`);
+        // Get max scroll attempts for current tab (All gets more attempts)
+        const maxTabScrollAttempts = getMaxTabScrollAttempts(currentTab);
+        
+        // Increment scroll attempts BEFORE checking limit to fix off-by-one bug
+        tabScrollAttempts++;
+        console.log(`   ℹ️  No contacts found on ${currentTab} tab (scroll attempt ${tabScrollAttempts}/${maxTabScrollAttempts}).`);
+        
+        // Add diagnostic logging for "All" tab to understand why no contacts
+        if (currentTab === 'All' && tabScrollAttempts <= 3) {
+          try {
+            const currentUrl = page.url();
+            const messageLinksCount = await page.locator('a[href*="/messaging/compose/"]').count().catch(() => 0);
+            const mainContainer = await page.locator('main').count().catch(() => 0);
+            console.log(`   🔍 Diagnostic: URL=${currentUrl.includes('/all/') ? '✅ All tab' : '❌ Wrong tab'}, Message links=${messageLinksCount}, Main container=${mainContainer > 0 ? '✅ Found' : '❌ Missing'}`);
+          } catch (diagError: any) {
+            console.log(`   🔍 Diagnostic check failed: ${diagError.message}`);
+          }
+        }
         
         // NEW LOGIC: Scroll on current tab first, only switch tabs if no contacts after scrolling
-        if (tabScrollAttempts < maxTabScrollAttempts) {
+        if (tabScrollAttempts <= maxTabScrollAttempts) {
           // Still scrolling on current tab
           console.log(`   📜 Scrolling down on ${currentTab} tab to load more contacts...`);
-          tabScrollAttempts++;
-        scrollAttempts++;
-        await scrollToLoadMore(page, container);
-        await humanPause(2000, 3000);
-        continue;
+          scrollAttempts++;
+          await scrollToLoadMore(page, container);
+          await humanPause(2000, 3000);
+          continue;
         } else {
           // Exhausted scroll attempts on current tab, try next tab
           console.log(`   ⚠️  No contacts found after ${maxTabScrollAttempts} scroll attempts on ${currentTab} tab.`);
@@ -4207,6 +4042,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               
               currentTab = 'Job changes';
               tabScrollAttempts = 0; // Reset scroll attempts for new tab
+              console.log(`   ✅ Successfully switched to "${currentTab}" tab. Current URL: ${page.url()}`);
               continue; // Go back to extract contacts on new tab
             } catch (tabError: any) {
               console.log(`   ⚠️  Error switching to Job changes tab: ${tabError.message}`);
@@ -4234,6 +4070,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               
               currentTab = 'Birthdays';
               tabScrollAttempts = 0; // Reset scroll attempts for new tab
+              console.log(`   ✅ Successfully switched to "${currentTab}" tab. Current URL: ${page.url()}`);
               continue; // Go back to extract contacts on new tab
             } catch (tabError: any) {
               console.log(`   ⚠️  Error switching to Birthdays tab: ${tabError.message}`);

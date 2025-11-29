@@ -162,7 +162,35 @@ async function authenticateEdgeProp() {
     } else {
       // Click on Login button in header
       console.log('🔍 Clicking Login button...');
-      await page.locator('div').filter({ hasText: /^Login$/ }).nth(1).click();
+      
+      // Try multiple selectors for the Login button
+      let loginClicked = false;
+      const loginSelectors = [
+        'div').filter({ hasText: /^Login$/ }).nth(1),
+        'a[href*="/user/login"]',
+        'button:has-text("Login")',
+        'text=/^Login$/i',
+        '[class*="login"]:has-text("Login")',
+      ];
+      
+      for (const selector of loginSelectors) {
+        try {
+          const loginButton = page.locator(selector).first();
+          await loginButton.waitFor({ state: 'visible', timeout: 10000 });
+          await loginButton.click({ timeout: 15000 });
+          console.log(`   ✅ Clicked Login button using selector: ${selector}`);
+          loginClicked = true;
+          break;
+        } catch (e) {
+          console.log(`   ⚠️  Selector failed: ${selector}, trying next...`);
+          continue;
+        }
+      }
+      
+      if (!loginClicked) {
+        throw new Error('Failed to click Login button - all selectors failed');
+      }
+      
       await humanPause(1500, 2000);
 
       // Click on "User" option

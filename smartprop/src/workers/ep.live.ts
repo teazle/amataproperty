@@ -824,19 +824,30 @@ async function scrapeEdgePropFinal() {
           if (isLoggedIn) {
             console.log('   ✅ Login successful - phone numbers should be available\n');
           } else {
-            console.log('   ⚠️  Re-authentication completed but login indicators still not visible');
-            console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
+            console.error('   ❌ Re-authentication completed but login indicators still not visible');
+            console.error('   ❌ Cannot proceed without login - phone numbers are required');
+            throw new Error('Login verification failed after re-authentication - login indicators not found');
           }
         } else {
-          console.log('   ❌ Re-authentication failed - no state file created');
-          console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
+          console.error('   ❌ Re-authentication failed - no state file created');
+          console.error('   ❌ Cannot proceed without login - phone numbers are required');
+          throw new Error('Re-authentication failed - no state file created');
         }
       } catch (reauthError) {
-        console.log(`   ❌ Re-authentication failed: ${reauthError}`);
-        console.log('   ⚠️  Continuing anyway, but phone numbers may not be available\n');
+        console.error(`   ❌ Re-authentication failed: ${reauthError}`);
+        console.error('   ❌ Cannot proceed without login - phone numbers are required');
+        throw reauthError;
       }
     } else {
       console.log('   ✅ Login verified - phone numbers should be available\n');
+    }
+    
+    // CRITICAL: If we're not logged in at this point, fail the job
+    // Phone numbers are required and only available when logged in
+    if (!isLoggedIn) {
+      console.error('❌ CRITICAL: Not logged in after all authentication attempts!');
+      console.error('❌ Cannot proceed - phone numbers are required and only available when logged in');
+      throw new Error('Login verification failed - cannot proceed without authentication');
     }
     
     // Base URL (page will be appended in the loop)

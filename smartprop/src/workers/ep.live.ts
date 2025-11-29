@@ -360,6 +360,9 @@ async function scrapeEdgePropFinal() {
     }
   }
   
+  // Track if we just re-authenticated to prevent double re-auth
+  let justReAuthenticated = false;
+  
   // Re-authenticate only if needed
   if (shouldReAuth) {
     console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
@@ -408,6 +411,9 @@ async function scrapeEdgePropFinal() {
       
       process.exit(1);
     }
+    
+    // Mark that we just re-authenticated successfully
+    justReAuthenticated = true;
     
     // Verify auth state exists after re-auth (only if we re-authenticated)
     const updatedStateExists = fs.existsSync(stateFilePath);

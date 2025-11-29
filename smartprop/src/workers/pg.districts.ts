@@ -41,8 +41,9 @@ async function reAuthenticate() {
     // Use xvfb-run for headless environments (EC2)
     // Force Bun to not use cache by clearing cache and touching the file to invalidate cache
     // Clear any potential cache first, then touch the file to force recompilation
+    // Use BUN_INSTALL_CACHE_DIR=/dev/null to disable cache completely
     execSync('rm -rf .bun/install/cache node_modules/.cache 2>/dev/null; touch src/workers/auth.pg.ts; true', { cwd: process.cwd() });
-    execSync('xvfb-run -a bun --bun src/workers/auth.pg.ts', { 
+    execSync('BUN_INSTALL_CACHE_DIR=/dev/null xvfb-run -a bun --bun --no-install-cache src/workers/auth.pg.ts', { 
       cwd: process.cwd(),
       stdio: 'inherit',
       timeout: 600000 // 10 minutes timeout for re-authentication

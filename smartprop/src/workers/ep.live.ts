@@ -936,13 +936,21 @@ async function scrapeEdgePropFinal() {
                   );
                   console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
                   
+                  // CRITICAL: If login indicators aren't visible, we're not logged in
+                  // Even if we have session cookies, they might be invalid or not activated
+                  // We must fail if login indicators aren't visible - phone numbers require login
                   if (sessionCookiesAfterNav.length > 0) {
-                    // If we have session cookies but indicators aren't visible, it might be a page rendering issue
-                    // Trust the cookies since auth.ep.ts verified login before saving
                     console.log('   ⚠️  Session cookies present but login indicators not visible');
-                    console.log('   ✅ Trusting session cookies (auth.ep.ts verified login before saving state)');
-                    isLoggedIn = true;
+                    console.error('   ❌ Browser context is not logged in, even though session cookies exist');
+                    console.error('   ❌ Cookies might be invalid, expired, or not properly activated');
+                  } else {
+                    console.error('   ❌ No session cookies found after navigation');
                   }
+                  
+                  // Fail - we cannot proceed without login
+                  console.error('   ❌ Login verification failed after re-authentication!');
+                  console.error('   ❌ Auth state file exists but login is not working in browser context');
+                  throw new Error('Login verification failed after re-authentication - browser context not logged in');
                 }
               }
             }

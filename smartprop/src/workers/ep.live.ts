@@ -844,20 +844,23 @@ async function scrapeEdgePropFinal() {
           
           console.log('   ✅ Browser context recreated with fresh authentication state');
           
-          // Verify login again after re-auth with the new page
+          // CRITICAL: Verify login again after re-auth with the new page
+          // We MUST verify login is actually working, not just trust the saved state
           // Use the same method that worked in auth.ep.ts - check for bookmarks link
+          console.log('   🔐 Verifying login on recreated context...');
           await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await humanPause(3000, 5000); // Give page more time to load
+          await humanPause(5000, 8000); // Give page more time to load and cookies to activate
           
           // Check for bookmarks link first (this is what auth.ep.ts uses and it works)
           const bookmarksLink = page.locator('[href="/bookmarks"]');
-          const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 10000 }).catch(() => false);
+          const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 15000 }).catch(() => false);
           
           if (bookmarksVisible) {
             isLoggedIn = true;
             console.log('   ✅ Login verified after re-auth - bookmarks link found');
           } else {
-            // Fallback: Check other login indicators
+            // Fallback: Check other login indicators with longer timeout
+            console.log('   ⚠️  Bookmarks link not found, checking other login indicators...');
             const loginIndicators = [
               'a[href*="/user/logout"]',
               'a[href*="/user/"]:not([href*="/user/login"]):not([href*="/user/register"])',
@@ -872,7 +875,7 @@ async function scrapeEdgePropFinal() {
                 const element = page.locator(selector).first();
                 const count = await element.count();
                 if (count > 0) {
-                  const isVisible = await element.isVisible({ timeout: 5000 }).catch(() => false);
+                  const isVisible = await element.isVisible({ timeout: 10000 }).catch(() => false);
                   if (isVisible) {
                     isLoggedIn = true;
                     console.log(`   ✅ Login verified after re-auth - found indicator: ${selector}`);
@@ -885,14 +888,42 @@ async function scrapeEdgePropFinal() {
             }
           }
           
+          // CRITICAL: If login is still not verified, the auth state might not be working
+          // Check cookies to see if we have session cookies
+          if (!isLoggedIn) {
+            const cookies = await context.cookies();
+            const hasSessionCookie = cookies.some(cookie => 
+              cookie.name.toLowerCase().includes('session') || 
+              cookie.name.toLowerCase().includes('auth') ||
+              cookie.name.toLowerCase().includes('ssess') ||
+              cookie.name.toLowerCase().includes('psessid')
+            );
+            
+            if (hasSessionCookie) {
+              console.log('   ⚠️  Login indicators not visible, but session cookies found');
+              console.log('   ⚠️  Cookies might not be activated yet - will try to navigate to a property page to activate them');
+              // Try navigating to a property page to activate cookies
+              await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await humanPause(3000, 5000);
+              
+              // Check again
+              const bookmarksLink2 = page.locator('[href="/bookmarks"]');
+              const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 10000 }).catch(() => false);
+              if (bookmarksVisible2) {
+                isLoggedIn = true;
+                console.log('   ✅ Login verified after navigating to property search page');
+              }
+            }
+            
+            if (!isLoggedIn) {
+              console.error('   ❌ Login verification failed after re-authentication!');
+              console.error('   ❌ Auth state file exists but login is not working in browser context');
+              throw new Error('Login verification failed after re-authentication - browser context not logged in');
+            }
+          }
+          
           if (isLoggedIn) {
             console.log('   ✅ Login successful - phone numbers should be available\n');
-          } else {
-            // If auth state was just saved, trust it and continue
-            // The auth.ep.ts script verified login before saving
-            console.log('   ⚠️  Login indicators not visible, but auth state was just saved');
-            console.log('   ✅ Trusting saved auth state and continuing (auth.ep.ts verified login before saving)');
-            isLoggedIn = true; // Trust the saved auth state
           }
         } else {
           console.error('   ❌ Re-authentication failed - no state file created');

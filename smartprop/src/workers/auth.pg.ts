@@ -145,13 +145,41 @@ async function authenticatePropertyGuru() {
   if (isAutomated) {
     console.log('\n🤖 Performing automated login...');
     
-    // Wait for login form to load
-    await page.waitForTimeout(2000);
+    // Wait for login form to load and check for Cloudflare
+    await page.waitForTimeout(3000);
+    
+    // Check if page is blocked by Cloudflare
+    const pageText = await page.textContent('body').catch(() => '') || '';
+    if (pageText.includes('Pardon Our Interruption') || 
+        pageText.includes('Checking your browser') ||
+        pageText.includes('Just a moment')) {
+      console.log('   🛡️  Cloudflare challenge detected, waiting longer...');
+      await page.waitForTimeout(15000); // Wait 15 seconds for Cloudflare
+    }
     
     // Step 1: Fill in email with human-like typing
     console.log('   📧 Entering email...');
+    
+    // Wait for email input to be visible with longer timeout
+    try {
+      await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', {
+        timeout: 60000, // 60 seconds - Cloudflare can take time
+        state: 'visible'
+      });
+    } catch (error) {
+      console.log('   ⚠️  Email input not found, checking page state...');
+      const currentText = await page.textContent('body').catch(() => '') || '';
+      const currentUrl = page.url();
+      console.log(`   📄 Current URL: ${currentUrl}`);
+      console.log(`   📄 Page content length: ${currentText.length}`);
+      if (currentText.includes('Pardon Our Interruption') || currentText.includes('Checking your browser')) {
+        throw new Error('Cloudflare challenge blocking login page');
+      }
+      throw error;
+    }
+    
     const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').first();
-    await emailInput.click();
+    await emailInput.click({ timeout: 30000 });
     await humanPause(200, 400);
     await emailInput.fill(email, { delay: 50 + Math.random() * 50 }); // Human-like typing speed
     console.log('   ✅ Email entered');

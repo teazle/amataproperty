@@ -521,11 +521,16 @@ async function scrapeEdgePropFinal() {
   });
 
   // Only set storageState if the file exists and is valid
+  // CRITICAL: Match auth.ep.ts context options exactly for cookie compatibility
+  // Don't set userAgent - let playwright-ghost handle it (same as auth.ep.ts)
   const contextOptions: BrowserContextOptions = {
-    userAgent: FLARESOLVERR_UA, // Match Flaresolverr's user-agent
+    // Don't set userAgent - let playwright-ghost handle it for better stealth (same as auth.ep.ts)
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
+    permissions: ['geolocation'], // Match auth.ep.ts
+    geolocation: { latitude: 1.3521, longitude: 103.8198 }, // Singapore coordinates (match auth.ep.ts)
+    colorScheme: 'light', // Match auth.ep.ts
     // Enhanced HTTP headers matching Flaresolverr's browser
     extraHTTPHeaders: {
       'Accept-Language': 'en-SG,en;q=0.9',
@@ -804,11 +809,15 @@ async function scrapeEdgePropFinal() {
           }
           
           // Recreate context with fresh storage state
+          // CRITICAL: Match auth.ep.ts context options exactly for cookie compatibility
           const freshContextOptions: BrowserContextOptions = {
-            userAgent: FLARESOLVERR_UA,
+            // Don't set userAgent - let playwright-ghost handle it (same as auth.ep.ts)
             viewport: { width: 1920, height: 1080 },
             locale: 'en-SG',
             timezoneId: 'Asia/Singapore',
+            permissions: ['geolocation'], // Match auth.ep.ts
+            geolocation: { latitude: 1.3521, longitude: 103.8198 }, // Singapore coordinates (match auth.ep.ts)
+            colorScheme: 'light', // Match auth.ep.ts
             storageState: freshStatePath, // Use the fresh auth state
             extraHTTPHeaders: {
               'Accept-Language': 'en-SG,en;q=0.9',

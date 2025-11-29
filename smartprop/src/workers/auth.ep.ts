@@ -166,29 +166,33 @@ async function authenticateEdgeProp() {
       // Try multiple selectors for the Login button
       let loginClicked = false;
       const loginSelectors = [
-        'div').filter({ hasText: /^Login$/ }).nth(1),
-        'a[href*="/user/login"]',
-        'button:has-text("Login")',
-        'text=/^Login$/i',
-        '[class*="login"]:has-text("Login")',
+        () => page.locator('div').filter({ hasText: /^Login$/ }).nth(1),
+        () => page.locator('a[href*="/user/login"]').first(),
+        () => page.locator('button:has-text("Login")').first(),
+        () => page.getByText('Login', { exact: true }).first(),
+        () => page.locator('[class*="login"]:has-text("Login")').first(),
+        () => page.locator('text=/^Login$/i').first(),
       ];
       
-      for (const selector of loginSelectors) {
+      for (let i = 0; i < loginSelectors.length; i++) {
         try {
-          const loginButton = page.locator(selector).first();
+          const loginButton = loginSelectors[i]();
           await loginButton.waitFor({ state: 'visible', timeout: 10000 });
-          await loginButton.click({ timeout: 15000 });
-          console.log(`   ✅ Clicked Login button using selector: ${selector}`);
+          // Wait for element to be stable and clickable
+          await loginButton.waitFor({ state: 'attached', timeout: 5000 });
+          await humanPause(500, 1000);
+          await loginButton.click({ timeout: 20000, force: false });
+          console.log(`   ✅ Clicked Login button using selector ${i + 1}`);
           loginClicked = true;
           break;
         } catch (e) {
-          console.log(`   ⚠️  Selector failed: ${selector}, trying next...`);
+          console.log(`   ⚠️  Selector ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
           continue;
         }
       }
       
       if (!loginClicked) {
-        throw new Error('Failed to click Login button - all selectors failed');
+        throw new Error('Failed to click Login button - all selectors failed. Login is required to access phone numbers.');
       }
       
       await humanPause(1500, 2000);

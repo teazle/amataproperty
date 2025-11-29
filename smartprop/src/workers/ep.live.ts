@@ -695,7 +695,8 @@ async function scrapeEdgePropFinal() {
     }
     
     // If login indicators are not visible, re-authenticate immediately
-    if (!isLoggedIn) {
+    // BUT: Skip if we just re-authenticated (auth state was just saved)
+    if (!isLoggedIn && !justReAuthenticated) {
       console.log('\n⚠️  Login indicators not visible - re-authenticating now...');
       
       // Trigger re-authentication

@@ -75,9 +75,16 @@ async function getConnectionString(): Promise<string> {
       
       // Construct pooler connection string
       // Note: Username format is postgres.[PROJECT-REF] for Supavisor
-      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@${poolerEndpoint}.pooler.supabase.com:5432/postgres?sslmode=require`;
+      // Add connection timeout and keepalive parameters to prevent timeouts
+      const connectTimeout = process.env.PG_CONNECT_TIMEOUT || '30'; // 30 seconds default
+      const keepalive = process.env.PG_KEEPALIVE !== 'false'; // Enable keepalive by default
+      const keepaliveIdle = process.env.PG_KEEPALIVE_IDLE || '60000'; // 60 seconds
+      const keepaliveInterval = process.env.PG_KEEPALIVE_INTERVAL || '10000'; // 10 seconds
+      
+      const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@${poolerEndpoint}.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=${connectTimeout}${keepalive ? `&keepalive=1&keepalive_idle=${keepaliveIdle}&keepalive_interval=${keepaliveInterval}` : ''}`;
       
       console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${poolerEndpoint}, IPv4-compatible)`);
+      console.log(`[pg-boss] Connection settings: timeout=${connectTimeout}s, keepalive=${keepalive}`);
       return connectionString;
     }
   }
@@ -163,6 +170,11 @@ async function createBoss(): Promise<PgBoss> {
 
   console.log(`[pg-boss] Connecting to ${connParams.host}:${connParams.port} (${isPooler ? 'pooler' : 'direct'})`);
 
+  // Reduce pool size to avoid connection exhaustion with Supavisor
+  // Session mode pooler has limits per user+db+mode combination
+  // Using 3 connections instead of 5 to leave room for other services
+  const poolMax = Number(process.env.PG_BOSS_POOL_MAX || 3);
+  
   const boss = new PgBoss({
     host: connParams.host,
     port: connParams.port,
@@ -171,12 +183,14 @@ async function createBoss(): Promise<PgBoss> {
     database: connParams.database,
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
-    max: Number(process.env.PG_BOSS_POOL_MAX || 5),
+    max: poolMax, // Reduced from 5 to 3 to avoid connection exhaustion with Supavisor
     newJobCheckIntervalSeconds: Number(process.env.PG_BOSS_POLL_INTERVAL || 5),
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
     // SSL configuration
     ssl: sslConfig,
+    // Note: Connection timeout and keepalive are configured via connection string parameters
+    // See getConnectionString() for connect_timeout, keepalive, keepalive_idle, keepalive_interval
   });
 
   boss.on('error', (error) => {

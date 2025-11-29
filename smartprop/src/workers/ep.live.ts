@@ -28,7 +28,8 @@ async function reAuthenticate(): Promise<boolean> {
     
     execSync(command, { 
       cwd: process.cwd(),
-      stdio: 'inherit' 
+      stdio: 'inherit',
+      timeout: 300000 // 5 minute timeout (login can take time with Cloudflare)
     });
     console.log('✅ Re-authentication complete!\n');
     return true;
@@ -659,7 +660,7 @@ async function scrapeEdgePropFinal() {
         execSync(authCommand, { 
           cwd: process.cwd(),
           stdio: 'inherit',
-          timeout: 120000 // 2 minute timeout
+          timeout: 300000 // 5 minute timeout (login can take time with Cloudflare)
         });
         
         // CRITICAL: Reload storage state after re-auth by recreating the context

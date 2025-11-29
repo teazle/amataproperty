@@ -133,34 +133,49 @@ async function authenticateEdgeProp() {
     try {
       await page.goto(homepageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       
+      // Wait longer for Cloudflare to resolve if present
+      await humanPause(5000, 8000); // Increased wait for Cloudflare
+      
       // Check if page is blocked by Cloudflare
-      await humanPause(2000, 3000);
-      const pageText = await page.textContent('body').catch(() => '');
+      const pageText = await page.textContent('body').catch(() => '') || '';
       const isCloudflareBlocked = pageText.includes('Pardon Our Interruption') || 
                                    pageText.includes('Verify you are human') ||
                                    pageText.includes('challenge-platform') ||
-                                   pageText.includes('cf-browser-verification');
+                                   pageText.includes('cf-browser-verification') ||
+                                   pageText.includes('Checking your browser') ||
+                                   pageText.includes('Just a moment');
       
       if (isCloudflareBlocked) {
-        console.log('⚠️  Page is still blocked by Cloudflare after navigation');
-        console.log('   Will try to find Login button anyway (might work with existing cookies)...');
+        console.log('⚠️  Cloudflare challenge detected, waiting for it to resolve...');
+        // Wait up to 30 seconds for Cloudflare to auto-resolve
+        for (let i = 0; i < 6; i++) {
+          await humanPause(5000, 5000);
+          const newPageText = await page.textContent('body').catch(() => '') || '';
+          if (!newPageText.includes('Pardon Our Interruption') && 
+              !newPageText.includes('Checking your browser') &&
+              !newPageText.includes('Just a moment')) {
+            console.log('✅ Cloudflare challenge resolved!');
+            break;
+          }
+          console.log(`   ⏳ Still waiting for Cloudflare... (${(i + 1) * 5}s)`);
+        }
       }
       
       // Wait for page to be interactive - check for body or main content
       await Promise.race([
-        page.waitForSelector('body', { state: 'visible', timeout: 5000 }).catch(() => null),
-        page.waitForSelector('main, [role="main"], header', { timeout: 5000 }).catch(() => null),
-        new Promise(resolve => setTimeout(resolve, 3000)) // Reduced fallback timeout
+        page.waitForSelector('body', { state: 'visible', timeout: 10000 }).catch(() => null),
+        page.waitForSelector('main, [role="main"], header', { timeout: 10000 }).catch(() => null),
+        new Promise(resolve => setTimeout(resolve, 5000)) // Fallback timeout
       ]);
       
-      await humanPause(1000, 2000); // Reduced pause
+      await humanPause(2000, 3000); // Give page time to fully render
     } catch (error) {
       console.error(`⚠️  Navigation timeout, but continuing... Error: ${error instanceof Error ? error.message : String(error)}`);
       // Try to check if page loaded anyway
       const currentUrl = page.url();
       if (currentUrl.includes('edgeprop.sg')) {
         console.log('✅ Page appears to have loaded (URL check passed)');
-        await humanPause(1000, 2000);
+        await humanPause(2000, 3000);
       } else {
         throw error;
       }
@@ -190,16 +205,23 @@ async function authenticateEdgeProp() {
       for (let i = 0; i < loginSelectors.length; i++) {
         try {
           const loginButton = loginSelectors[i]();
-          await loginButton.waitFor({ state: 'visible', timeout: 10000 });
+          // Wait longer for element to appear (Cloudflare might delay page load)
+          await loginButton.waitFor({ state: 'visible', timeout: 20000 });
           // Wait for element to be stable and clickable
           await loginButton.waitFor({ state: 'attached', timeout: 5000 });
-          await humanPause(500, 1000);
-          await loginButton.click({ timeout: 20000, force: false });
+          await humanPause(1000, 1500); // Longer pause before clicking
+          await loginButton.click({ timeout: 30000, force: false }); // Increased click timeout
           console.log(`   ✅ Clicked Login button using selector ${i + 1}`);
           loginClicked = true;
           break;
         } catch (e) {
-          console.log(`   ⚠️  Selector ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
+          const errorMsg = e instanceof Error ? e.message : String(e);
+          console.log(`   ⚠️  Selector ${i + 1} failed: ${errorMsg}`);
+          // If it's a timeout and we're on selector 1-3, the page might still be loading
+          if (i < 3 && errorMsg.includes('timeout')) {
+            console.log(`   ⏳ Page might still be loading, waiting a bit longer...`);
+            await humanPause(3000, 5000);
+          }
           continue;
         }
       }

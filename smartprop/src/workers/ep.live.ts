@@ -973,13 +973,38 @@ async function scrapeEdgePropFinal() {
       if (justReAuthenticated) {
         console.log('   ✅ Just re-authenticated - verifying login in browser context...');
         
+        // CRITICAL: Check cookies in context first to verify they were loaded
+        const cookiesBeforeNav = await context.cookies();
+        const sessionCookiesBeforeNav = cookiesBeforeNav.filter(cookie => 
+          cookie.name.toLowerCase().includes('session') || 
+          cookie.name.toLowerCase().includes('ssess') ||
+          cookie.name.toLowerCase().includes('psessid') ||
+          cookie.name.toLowerCase().startsWith('ep_')
+        );
+        console.log(`   📊 Found ${sessionCookiesBeforeNav.length} session cookies in context before navigation`);
+        if (sessionCookiesBeforeNav.length === 0) {
+          console.error('   ❌ No session cookies found in browser context! Storage state may not have loaded correctly.');
+          throw new Error('Login verification failed - no session cookies in browser context after loading storage state');
+        }
+        
         // Navigate to homepage to activate cookies
+        console.log('   🔄 Navigating to homepage to activate cookies...');
         await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 60000 });
-        await humanPause(5000, 8000);
+        await humanPause(8000, 12000); // Wait longer for cookies to activate
+        
+        // Verify cookies are still present after navigation
+        const cookiesAfterNav = await context.cookies();
+        const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie => 
+          cookie.name.toLowerCase().includes('session') || 
+          cookie.name.toLowerCase().includes('ssess') ||
+          cookie.name.toLowerCase().includes('psessid') ||
+          cookie.name.toLowerCase().startsWith('ep_')
+        );
+        console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
         
         // Check for bookmarks link
         const bookmarksLink = page.locator('[href="/bookmarks"]');
-        const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 15000 }).catch(() => false);
+        const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 20000 }).catch(() => false);
         
         if (bookmarksVisible) {
           isLoggedIn = true;
@@ -988,10 +1013,10 @@ async function scrapeEdgePropFinal() {
           // Try property search page as fallback
           console.log('   ⚠️  Bookmarks not visible on homepage, trying property search page...');
           await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'networkidle', timeout: 60000 });
-          await humanPause(5000, 8000);
+          await humanPause(8000, 12000);
           
           const bookmarksLink2 = page.locator('[href="/bookmarks"]');
-          const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 15000 }).catch(() => false);
+          const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 20000 }).catch(() => false);
           
           if (bookmarksVisible2) {
             isLoggedIn = true;
@@ -1000,6 +1025,7 @@ async function scrapeEdgePropFinal() {
             // CRITICAL: If login indicators aren't visible, we're not logged in
             // Even if we have session cookies, they might not be valid or activated
             console.error('   ❌ Login indicators not visible after re-authentication!');
+            console.error(`   ❌ Found ${sessionCookiesAfterNav.length} session cookies but login indicators not visible`);
             console.error('   ❌ Browser context is not logged in, even though auth state was saved');
             throw new Error('Login verification failed - browser context not logged in after re-authentication');
           }

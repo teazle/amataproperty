@@ -161,7 +161,17 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
   });
 }
 
-async function handleScraperJob(job: Job<ScraperJobPayload> | null) {
+async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<ScraperJobPayload>[]) {
+  // Handle array of jobs (pg-boss may pass arrays)
+  if (Array.isArray(job)) {
+    if (job.length === 0) {
+      console.log('[ScraperWorker] Received empty job array, skipping');
+      return;
+    }
+    // Process first job in array
+    job = job[0];
+  }
+  
   if (!job) {
     console.log('[ScraperWorker] Received null job, skipping');
     return;
@@ -171,12 +181,12 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null) {
   
   // Validate payload structure
   if (!payload) {
-    console.error('[ScraperWorker] Job has no data payload:', job);
+    console.error('[ScraperWorker] Job has no data payload:', JSON.stringify(job, null, 2));
     throw new Error('Job payload is missing');
   }
   
   if (!payload.jobId) {
-    console.error('[ScraperWorker] Job payload missing jobId:', payload);
+    console.error('[ScraperWorker] Job payload missing jobId:', JSON.stringify(payload, null, 2));
     throw new Error('Job payload missing jobId');
   }
   

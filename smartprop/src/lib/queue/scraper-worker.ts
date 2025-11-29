@@ -122,6 +122,9 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
           ? ['-a', bunPath, 'src/workers/ep.live.ts']
           : ['src/workers/ep.live.ts'];
 
+    console.log(`[ScraperWorker] Spawning scraper process: ${command} ${args.join(' ')}`);
+    console.log(`[ScraperWorker] Log file: ${logFile}`);
+    
     const child = spawn(command, args, {
       cwd,
       env,
@@ -130,6 +133,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
     });
 
     child.on('error', (error) => {
+      console.error(`[ScraperWorker] Failed to spawn scraper process:`, error);
       closeIfOpen(logFd);
       reject(error);
     });
@@ -137,32 +141,62 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
     child.on('exit', (code, signal) => {
       closeIfOpen(logFd);
       if (code === 0) {
+        console.log(`[ScraperWorker] Scraper process exited successfully`);
         resolve();
       } else {
-        reject(
-          new Error(
-            `Scraper exited with code ${code ?? 'unknown'}${signal ? ` (signal: ${signal})` : ''}`
-          )
-        );
+        const errorMsg = `Scraper exited with code ${code ?? 'unknown'}${signal ? ` (signal: ${signal})` : ''}`;
+        console.error(`[ScraperWorker] ${errorMsg}`);
+        // Try to read the log file to get more details
+        try {
+          const logContent = fs.readFileSync(logFile, 'utf-8');
+          const lastLines = logContent.split('\n').slice(-10).join('\n');
+          console.error(`[ScraperWorker] Last 10 lines from ${logFile}:`);
+          console.error(lastLines);
+        } catch (logError) {
+          console.error(`[ScraperWorker] Could not read log file:`, logError);
+        }
+        reject(new Error(errorMsg));
       }
     });
   });
 }
 
 async function handleScraperJob(job: Job<ScraperJobPayload> | null) {
-  if (!job) return;
+  if (!job) {
+    console.log('[ScraperWorker] Received null job, skipping');
+    return;
+  }
   
   const payload = job.data;
+  console.log(`[ScraperWorker] Processing job ${payload.jobId} for ${payload.platform}`);
 
-  await updateJobStatus(payload.jobId, 'running');
+  try {
+    await updateJobStatus(payload.jobId, 'running');
+    console.log(`[ScraperWorker] Updated job ${payload.jobId} to running status`);
+  } catch (error) {
+    console.error(`[ScraperWorker] Failed to update job status to running:`, error);
+    throw error;
+  }
+
   const heartbeat = startHeartbeat(payload.jobId);
 
   try {
+    console.log(`[ScraperWorker] Starting scraper process for job ${payload.jobId}...`);
     await runScraperProcess(payload);
+    console.log(`[ScraperWorker] Scraper process completed for job ${payload.jobId}`);
     await updateJobStatus(payload.jobId, 'completed');
+    console.log(`[ScraperWorker] Updated job ${payload.jobId} to completed status`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await updateJobStatus(payload.jobId, 'failed', message);
+    console.error(`[ScraperWorker] Job ${payload.jobId} failed:`, message);
+    if (error instanceof Error && error.stack) {
+      console.error(`[ScraperWorker] Stack trace:`, error.stack);
+    }
+    try {
+      await updateJobStatus(payload.jobId, 'failed', message);
+    } catch (updateError) {
+      console.error(`[ScraperWorker] Failed to update job status to failed:`, updateError);
+    }
     throw error;
   } finally {
     heartbeat.stop();

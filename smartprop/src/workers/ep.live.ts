@@ -317,6 +317,36 @@ async function scrapeEdgePropFinal() {
   const stateFileExists = fs.existsSync(stateFilePath);
   let shouldReAuth = !stateFileExists;
   
+  // If state file exists, validate it's not corrupted
+  if (stateFileExists) {
+    try {
+      const stateContent = fs.readFileSync(stateFilePath, 'utf-8');
+      const stateData = JSON.parse(stateContent);
+      // Check if state file has valid structure (should have cookies and origins)
+      if (!stateData.cookies || !Array.isArray(stateData.cookies)) {
+        console.log('⚠️  Auth state file appears corrupted (missing cookies), will re-authenticate');
+        shouldReAuth = true;
+      } else if (stateData.cookies.length === 0) {
+        console.log('⚠️  Auth state file has no cookies, will re-authenticate');
+        shouldReAuth = true;
+      } else {
+        // Check if cookies include session/auth cookies
+        const hasSessionCookie = stateData.cookies.some((cookie: any) => 
+          cookie.name.toLowerCase().includes('session') || 
+          cookie.name.toLowerCase().includes('auth') ||
+          cookie.name.toLowerCase().includes('token')
+        );
+        if (!hasSessionCookie) {
+          console.log('⚠️  Auth state file missing session cookies, will re-authenticate');
+          shouldReAuth = true;
+        }
+      }
+    } catch (e) {
+      console.log('⚠️  Auth state file is corrupted or invalid, will re-authenticate');
+      shouldReAuth = true;
+    }
+  }
+  
   if (stateFileExists) {
     const stats = fs.statSync(stateFilePath);
     const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);

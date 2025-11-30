@@ -134,41 +134,88 @@ async function authenticatePropertyGuru() {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
   console.log('📄 Navigated to PropertyGuru login page');
   
-  // Wait for page to be interactive
-  await humanPause(3000, 5000);
+  // Wait for page to be interactive and for Cloudflare transition to complete
+  await humanPause(5000, 8000); // Longer wait for Cloudflare transition
   
-  // Check for Cloudflare immediately after navigation
-  const pageContent = await page.content().catch(() => '') || '';
-  const pageText = await page.textContent('body').catch(() => '') || '';
-  const pageLength = pageText.length;
-  
-  console.log(`   📊 Page content length: ${pageLength}`);
-  
-  // CRITICAL: If Flaresolverr failed AND page is blocked, fail immediately
-  if (!flaresolverrSucceeded && pageLength < 10000) {
-    console.log(`   🛡️  Flaresolverr failed AND page is blocked (${pageLength} chars) - cannot proceed`);
-    throw new Error(`Flaresolverr failed and page is blocked (${pageLength} chars). Cannot proceed without Cloudflare bypass.`);
-  }
-  
-  // Check for Cloudflare indicators
-  const cloudflareIndicators = [
-    'Just a moment...',
-    'Pardon Our Interruption',
-    'Checking your browser',
-    'Just a moment',
-    'challenge-platform',
-    'cf-browser-verification',
-    'cf-im-under-attack'
-  ];
-  
-  const hasCloudflare = cloudflareIndicators.some(indicator => 
-    pageContent.includes(indicator) || pageText.includes(indicator)
-  );
-  
-  if (hasCloudflare) {
-    console.log('   🛡️  Cloudflare challenge detected after navigation!');
-    console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
-    throw new Error('Cloudflare detected after navigation. Flaresolverr failed or page is still blocked.');
+  // If Flaresolverr succeeded, wait for login form to appear (Cloudflare should be bypassed)
+  if (flaresolverrSucceeded) {
+    console.log('   ⏳ Waiting for login form to appear (Cloudflare should be bypassed)...');
+    try {
+      // Wait for email input field to appear (indicates login page loaded)
+      await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', {
+        timeout: 30000, // 30 seconds to wait for login form
+        state: 'visible'
+      });
+      console.log('   ✅ Login form appeared - Cloudflare bypass successful!');
+    } catch (waitError) {
+      // Login form didn't appear - check if it's still Cloudflare
+      console.log('   ⚠️  Login form not found, checking page state...');
+      const pageContent = await page.content().catch(() => '') || '';
+      const pageText = await page.textContent('body').catch(() => '') || '';
+      const pageLength = pageText.length;
+      
+      console.log(`   📊 Page content length: ${pageLength}`);
+      
+      // Check for Cloudflare indicators
+      const cloudflareIndicators = [
+        'Just a moment...',
+        'Pardon Our Interruption',
+        'Checking your browser',
+        'Just a moment',
+        'challenge-platform',
+        'cf-browser-verification',
+        'cf-im-under-attack',
+        'Verify you are human',
+        'Verification successful'
+      ];
+      
+      const hasCloudflare = cloudflareIndicators.some(indicator => 
+        pageContent.includes(indicator) || pageText.includes(indicator)
+      );
+      
+      if (hasCloudflare || pageLength < 10000) {
+        console.log('   🛡️  Cloudflare challenge still present after Flaresolverr!');
+        console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
+        throw new Error('Cloudflare challenge still present after Flaresolverr bypass. Page may need more time or cookies are invalid.');
+      }
+      
+      // If no Cloudflare but no login form, re-throw the original error
+      throw waitError;
+    }
+  } else {
+    // Flaresolverr failed - check immediately
+    const pageContent = await page.content().catch(() => '') || '';
+    const pageText = await page.textContent('body').catch(() => '') || '';
+    const pageLength = pageText.length;
+    
+    console.log(`   📊 Page content length: ${pageLength}`);
+    
+    // CRITICAL: If Flaresolverr failed AND page is blocked, fail immediately
+    if (pageLength < 10000) {
+      console.log(`   🛡️  Flaresolverr failed AND page is blocked (${pageLength} chars) - cannot proceed`);
+      throw new Error(`Flaresolverr failed and page is blocked (${pageLength} chars). Cannot proceed without Cloudflare bypass.`);
+    }
+    
+    // Check for Cloudflare indicators
+    const cloudflareIndicators = [
+      'Just a moment...',
+      'Pardon Our Interruption',
+      'Checking your browser',
+      'Just a moment',
+      'challenge-platform',
+      'cf-browser-verification',
+      'cf-im-under-attack'
+    ];
+    
+    const hasCloudflare = cloudflareIndicators.some(indicator => 
+      pageContent.includes(indicator) || pageText.includes(indicator)
+    );
+    
+    if (hasCloudflare) {
+      console.log('   🛡️  Cloudflare challenge detected after navigation!');
+      console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
+      throw new Error('Cloudflare detected after navigation. Flaresolverr failed or page is still blocked.');
+    }
   }
   
   // Check if page is too small (likely blocked or not loaded)

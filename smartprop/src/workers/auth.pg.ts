@@ -41,27 +41,48 @@ async function authenticatePropertyGuru() {
   }
   
   // Use playwright-ghost with recommended plugins for best stealth (same as main scraper)
-  const browser = await chromium.launch({
-    headless: isHeadless,
-    plugins: plugins.recommended({
-      humanize: {
-        click: { delay: { min: 200, max: 600 } },
-        cursor: false,
-        dialog: { delay: { min: 800, max: 2000 } }
-      }
-    }),
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-site-isolation-trials',
-      // macOS headless mode requires --disable-gpu
-      ...(isHeadless ? ['--disable-gpu'] : []),
-    ]
-  });
+  const launchArgs = [
+    '--disable-blink-features=AutomationControlled',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-site-isolation-trials',
+    '--disable-extensions',
+    '--disable-breakpad', // avoid crashpad traps on low-memory hosts
+    '--no-zygote',
+    '--disable-component-update',
+    // macOS headless mode requires --disable-gpu
+    ...(isHeadless ? ['--disable-gpu'] : []),
+  ];
+
+  async function launchBrowserWithFallback() {
+    try {
+      return await chromium.launch({
+        headless: isHeadless,
+        plugins: plugins.recommended({
+          humanize: {
+            click: { delay: { min: 200, max: 600 } },
+            cursor: false,
+            dialog: { delay: { min: 800, max: 2000 } }
+          }
+        }),
+        chromiumSandbox: false,
+        args: launchArgs
+      });
+    } catch (err) {
+      console.log('⚠️  Primary browser launch (ghost plugins) failed, retrying without plugins...', err);
+      // Retry without plugins and with single-process to reduce crash risk
+      return chromium.launch({
+        headless: isHeadless,
+        chromiumSandbox: false,
+        args: [...launchArgs, '--single-process']
+      });
+    }
+  }
+
+  const browser = await launchBrowserWithFallback();
 
   const context = await browser.newContext({
     // Don't set userAgent explicitly - let playwright-ghost handle it for better stealth
@@ -440,4 +461,3 @@ authenticatePropertyGuru().catch((error: unknown) => {
   console.error('❌ Error during authentication:', error);
   process.exit(1);
 });
-

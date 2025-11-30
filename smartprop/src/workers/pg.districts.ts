@@ -512,16 +512,24 @@ async function scrapePropertyGuruByDistrict() {
   process.on('SIGINT', () => handleStopSignal('SIGINT'));
   
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
+  // Declare browser variable early so it can be accessed in error handlers
+  let browser: any = null;
+  
+  // CRITICAL: Handle uncaught exceptions - close browser before crashing
   process.on('uncaughtException', async (error) => {
     console.error('❌ Uncaught exception:', error);
-    await cleanupBrowser(browser, 'uncaughtException');
+    if (browser) {
+      await cleanupBrowser(browser, 'uncaughtException');
+    }
     process.exit(1);
   });
   
   // CRITICAL: Handle unhandled promise rejections - close browser before crashing
   process.on('unhandledRejection', async (reason, promise) => {
     console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
-    await cleanupBrowser(browser, 'unhandledRejection');
+    if (browser) {
+      await cleanupBrowser(browser, 'unhandledRejection');
+    }
     process.exit(1);
   });
   

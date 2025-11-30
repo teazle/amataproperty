@@ -57,31 +57,17 @@ services:
       - BROWSER_TIMEOUT=200000
     networks:
       - smartprop-network
-    # Increased shared memory for Chrome's multi-process architecture
-    # Chrome needs more shared memory for multiple tabs/processes during Cloudflare challenges
-    shm_size: 512M  # Increased from 256M for better performance on t4g.medium
+    # Docker Compose ignores the deploy block unless running in Swarm mode.
+    # Explicit resource limits are set here to actually take effect.
+    shm_size: 2g          # Give Chromium enough /dev/shm to avoid tab crashes
+    mem_limit: 2g         # Real memory cap (was effectively ~1G without this)
+    cpus: "1.5"           # Allow more CPU when solving challenges
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-    deploy:
-      resources:
-        limits:
-          # OPTIMIZED LIMITS for t4g.medium (4GB RAM total):
-          # - smartprop-app: ~600M-800M (actual usage, runs via PM2)
-          # - waha: ~200M-400M (actual usage)
-          # - nginx: ~50M (actual usage, runs via systemd)
-          # - system: ~200M
-          # - Available for flaresolverr: ~2.5-3GB
-          # Setting limit to 1.5G for optimal performance while leaving headroom
-          memory: 1.5G  # Increased from 800M - much faster Cloudflare solving
-          cpus: '1.0'  # Increased from 0.75 - faster processing (safe for 2 vCPU instance)
-        reservations:
-          # Guaranteed minimum for stable operation
-          memory: 600M  # Increased from 400M for better stability
-          cpus: '0.5'  # Increased from 0.4
     logging:
       driver: "json-file"
       options:

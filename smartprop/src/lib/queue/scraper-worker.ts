@@ -4,6 +4,7 @@ import { PgBoss, type Job } from 'pg-boss';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import {
   SCRAPER_QUEUE_NAME,
   type ScraperJobPayload,
@@ -75,6 +76,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
   const { platform, config, jobId } = payload;
 
   return new Promise((resolve, reject) => {
+    const runtimeCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), `bun-transpile-${platform}-`));
     const cwd = process.cwd();
     const homeDir = process.env.HOME || '/home/ec2-user';
     const bunPath = process.env.BUN_PATH || `${homeDir}/.bun/bin/bun`;
@@ -89,6 +91,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
     try {
       logFd = fs.openSync(logFile, 'a');
     } catch (error) {
+      fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
       return reject(error);
     }
 
@@ -98,6 +101,9 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
       HOME: homeDir,
       HEADLESS: 'true',
       NODE_ENV: process.env.NODE_ENV || 'production',
+      // Force Bun to transpile fresh for every job to avoid stale cache issues
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeCacheDir,
+      BUN_INSTALL_CACHE_DIR: '/dev/null',
     };
 
     if (platform === 'propertyguru') {
@@ -124,6 +130,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
 
     console.log(`[ScraperWorker] Spawning scraper process: ${command} ${args.join(' ')}`);
     console.log(`[ScraperWorker] Log file: ${logFile}`);
+    console.log(`[ScraperWorker] Bun runtime cache: ${runtimeCacheDir}`);
 
     const child = spawn(command, args, {
       cwd,
@@ -135,11 +142,13 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
     child.on('error', (error) => {
       console.error(`[ScraperWorker] Failed to spawn scraper process:`, error);
       closeIfOpen(logFd);
+      fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
       reject(error);
     });
 
     child.on('exit', (code, signal) => {
       closeIfOpen(logFd);
+      fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
       if (code === 0) {
         console.log(`[ScraperWorker] Scraper process exited successfully`);
         resolve();

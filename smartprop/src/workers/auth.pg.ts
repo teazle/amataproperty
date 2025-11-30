@@ -320,7 +320,6 @@ async function authenticatePropertyGuru() {
       ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
     );
     console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
-  }
   } else {
     // Flaresolverr failed - check immediately
     const pageContent = await page.content().catch(() => '') || '';

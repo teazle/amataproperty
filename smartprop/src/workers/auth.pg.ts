@@ -60,15 +60,15 @@ async function authenticatePropertyGuru() {
   async function launchBrowserWithFallback() {
     // Try with plugins first (best stealth)
     try {
-      const browser = await chromium.launch({
-        headless: isHeadless,
-        plugins: plugins.recommended({
-          humanize: {
-            click: { delay: { min: 200, max: 600 } },
-            cursor: false,
-            dialog: { delay: { min: 800, max: 2000 } }
-          }
-        }),
+  const browser = await chromium.launch({
+    headless: isHeadless,
+    plugins: plugins.recommended({
+      humanize: {
+        click: { delay: { min: 200, max: 600 } },
+        cursor: false,
+        dialog: { delay: { min: 800, max: 2000 } }
+      }
+    }),
         chromiumSandbox: false,
         args: launchArgs,
         timeout: 30000 // 30 second timeout
@@ -96,9 +96,9 @@ async function authenticatePropertyGuru() {
         return await chromium.launch({
           headless: isHeadless,
           chromiumSandbox: false,
-          args: [
+    args: [
             '--no-sandbox',
-            '--disable-dev-shm-usage',
+      '--disable-dev-shm-usage',
             '--disable-gpu',
             '--single-process',
             '--disable-software-rasterizer',
@@ -202,7 +202,7 @@ async function authenticatePropertyGuru() {
       console.log('   ⚠️  Warning: No Cloudflare cookies found after Flaresolverr!');
     }
   }
-  
+
   // Navigate to PropertyGuru login page
   // Use load instead of networkidle to avoid timeout (networkidle can wait forever on some pages)
   // Use domcontentloaded when Flaresolverr failed (to fail faster if blocked)
@@ -241,8 +241,16 @@ async function authenticatePropertyGuru() {
       // Check if still in Cloudflare transition
       const pageText = await page.textContent('body').catch(() => '') || '';
       if (pageText.includes('Verification successful') && pageText.includes('Waiting for')) {
-        console.log(`   ⏳ Still in Cloudflare transition (attempt ${retries + 1}/${maxRetries}), waiting 10 more seconds...`);
-        await humanPause(10000, 12000);
+        console.log(`   ⏳ Still in Cloudflare transition (attempt ${retries + 1}/${maxRetries})...`);
+        
+        // Try reloading the page after 2-3 attempts to force Cloudflare to re-evaluate cookies
+        if (retries === 2 || retries === 4) {
+          console.log(`   🔄 Reloading page to force Cloudflare re-evaluation...`);
+          await page.reload({ waitUntil: 'load', timeout: 60000 });
+          await humanPause(5000, 8000);
+        } else {
+          await humanPause(10000, 12000);
+        }
         retries++;
       } else if (pageText.length < 10000) {
         // Page is still blocked
@@ -323,7 +331,7 @@ async function authenticatePropertyGuru() {
   } else {
     // Flaresolverr failed - check immediately
     const pageContent = await page.content().catch(() => '') || '';
-    const pageText = await page.textContent('body').catch(() => '') || '';
+  const pageText = await page.textContent('body').catch(() => '') || '';
     const pageLength = pageText.length;
     
     console.log(`   📊 Page content length: ${pageLength}`);

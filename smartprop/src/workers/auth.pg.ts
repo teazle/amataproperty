@@ -130,12 +130,29 @@ async function authenticatePropertyGuru() {
     console.log('   ⚠️  Flaresolverr failed, will check if page is blocked after navigation...');
   }
 
+  // If Flaresolverr succeeded, verify cookies were applied correctly
+  if (flaresolverrSucceeded) {
+    console.log('   🔍 Verifying Flaresolverr cookies were applied...');
+    const cookiesAfterFlaresolverr = await context.cookies();
+    const cfCookies = cookiesAfterFlaresolverr.filter((c: any) => 
+      ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
+    );
+    console.log(`   📊 Found ${cfCookies.length} Cloudflare cookies in context`);
+    if (cfCookies.length > 0) {
+      console.log(`   🍪 Cloudflare cookies: ${cfCookies.map((c: any) => `${c.name} (domain: ${c.domain || 'default'}, path: ${c.path || '/'})`).join(', ')}`);
+    } else {
+      console.log('   ⚠️  Warning: No Cloudflare cookies found after Flaresolverr!');
+    }
+  }
+  
   // Navigate to PropertyGuru login page
-  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  // Use networkidle to wait for all network requests to complete (including Cloudflare transition)
+  console.log('📄 Navigating to PropertyGuru login page (waiting for network idle)...');
+  await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 120000 }); // 2 minutes timeout for Cloudflare transition
   console.log('📄 Navigated to PropertyGuru login page');
   
-  // Wait for page to be interactive and for Cloudflare transition to complete
-  await humanPause(5000, 8000); // Longer wait for Cloudflare transition
+  // Wait a bit more for Cloudflare transition to complete
+  await humanPause(3000, 5000);
   
   // If Flaresolverr succeeded, wait for login form to appear (Cloudflare should be bypassed)
   if (flaresolverrSucceeded) {
@@ -143,10 +160,17 @@ async function authenticatePropertyGuru() {
     try {
       // Wait for email input field to appear (indicates login page loaded)
       await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', {
-        timeout: 30000, // 30 seconds to wait for login form
+        timeout: 45000, // 45 seconds to wait for login form (increased from 30s)
         state: 'visible'
       });
       console.log('   ✅ Login form appeared - Cloudflare bypass successful!');
+      
+      // Verify cookies are still present after navigation
+      const cookiesAfterNav = await context.cookies();
+      const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) => 
+        ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
+      );
+      console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
     } catch (waitError) {
       // Login form didn't appear - check if it's still Cloudflare
       console.log('   ⚠️  Login form not found, checking page state...');
@@ -155,6 +179,16 @@ async function authenticatePropertyGuru() {
       const pageLength = pageText.length;
       
       console.log(`   📊 Page content length: ${pageLength}`);
+      
+      // Check current cookies
+      const cookiesAfterNav = await context.cookies();
+      const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) => 
+        ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
+      );
+      console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
+      if (cfCookiesAfterNav.length > 0) {
+        console.log(`   🍪 Cookies: ${cfCookiesAfterNav.map((c: any) => `${c.name} (domain: ${c.domain || 'default'})`).join(', ')}`);
+      }
       
       // Check for Cloudflare indicators
       const cloudflareIndicators = [
@@ -176,7 +210,11 @@ async function authenticatePropertyGuru() {
       if (hasCloudflare || pageLength < 10000) {
         console.log('   🛡️  Cloudflare challenge still present after Flaresolverr!');
         console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
-        throw new Error('Cloudflare challenge still present after Flaresolverr bypass. Page may need more time or cookies are invalid.');
+        if (cfCookiesAfterNav.length === 0) {
+          throw new Error('Cloudflare challenge still present after Flaresolverr bypass. No Cloudflare cookies found in context - cookies may not have been applied correctly.');
+        } else {
+          throw new Error('Cloudflare challenge still present after Flaresolverr bypass. Cookies are present but page is still blocked - may need more time or cookies are invalid.');
+        }
       }
       
       // If no Cloudflare but no login form, re-throw the original error

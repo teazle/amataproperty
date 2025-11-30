@@ -705,7 +705,7 @@ async function scrapePropertyGuruByDistrict() {
   // Launch browser once for all districts
   // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
   const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
-  let browser: Browser | null = null;
+  // Note: browser is already declared earlier for error handlers, just assign to it here
   
   // Initialize overallStats BEFORE try block so it's accessible in finally block
   const overallStats = {

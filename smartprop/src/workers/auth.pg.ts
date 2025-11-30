@@ -157,15 +157,29 @@ async function authenticatePropertyGuru() {
 
   const loginUrl = 'https://www.propertyguru.com.sg/login';
   
+  // Try navigating first to see the actual Cloudflare challenge
+  console.log('📄 Navigating to PropertyGuru login page to check Cloudflare status...');
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await humanPause(2000, 3000);
+  
+  // Check if page is blocked by Cloudflare
+  const initialPageText = await page.textContent('body').catch(() => '') || '';
+  const isBlocked = initialPageText.includes('Just a moment') || 
+                    initialPageText.includes('Pardon Our Interruption') ||
+                    initialPageText.includes('Verify you are human') ||
+                    initialPageText.length < 10000;
+  
   let flaresolverrSucceeded = false;
-  try {
-    // Use Flaresolverr to solve Cloudflare before navigating
-    // Use useSession: false to prevent Chrome connection issues and OOM kills
-    const flaresolverrResult = await solveCloudflareWithFlaresolverr(loginUrl, false);
+  if (isBlocked) {
+    console.log('   🛡️  Cloudflare detected, using Flaresolverr to solve...');
+    try {
+      // Use Flaresolverr to solve Cloudflare on the current page
+      // Navigate to the current URL to get fresh cookies
+      const flaresolverrResult = await solveCloudflareWithFlaresolverr(page.url(), false);
     
     if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
       await applyFlaresolverrToContext(context, flaresolverrResult);
-      flaresolverrSucceeded = true;
+        flaresolverrSucceeded = true;
       
       // Save Cloudflare cookies immediately (will be overwritten with full auth state after login)
       const storagePath = path.join(process.cwd(), 'storage');
@@ -180,12 +194,18 @@ async function authenticatePropertyGuru() {
         console.log(`   ⚠️  Failed to save temp cookies: ${saveError}`);
       }
       
-      await humanPause(500, 1000);
-    } else {
-      console.log('   ⚠️  Flaresolverr returned no cookies - page may be blocked');
+        // Reload the page with the new cookies
+        console.log('   🔄 Reloading page with Flaresolverr cookies...');
+        await page.reload({ waitUntil: 'load', timeout: 60000 });
+        await humanPause(3000, 5000);
+      } else {
+        console.log('   ⚠️  Flaresolverr returned no cookies - page may be blocked');
     }
   } catch (error) {
-    console.log('   ⚠️  Flaresolverr failed, will check if page is blocked after navigation...');
+      console.log('   ⚠️  Flaresolverr failed, will check if page is blocked...', error instanceof Error ? error.message : String(error));
+    }
+  } else {
+    console.log('   ✅ No Cloudflare detected, proceeding with login...');
   }
 
   // If Flaresolverr succeeded, verify cookies were applied correctly

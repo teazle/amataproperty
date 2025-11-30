@@ -111,6 +111,7 @@ async function authenticatePropertyGuru() {
             '--disable-renderer-backgrounding',
             '--disable-features=TranslateUI',
             '--disable-ipc-flooding-protection',
+            `--user-data-dir=${customTempDir}/pg-auth-browser-${Date.now()}`, // Use custom temp dir
           ],
           timeout: 30000
         });

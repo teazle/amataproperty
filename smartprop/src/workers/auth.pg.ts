@@ -146,9 +146,12 @@ async function authenticatePropertyGuru() {
   }
   
   // Navigate to PropertyGuru login page
-  // Use networkidle to wait for all network requests to complete (including Cloudflare transition)
-  console.log('📄 Navigating to PropertyGuru login page (waiting for network idle)...');
-  await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 120000 }); // 2 minutes timeout for Cloudflare transition
+  // Use networkidle when Flaresolverr succeeded (to wait for Cloudflare transition)
+  // Use domcontentloaded when Flaresolverr failed (to fail faster if blocked)
+  const waitUntil = flaresolverrSucceeded ? 'networkidle' : 'domcontentloaded';
+  const timeout = flaresolverrSucceeded ? 120000 : 60000; // 2 min if Flaresolverr succeeded, 1 min if failed
+  console.log(`📄 Navigating to PropertyGuru login page (waiting for ${waitUntil})...`);
+  await page.goto(loginUrl, { waitUntil, timeout });
   console.log('📄 Navigated to PropertyGuru login page');
   
   // Wait a bit more for Cloudflare transition to complete

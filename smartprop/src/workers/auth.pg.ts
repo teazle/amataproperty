@@ -263,6 +263,23 @@ async function authenticatePropertyGuru() {
       if (pageText.includes('Verification successful') && pageText.includes('Waiting for')) {
         console.log(`   ⏳ Still in Cloudflare transition (attempt ${retries + 1}/${maxRetries})...`);
         
+        // Try executing JavaScript to trigger Cloudflare completion
+        try {
+          // Try to trigger any pending JavaScript that might complete the transition
+          await page.evaluate(() => {
+            // Trigger any pending events
+            window.dispatchEvent(new Event('load'));
+            window.dispatchEvent(new Event('DOMContentLoaded'));
+            // Try to find and click any "Continue" or "Verify" buttons if they exist
+            const continueBtn = document.querySelector('button[type="submit"], input[type="submit"], button:contains("Continue"), button:contains("Verify")');
+            if (continueBtn && (continueBtn as HTMLElement).offsetParent !== null) {
+              (continueBtn as HTMLElement).click();
+            }
+          }).catch(() => {});
+        } catch (e) {
+          // Ignore JavaScript errors
+        }
+        
         // Try reloading the page after 2-3 attempts to force Cloudflare to re-evaluate cookies
         if (retries === 2 || retries === 4) {
           console.log(`   🔄 Reloading page to force Cloudflare re-evaluation...`);

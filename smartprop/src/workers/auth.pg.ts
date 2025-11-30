@@ -122,7 +122,8 @@ async function authenticatePropertyGuru() {
   const browser = await launchBrowserWithFallback();
 
   const context = await browser.newContext({
-    // Don't set userAgent explicitly - let playwright-ghost handle it for better stealth
+    // Critical: match Flaresolverr's fingerprint so Cloudflare cookies remain valid
+    userAgent: FLARESOLVERR_UA,
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',
@@ -582,4 +583,3 @@ authenticatePropertyGuru().catch((error: unknown) => {
   console.error('❌ Error during authentication:', error);
   process.exit(1);
 });
-

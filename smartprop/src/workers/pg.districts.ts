@@ -742,11 +742,9 @@ async function scrapePropertyGuruByDistrict() {
     ]
   });
 
-  // Don't set userAgent explicitly - let playwright-ghost handle it for better stealth
-  // This matches the approach in auth.pg.ts for cookie compatibility
-  
   const contextOptions: BrowserContextOptions = {
-    // userAgent: removed - let playwright-ghost handle it
+    // Critical: match Flaresolverr user-agent so Cloudflare cookies stay valid
+    userAgent: FLARESOLVERR_UA,
     viewport: { width: 1920, height: 1080 },
     locale: 'en-SG',
     timezoneId: 'Asia/Singapore',

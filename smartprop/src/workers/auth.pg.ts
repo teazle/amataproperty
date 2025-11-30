@@ -210,35 +210,67 @@ async function authenticatePropertyGuru() {
   const timeout = flaresolverrSucceeded ? 60000 : 30000; // 1 min if Flaresolverr succeeded, 30s if failed
   console.log(`📄 Navigating to PropertyGuru login page (waiting for ${waitUntil})...`);
   await page.goto(loginUrl, { waitUntil, timeout });
-  // Wait a bit more for Cloudflare transition after page load
-  if (flaresolverrSucceeded) {
-    await humanPause(3000, 5000);
-  }
   console.log('📄 Navigated to PropertyGuru login page');
   
-  // Wait a bit more for Cloudflare transition to complete
-  await humanPause(3000, 5000);
-  
-  // If Flaresolverr succeeded, wait for login form to appear (Cloudflare should be bypassed)
+  // If Flaresolverr succeeded, wait longer for Cloudflare transition to complete
   if (flaresolverrSucceeded) {
-    console.log('   ⏳ Waiting for login form to appear (Cloudflare should be bypassed)...');
-    try {
-      // Wait for email input field to appear (indicates login page loaded)
-      await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', {
-        timeout: 45000, // 45 seconds to wait for login form (increased from 30s)
-        state: 'visible'
-      });
-      console.log('   ✅ Login form appeared - Cloudflare bypass successful!');
+    console.log('   ⏳ Waiting for Cloudflare transition to complete (this may take 10-20 seconds)...');
+    // Wait longer for Cloudflare to transition - it can take 10-20 seconds
+    await humanPause(10000, 15000);
+    
+    // Check if page has transitioned by looking for login form or Cloudflare indicators
+    let loginFormFound = false;
+    let retries = 0;
+    const maxRetries = 6; // Try for up to 60 seconds (6 * 10s)
+    
+    while (!loginFormFound && retries < maxRetries) {
+      try {
+        // Check for login form
+        const emailInput = await page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').first();
+        const isVisible = await emailInput.isVisible({ timeout: 5000 }).catch(() => false);
+        
+        if (isVisible) {
+          loginFormFound = true;
+          console.log('   ✅ Login form appeared - Cloudflare bypass successful!');
+          break;
+        }
+      } catch (e) {
+        // Form not found yet, continue waiting
+      }
       
-      // Verify cookies are still present after navigation
-      const cookiesAfterNav = await context.cookies();
-      const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) => 
-        ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
-      );
-      console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
-    } catch (waitError) {
-      // Login form didn't appear - check if it's still Cloudflare
-      console.log('   ⚠️  Login form not found, checking page state...');
+      // Check if still in Cloudflare transition
+      const pageText = await page.textContent('body').catch(() => '') || '';
+      if (pageText.includes('Verification successful') && pageText.includes('Waiting for')) {
+        console.log(`   ⏳ Still in Cloudflare transition (attempt ${retries + 1}/${maxRetries}), waiting 10 more seconds...`);
+        await humanPause(10000, 12000);
+        retries++;
+      } else if (pageText.length < 10000) {
+        // Page is still blocked
+        console.log(`   ⏳ Page still blocked (attempt ${retries + 1}/${maxRetries}), waiting 10 more seconds...`);
+        await humanPause(10000, 12000);
+        retries++;
+      } else {
+        // Page seems loaded, try to find login form one more time
+        try {
+          await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email" i]', {
+            timeout: 10000,
+            state: 'visible'
+          });
+          loginFormFound = true;
+          console.log('   ✅ Login form appeared after transition!');
+          break;
+        } catch (e) {
+          retries++;
+          if (retries < maxRetries) {
+            console.log(`   ⏳ Login form not found yet (attempt ${retries + 1}/${maxRetries}), waiting 10 more seconds...`);
+            await humanPause(10000, 12000);
+          }
+        }
+      }
+    }
+    
+    if (!loginFormFound) {
+      // Final check - get page state
       const pageContent = await page.content().catch(() => '') || '';
       const pageText = await page.textContent('body').catch(() => '') || '';
       const pageLength = pageText.length;
@@ -251,9 +283,6 @@ async function authenticatePropertyGuru() {
         ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
       );
       console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
-      if (cfCookiesAfterNav.length > 0) {
-        console.log(`   🍪 Cookies: ${cfCookiesAfterNav.map((c: any) => `${c.name} (domain: ${c.domain || 'default'})`).join(', ')}`);
-      }
       
       // Check for Cloudflare indicators
       const cloudflareIndicators = [
@@ -273,18 +302,25 @@ async function authenticatePropertyGuru() {
       );
       
       if (hasCloudflare || pageLength < 10000) {
-        console.log('   🛡️  Cloudflare challenge still present after Flaresolverr!');
+        console.log('   🛡️  Cloudflare challenge still present after waiting 60+ seconds!');
         console.log(`   📄 Page content preview: ${pageText.substring(0, 200)}...`);
         if (cfCookiesAfterNav.length === 0) {
           throw new Error('Cloudflare challenge still present after Flaresolverr bypass. No Cloudflare cookies found in context - cookies may not have been applied correctly.');
         } else {
-          throw new Error('Cloudflare challenge still present after Flaresolverr bypass. Cookies are present but page is still blocked - may need more time or cookies are invalid.');
+          throw new Error('Cloudflare challenge still present after Flaresolverr bypass and 60+ second wait. Cookies are present but page is still blocked - Flaresolverr cookies may be invalid or expired.');
         }
       }
       
-      // If no Cloudflare but no login form, re-throw the original error
-      throw waitError;
+      throw new Error('Login form not found after 60+ seconds of waiting, but page does not appear to be blocked by Cloudflare.');
     }
+    
+    // Verify cookies are still present after navigation
+    const cookiesAfterNav = await context.cookies();
+    const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) => 
+      ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
+    );
+    console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
+  }
   } else {
     // Flaresolverr failed - check immediately
     const pageContent = await page.content().catch(() => '') || '';
@@ -502,3 +538,4 @@ authenticatePropertyGuru().catch((error: unknown) => {
   console.error('❌ Error during authentication:', error);
   process.exit(1);
 });
+

@@ -58,8 +58,9 @@ async function authenticatePropertyGuru() {
   ];
 
   async function launchBrowserWithFallback() {
+    // Try with plugins first (best stealth)
     try {
-      return await chromium.launch({
+      const browser = await chromium.launch({
         headless: isHeadless,
         plugins: plugins.recommended({
           humanize: {
@@ -69,16 +70,51 @@ async function authenticatePropertyGuru() {
           }
         }),
         chromiumSandbox: false,
-        args: launchArgs
+        args: launchArgs,
+        timeout: 30000 // 30 second timeout
       });
+      // Verify browser is actually usable
+      await browser.version();
+      return browser;
     } catch (err) {
-      console.log('⚠️  Primary browser launch (ghost plugins) failed, retrying without plugins...', err);
+      console.log('⚠️  Primary browser launch (ghost plugins) failed, retrying without plugins...', err instanceof Error ? err.message : String(err));
+      
       // Retry without plugins and with single-process to reduce crash risk
-      return chromium.launch({
-        headless: isHeadless,
-        chromiumSandbox: false,
-        args: [...launchArgs, '--single-process']
-      });
+      try {
+        const browser = await chromium.launch({
+          headless: isHeadless,
+          chromiumSandbox: false,
+          args: [...launchArgs, '--single-process', '--disable-software-rasterizer'],
+          timeout: 30000
+        });
+        // Verify browser is actually usable
+        await browser.version();
+        return browser;
+      } catch (err2) {
+        console.log('⚠️  Fallback browser launch also failed, trying minimal config...', err2 instanceof Error ? err2.message : String(err2));
+        // Last resort: minimal config
+        return await chromium.launch({
+          headless: isHeadless,
+          chromiumSandbox: false,
+          args: [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--single-process',
+            '--disable-software-rasterizer',
+            '--disable-breakpad',
+            '--no-zygote',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-features=TranslateUI',
+            '--disable-ipc-flooding-protection',
+          ],
+          timeout: 30000
+        });
+      }
     }
   }
 

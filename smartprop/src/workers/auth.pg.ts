@@ -443,7 +443,7 @@ async function authenticatePropertyGuru() {
   
   // Check for login form
   const hasLoginForm = await page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').count().catch(() => 0) > 0;
-  const hasPropertyContent = pageLength > 10000 || pageText.includes('Login') || pageText.includes('Sign in');
+  const hasPropertyContent = finalPageLength > 10000 || finalPageText.includes('Login') || finalPageText.includes('Sign in');
   
   if (!hasLoginForm && !hasPropertyContent) {
     console.log('⏳ Login form not found, waiting for page to load...');

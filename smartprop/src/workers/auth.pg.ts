@@ -369,7 +369,7 @@ async function authenticatePropertyGuru() {
   } else {
     // Flaresolverr failed - check immediately
     const pageContent = await page.content().catch(() => '') || '';
-  const pageText = await page.textContent('body').catch(() => '') || '';
+    const pageText = await page.textContent('body').catch(() => '') || '';
     const pageLength = pageText.length;
     
     console.log(`   📊 Page content length: ${pageLength}`);
@@ -402,11 +402,16 @@ async function authenticatePropertyGuru() {
     }
   }
   
+  // Get page content for final validation (only if not already checked above)
+  const finalPageContent = await page.content().catch(() => '') || '';
+  const finalPageText = await page.textContent('body').catch(() => '') || '';
+  const finalPageLength = finalPageText.length;
+  
   // Check if page is too small (likely blocked or not loaded)
   // Normal PropertyGuru login pages are 15k+ characters. Pages under 10k are likely blocked.
-  if (pageLength < 10000) {
-    console.log(`   ⚠️  Page content is very small (${pageLength} chars) - likely blocked or not loaded`);
-    console.log(`   📄 Page content preview: ${pageText.substring(0, 500)}...`);
+  if (finalPageLength < 10000) {
+    console.log(`   ⚠️  Page content is very small (${finalPageLength} chars) - likely blocked or not loaded`);
+    console.log(`   📄 Page content preview: ${finalPageText.substring(0, 500)}...`);
     
     // Wait a bit longer and check again
     await page.waitForTimeout(10000);
@@ -417,6 +422,15 @@ async function authenticatePropertyGuru() {
     console.log(`   📊 Page content length after wait: ${newPageLength}`);
     
     // Check for Cloudflare again
+    const cloudflareIndicators = [
+      'Just a moment...',
+      'Pardon Our Interruption',
+      'Checking your browser',
+      'Just a moment',
+      'challenge-platform',
+      'cf-browser-verification',
+      'cf-im-under-attack'
+    ];
     const stillHasCloudflare = cloudflareIndicators.some(indicator => 
       newPageContent.includes(indicator) || newPageText.includes(indicator)
     );

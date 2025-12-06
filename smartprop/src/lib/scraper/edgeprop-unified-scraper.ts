@@ -116,7 +116,17 @@ export async function scrapeEdgePropUnified(
         '--no-zygote',
         '--disable-gpu',
         '--disable-web-security',
-        '--disable-features=VizDisplayCompositor'
+        '--disable-features=VizDisplayCompositor',
+        // Memory optimization flags (safe, won't break functionality)
+        '--disable-software-rasterizer', // Reduce memory usage
+        '--disable-background-networking', // Disable background networking
+        '--disable-background-timer-throttling', // Disable background timers
+        '--disable-backgrounding-occluded-windows', // Disable backgrounding
+        '--disable-renderer-backgrounding', // Disable renderer backgrounding
+        // Note: We don't set --max-old-space-size because:
+        // 1. It's for Node.js V8 heap, not Chromium
+        // 2. Setting it too low can break JavaScript execution
+        // 3. Chromium manages its own memory better without this flag
       ]
     });
     // Create context with realistic user agent and settings

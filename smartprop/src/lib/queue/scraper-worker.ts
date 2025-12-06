@@ -11,6 +11,7 @@ import {
   SCRAPER_DLQ_NAME,
 } from './queue-types';
 import { ensureScraperQueues, getBoss, stopBoss } from './scraper-queue';
+import { cleanupOrphanedBrowsers, startPeriodicCleanup } from '../utils/browser-cleanup';
 
 // Load environment variables explicitly (needed when running as standalone process)
 // This ensures env vars are available even when not running through Next.js
@@ -146,9 +147,24 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
       reject(error);
     });
 
-    child.on('exit', (code, signal) => {
+    child.on('exit', async (code, signal) => {
       closeIfOpen(logFd);
       fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
+      
+      // CRITICAL: Clean up orphaned browser processes when child exits
+      // This is especially important for OOM kills or crashes where finally blocks don't execute
+      if (code !== 0 || signal) {
+        console.log(`[ScraperWorker] Scraper process exited abnormally (code: ${code}, signal: ${signal}), cleaning up orphaned browsers...`);
+        try {
+          const cleanupResult = await cleanupOrphanedBrowsers();
+          if (cleanupResult.killed > 0) {
+            console.log(`[ScraperWorker] Cleaned up ${cleanupResult.killed} orphaned browser process(es)`);
+          }
+        } catch (cleanupError) {
+          console.error(`[ScraperWorker] Browser cleanup failed:`, cleanupError);
+        }
+      }
+      
       if (code === 0) {
         console.log(`[ScraperWorker] Scraper process exited successfully`);
         resolve();
@@ -303,6 +319,17 @@ export async function startScraperWorker(): Promise<void> {
   process.once('SIGINT', shutdown);
 
       console.log('[ScraperWorker] ✅ Started scraper worker successfully');
+      
+      // Start periodic cleanup of orphaned browser processes (every 5 minutes)
+      // This prevents memory leaks from processes that were OOM-killed or crashed
+      const cleanupInterval = startPeriodicCleanup(5 * 60 * 1000);
+      
+      // Clean up interval on shutdown
+      const originalShutdown = shutdown;
+      shutdown = async () => {
+        clearInterval(cleanupInterval);
+        await originalShutdown();
+      };
       
       // Set up error handlers for the boss instance
       boss.on('error', (error) => {

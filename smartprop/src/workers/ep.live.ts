@@ -517,6 +517,17 @@ async function scrapeEdgePropFinal() {
       '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
       '--disable-site-isolation-trials',
+      // Memory optimization flags (safe, won't break functionality)
+      '--disable-software-rasterizer', // Reduce memory usage
+      '--disable-background-networking', // Disable background networking
+      '--disable-background-timer-throttling', // Disable background timers
+      '--disable-backgrounding-occluded-windows', // Disable backgrounding
+      '--disable-renderer-backgrounding', // Disable renderer backgrounding
+      '--disable-features=TranslateUI', // Disable translation UI
+      // Note: We don't set --max-old-space-size because:
+      // 1. It's for Node.js V8 heap, not Chromium
+      // 2. Setting it too low can break JavaScript execution
+      // 3. Chromium manages its own memory better without this flag
     ]
   });
 
@@ -773,6 +784,13 @@ async function scrapeEdgePropFinal() {
                   '--disable-features=IsolateOrigins,site-per-process',
                   '--disable-site-isolation-trials',
                   '--disable-gpu',
+                  // Memory optimization flags (safe, won't break functionality)
+                  '--disable-software-rasterizer',
+                  '--disable-background-networking',
+                  '--disable-background-timer-throttling',
+                  '--disable-backgrounding-occluded-windows',
+                  '--disable-renderer-backgrounding',
+                  '--disable-features=TranslateUI',
                 ]
               });
             }
@@ -804,6 +822,13 @@ async function scrapeEdgePropFinal() {
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-site-isolation-trials',
                 '--disable-gpu',
+                // Memory optimization flags (safe, won't break functionality)
+                '--disable-software-rasterizer',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI',
               ]
             });
           }

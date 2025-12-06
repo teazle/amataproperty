@@ -304,8 +304,14 @@ export async function startScraperWorker(): Promise<void> {
     }
   );
 
+  let cleanupInterval: NodeJS.Timeout | null = null;
+  
   const shutdown = async () => {
     try {
+      // Clear cleanup interval if it exists
+      if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+      }
       await boss.offWork(workId, { wait: true });
     } catch (error) {
       console.warn('[ScraperWorker] Error stopping worker', error);
@@ -322,14 +328,7 @@ export async function startScraperWorker(): Promise<void> {
       
       // Start periodic cleanup of orphaned browser processes (every 5 minutes)
       // This prevents memory leaks from processes that were OOM-killed or crashed
-      const cleanupInterval = startPeriodicCleanup(5 * 60 * 1000);
-      
-      // Clean up interval on shutdown
-      const originalShutdown = shutdown;
-      shutdown = async () => {
-        clearInterval(cleanupInterval);
-        await originalShutdown();
-      };
+      cleanupInterval = startPeriodicCleanup(5 * 60 * 1000);
       
       // Set up error handlers for the boss instance
       boss.on('error', (error) => {

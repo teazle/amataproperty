@@ -2477,6 +2477,8 @@ async function processContact(
         `[role="dialog"]:has([aria-label*="Remove ${contact.name}" i])`,
         `[role="dialog"]:has-text("${contact.name}")`,
         `[role="dialog"]:has([aria-label*="${contact.name}" i])`,
+        `[data-artdeco-modal]:has-text("${contact.name}")`,
+        `.msg-overlay-bubble:has-text("${contact.name}")`,
       ];
       
       for (const selector of contactNameInDialog) {
@@ -2914,6 +2916,10 @@ async function processContact(
       'button.msg-form__send-button:not([disabled])',
       // Alternative: check for send-button in class
       'button[class*="send-button"]:not([disabled]):not([class*="footer-action"])',
+      // LinkedIn data-control-name (legacy compose send)
+      'button[data-control-name="compose_send"]:not([disabled])',
+      // LinkedIn data-testid variants
+      'button[data-testid*="send"]:not([disabled]):not([class*="footer-action"])',
       // Fallback: text content "Send" but exclude footer-action buttons (attach buttons)
       'button:has-text("Send"):not([disabled]):not([class*="footer-action"])',
       // Last resort: any button with "Send" in aria-label (but send button might not have one)

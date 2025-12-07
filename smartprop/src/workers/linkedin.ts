@@ -2461,7 +2461,92 @@ async function processContact(
     
     // Wait for message dialog to open (LinkedIn needs time to process the click)
     console.log('   ⏳ Waiting for message dialog to open for ' + contact.name + '...');
-    await humanPause(1500, 2500); // Give LinkedIn time to open the dialog
+    await humanPause(1800, 3200); // Slightly longer initial wait
+    
+    // Helper to find a dialog matching this contact
+    const findDialogForContact = async (): Promise<Locator | null> => {
+      let dialog: Locator | null = null;
+      
+      // Strategy 1: Look for dialog containing the contact name (multiple patterns)
+      const contactNameInDialog = [
+        `[role="dialog"]:has([aria-label*="Remove ${contact.name}" i])`,
+        `[role="dialog"]:has-text("${contact.name}")`,
+        `[role="dialog"]:has([aria-label*="${contact.name}" i])`,
+        `[data-artdeco-modal][role="dialog"]:has-text("${contact.name}")`,
+        `.msg-overlay-bubble:has-text("${contact.name}")`,
+        `.msg-overlay-list-bubble:has-text("${contact.name}")`,
+      ];
+      
+      if (contact.name && contact.name !== 'Unknown') {
+        for (const selector of contactNameInDialog) {
+          const candidate = page.locator(selector).first();
+          const count = await candidate.count();
+          if (count > 0) {
+            const isVisible = await candidate.isVisible({ timeout: 3000 }).catch(() => false);
+            if (isVisible) {
+              const dialogText = await candidate.textContent().catch(() => '');
+              if (!dialogText || dialogText.includes(contact.name)) {
+                dialog = candidate;
+                console.log(`   ✅ Found message dialog for ${contact.name} (selector: ${selector})`);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Strategy 2: Dialog with "New message" heading and a textbox
+      if (!dialog) {
+        const newMessageDialog = page.locator('[role="dialog"]:has(h2:has-text("New message"))').first();
+        if (await newMessageDialog.count()) {
+          const isVisible = await newMessageDialog.isVisible({ timeout: 3000 }).catch(() => false);
+          if (isVisible) {
+            const hasTextbox = await newMessageDialog.locator('[contenteditable="true"][role="textbox"]').count().catch(() => 0);
+            if (!contact.name || (await newMessageDialog.textContent().catch(() => '')).includes(contact.name) || hasTextbox) {
+              dialog = newMessageDialog;
+              console.log('   ✅ Found new message dialog (by heading)');
+            }
+          }
+        }
+      }
+      
+      // Strategy 3: Most recent visible dialog with textbox
+      if (!dialog) {
+        const allDialogs = page.locator('[role="dialog"], [data-artdeco-modal], .msg-overlay-bubble, .msg-overlay-list-bubble');
+        const dialogCount = await allDialogs.count();
+        for (let i = dialogCount - 1; i >= 0; i--) {
+          const candidate = allDialogs.nth(i);
+          const isVisible = await candidate.isVisible({ timeout: 2000 }).catch(() => false);
+          if (isVisible) {
+            const hasTextbox = await candidate.locator('[contenteditable="true"][role="textbox"]').count().catch(() => 0);
+            const text = await candidate.textContent().catch(() => '');
+            if (hasTextbox || !contact.name || text.includes(contact.name)) {
+              dialog = candidate;
+              console.log(`   ✅ Using dialog #${i + 1} (visible and has textbox${contact.name ? ' / name match' : ''})`);
+              break;
+            }
+          }
+        }
+      }
+      
+      return dialog;
+    };
+    
+    let messageDialog: Locator | null = await findDialogForContact();
+    
+    // If not found, retry: re-click the message link once and wait again
+    if (!messageDialog) {
+      console.log('   🔁 Dialog not found, re-clicking message link and waiting again...');
+      try {
+        await messageLink.click({ timeout: 5000 });
+      } catch {
+        // fallback: JS click if Playwright click fails
+        await messageLink.evaluate((el: HTMLElement) => el.click());
+      }
+      await humanPause(2000, 3500);
+      messageDialog = await findDialogForContact();
+    }
+    
     
     // CRITICAL: Find the NEW message dialog that matches THIS specific contact
     // We must verify the dialog contains the contact's name to prevent switching to wrong contact
@@ -2987,7 +3072,7 @@ async function processContact(
     // Wait for Send button to be enabled (LinkedIn enables it after detecting text input)
     console.log('   ⏳ Waiting for Send button to be enabled...');
     let isEnabled = false;
-    const maxAttempts = 15; // Increased attempts
+    const maxAttempts = 18; // Slightly more retries
     
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const isDisabled = await sendButton.evaluate((el: any) => {
@@ -3035,6 +3120,14 @@ async function processContact(
               el.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
             });
             await humanPause(500, 800);
+          }
+          
+          // Nudge: type a space then backspace to trigger enablement (safe via type/press)
+          try {
+            await messageInput.type(' ', { delay: 25 });
+            await messageInput.press('Backspace');
+          } catch {
+            // ignore typing errors
           }
         }
       }

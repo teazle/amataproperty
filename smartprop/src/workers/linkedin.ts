@@ -2979,7 +2979,20 @@ async function processContact(
     }
     
     if (!sendButton) {
-      throw new Error('Send button not found in message dialog - tried multiple selectors (excluding attachment buttons)');
+      console.warn('   ⚠️ Send button not found after all selectors. Falling back to Enter key on message input...');
+      // Attempt to send via Enter key on the message input as a last resort
+      try {
+        await messageInput.focus();
+        await humanPause(200, 400);
+        await messageInput.press('Enter');
+        await humanPause(1200, 1800);
+        console.log('   ✅ Enter key fallback attempted');
+      } catch (enterErr) {
+        console.warn(`   ⚠️ Enter key fallback failed: ${(enterErr as Error).message}`);
+        throw new Error('Send button not found and Enter fallback failed');
+      }
+      // We still continue to normal flow, but without a sendButton we skip the below click logic
+      return;
     }
     
     // Wait for Send button to be enabled (LinkedIn enables it after detecting text input)

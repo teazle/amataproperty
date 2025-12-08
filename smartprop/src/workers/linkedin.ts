@@ -2980,7 +2980,6 @@ async function processContact(
     
     if (!sendButton) {
       console.warn('   ⚠️ Send button not found after all selectors. Falling back to Enter key on message input...');
-      // Attempt to send via Enter key on the message input as a last resort
       try {
         await messageInput.focus();
         await humanPause(200, 400);
@@ -2991,8 +2990,8 @@ async function processContact(
         console.warn(`   ⚠️ Enter key fallback failed: ${(enterErr as Error).message}`);
         throw new Error('Send button not found and Enter fallback failed');
       }
-      // We still continue to normal flow, but without a sendButton we skip the below click logic
-      return;
+      // Treat as failure (unknown send state) to avoid undefined processResult upstream
+      return { success: false, error: 'Send button not found; Enter fallback attempted' };
     }
     
     // Wait for Send button to be enabled (LinkedIn enables it after detecting text input)

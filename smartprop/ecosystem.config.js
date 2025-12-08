@@ -21,8 +21,8 @@ module.exports = {
     },
     {
       name: 'scraper-worker',
-      script: 'bun',
-      args: 'src/lib/queue/scraper-worker.ts',
+      script: 'src/lib/queue/scraper-worker.ts',
+      interpreter: '/home/ec2-user/.bun/bin/bun',
       cwd: '/opt/smartprop/app/smartprop',
       instances: 1,
       exec_mode: 'fork',

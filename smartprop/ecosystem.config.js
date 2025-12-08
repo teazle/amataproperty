@@ -28,6 +28,7 @@ module.exports = {
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
+        PATH: `${process.env.HOME || '/home/ec2-user'}/.bun/bin:${process.env.PATH}`,
       },
       // Note: Environment variables are loaded from .env.local by the worker code itself
       error_file: '/opt/smartprop/logs/scraper-worker-error.log',

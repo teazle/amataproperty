@@ -2925,6 +2925,18 @@ async function processContact(
     ];
     
     let sendButton: Locator | null = null;
+    
+    // If we see the "send options" toggle, click it to reveal the real send button
+    const sendToggle = messageDialog.locator('button.msg-form__send-toggle').first();
+    const toggleCount = await sendToggle.count().catch(() => 0);
+    if (toggleCount > 0) {
+      const toggleVisible = await sendToggle.isVisible({ timeout: 2000 }).catch(() => false);
+      if (toggleVisible) {
+        console.log('   🟢 Found send options toggle, clicking to reveal send button...');
+        await sendToggle.click({ timeout: 2000 }).catch(() => {});
+        await humanPause(500, 800);
+      }
+    }
     for (const selector of sendButtonSelectors) {
       try {
         // Search within the messageDialog (the new message dialog we found)

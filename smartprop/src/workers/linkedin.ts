@@ -2914,6 +2914,8 @@ async function processContact(
       'button[data-testid*="send"]:not([disabled]):not([class*="footer-action"])',
       // Global send button test id
       'button[data-test-global-send-button]:not([disabled])',
+      // Generic submit buttons (fallback)
+      'button[type="submit"]:not([disabled])',
       // Fallback: text content "Send" but exclude footer-action buttons (attach buttons)
       'button:has-text("Send"):not([disabled]):not([class*="footer-action"])',
       // Footer send buttons

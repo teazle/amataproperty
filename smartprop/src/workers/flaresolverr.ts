@@ -123,8 +123,8 @@ export async function solveCloudflareWithFlaresolverr(
     const requestBody: any = {
       cmd: 'request.get',
       url: url,
-      // Allow tougher challenges: give Flaresolverr up to 180s (matches docker MAX_TIMEOUT)
-      maxTimeout: 180000,
+      // Allow tougher challenges: give Flaresolverr up to 240s (matches docker MAX_TIMEOUT)
+      maxTimeout: 240000,
       returnOnlyCookies: false,
     };
     
@@ -137,8 +137,8 @@ export async function solveCloudflareWithFlaresolverr(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
-      console.log(`   ⚠️  Flaresolverr request timed out after 180s. Continuing without Flaresolverr...`);
-    }, 180000); // 180 seconds
+      console.log(`   ⚠️  Flaresolverr request timed out after 240s. Continuing without Flaresolverr...`);
+    }, 240000); // 240 seconds
     
     try {
       const response = await fetch(FLARESOLVERR_URL, {

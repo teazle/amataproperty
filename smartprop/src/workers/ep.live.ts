@@ -347,14 +347,15 @@ async function scrapeEdgePropFinal() {
     }
   }
   
+  let stateAgeHours: number | null = null;
   if (stateFileExists) {
     const stats = fs.statSync(stateFilePath);
-    const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
-    if (ageInHours > 24) {
-      console.log(`⚠️  Auth state file is ${ageInHours.toFixed(1)} hours old, re-authenticating...`);
+    stateAgeHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
+    if (stateAgeHours > 24) {
+      console.log(`⚠️  Auth state file is ${stateAgeHours.toFixed(1)} hours old, re-authenticating...`);
       shouldReAuth = true;
     } else {
-      console.log(`📁 Found auth state file (${ageInHours.toFixed(1)} hours old) - will verify login status before using`);
+      console.log(`📁 Found auth state file (${stateAgeHours.toFixed(1)} hours old) - will verify login status before using`);
       // Don't set shouldReAuth = false here - we'll verify login status later
       // If login indicators aren't visible, we'll re-auth regardless of file age
     }
@@ -718,6 +719,15 @@ async function scrapeEdgePropFinal() {
     
     // If login indicators are not visible, re-authenticate immediately
     // BUT: Skip if we just re-authenticated (auth state was just saved)
+    if (!isLoggedIn && !justReAuthenticated) {
+      // If the auth state file is fresh, trust it and skip re-auth to avoid Playwright loadstate crashes
+      if (stateAgeHours !== null && stateAgeHours <= 3) {
+        console.log(`   ✅ Auth state is fresh (${stateAgeHours.toFixed(2)}h old); trusting state and skipping re-auth.`);
+        isLoggedIn = true;
+        justReAuthenticated = true;
+      }
+    }
+
     if (!isLoggedIn && !justReAuthenticated) {
       console.log('\n⚠️  Login indicators not visible - re-authenticating now...');
       

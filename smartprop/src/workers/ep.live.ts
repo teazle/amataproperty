@@ -1041,7 +1041,7 @@ async function scrapeEdgePropFinal() {
         
         // Navigate to homepage to activate cookies
         console.log('   🔄 Navigating to homepage to activate cookies...');
-        await page.goto('https://www.edgeprop.sg', { waitUntil: 'networkidle', timeout: 60000 });
+        await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 120000 });
         await humanPause(8000, 12000); // Wait longer for cookies to activate
         
         // Verify cookies are still present after navigation

@@ -65,11 +65,12 @@ services:
     mem_limit: 2g         # Real memory cap (was effectively ~1G without this)
     cpus: "1.5"           # Allow more CPU when solving challenges
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
+      # Flaresolverr requires POST; use a lightweight request to /v1
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"request.get\",\"url\":\"https://www.google.com\",\"maxTimeout\":5000}", "http://localhost:8191/v1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: "json-file"
       options:

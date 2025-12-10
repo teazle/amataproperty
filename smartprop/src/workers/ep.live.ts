@@ -1062,9 +1062,25 @@ async function scrapeEdgePropFinal() {
           isLoggedIn = true;
           console.log('   ✅ Login verified in browser context after early re-authentication');
         } else {
-          // Be tolerant: cookies + page load are enough; avoid flaky second navigation timeouts
-          isLoggedIn = true;
-          console.log('   ⚠️  Bookmarks not visible, but cookies present; trusting session to continue.');
+          // Try property search page as fallback
+          console.log('   ⚠️  Bookmarks not visible on homepage, trying property search page...');
+          await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'networkidle', timeout: 90000 });
+          await humanPause(8000, 12000);
+          
+          const bookmarksLink2 = page.locator('[href="/bookmarks"]');
+          const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 20000 }).catch(() => false);
+          
+          if (bookmarksVisible2) {
+            isLoggedIn = true;
+            console.log('   ✅ Login verified after navigating to property search page');
+          } else {
+            // CRITICAL: If login indicators aren't visible, we're not logged in
+            // Even if we have session cookies, they might not be valid or activated
+            console.error('   ❌ Login indicators not visible after re-authentication!');
+            console.error(`   ❌ Found ${sessionCookiesAfterNav.length} session cookies but login indicators not visible`);
+            console.error('   ❌ Browser context is not logged in, even though auth state was saved');
+            throw new Error('Login verification failed - browser context not logged in after re-authentication');
+          }
         }
       } else {
         // If we didn't re-authenticate, isLoggedIn should already be set from the verification above

@@ -52,6 +52,8 @@ services:
       - CAPTCHA_SOLVER=none
       - TZ=Asia/Singapore
       - LANG=en_SG  # Match Singapore locale for better Cloudflare compatibility
+      # Allow tougher challenges (request timeout). Default 60000; bump to 180000.
+      - MAX_TIMEOUT=180000
       # Browser timeout: Maximum time for browser operations (default: 40000ms)
       # Increased to 200000ms (200s) to match maxTimeout for aggressive challenges
       - BROWSER_TIMEOUT=200000

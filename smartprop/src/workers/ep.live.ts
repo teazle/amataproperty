@@ -733,15 +733,11 @@ async function scrapeEdgePropFinal() {
       
       // Trigger re-authentication
       try {
-        // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
-        const isLinux = process.platform === 'linux';
-        const authCommand = isLinux ? 'xvfb-run -a bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
-        
-        execSync(authCommand, { 
-          cwd: process.cwd(),
-          stdio: 'inherit',
-          timeout: 600000 // 10 minute timeout (login with Cloudflare can take 5-8 minutes)
-        });
+        // Re-authenticate using shared helper (handles xvfb and timeouts)
+        const authSuccess = await reAuthenticate();
+        if (!authSuccess) {
+          throw new Error('Re-authentication failed');
+        }
         
         // CRITICAL: Reload storage state after re-auth by recreating the context
         // Just adding cookies doesn't fully replace the session - we need a fresh context

@@ -1064,7 +1064,8 @@ async function scrapeEdgePropFinal() {
         } else {
           // Try property search page as fallback
           console.log('   ⚠️  Bookmarks not visible on homepage, trying property search page...');
-          await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'networkidle', timeout: 90000 });
+          // Use domcontentloaded to avoid long hangs while still verifying login
+          await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 60000 });
           await humanPause(8000, 12000);
           
           const bookmarksLink2 = page.locator('[href="/bookmarks"]');

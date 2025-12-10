@@ -47,13 +47,8 @@ async function reAuthenticate() {
 
   try {
     console.log(`   ♻️  Using fresh Bun transpiler cache at ${runtimeCacheDir}`);
-    // Clear any potential cache first, then touch the file to force recompilation
-    execSync('rm -rf .bun node_modules/.cache 2>/dev/null; touch src/workers/auth.pg.ts; true', { 
-      cwd: process.cwd(),
-      env
-    });
-    // Use bun run instead of bun directly to force recompilation, pinned to the fresh transpiler cache
-    execSync('xvfb-run -a bun --bun --no-install-cache run src/workers/auth.pg.ts', { 
+    // Run auth script directly with xvfb; avoid heavy cache clearing to prevent failures
+    execSync('xvfb-run -a /home/ec2-user/.bun/bin/bun src/workers/auth.pg.ts', { 
       cwd: process.cwd(),
       stdio: 'inherit',
       timeout: 600000, // 10 minutes timeout for re-authentication

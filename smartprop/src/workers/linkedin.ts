@@ -1502,27 +1502,89 @@ function detectMessageType(text: string): 'birthday' | 'work_anniversary' | 'job
 }
 
 /**
- * Extract first name from full name, handling various formats
+ * Extract first name from LinkedIn catch-up text safely.
+ * LinkedIn often shows strings like "Say congrats to Jane Doe for 5 years at X".
+ * We strip guidance words and only return a token that looks like a real name.
  */
+const FIRST_NAME_STOPWORDS = new Set([
+  'say',
+  'happy',
+  'birthday',
+  'congrats',
+  'congratulations',
+  'work',
+  'anniversary',
+  'message',
+  'connect',
+  'with',
+  'their',
+  'on',
+  'for',
+  'about',
+  'to',
+  'new',
+  'role',
+  'wish',
+  'them',
+  'send',
+  'please',
+  'kindly',
+  'catch',
+  'up',
+  // Title abbreviations (with and without periods)
+  'dr',
+  'mr',
+  'mrs',
+  'ms',
+  'prof',
+  'professor'
+]);
+
 function extractFirstName(fullName: string): string {
   if (!fullName || fullName.trim() === '') return '';
-  
-  // Remove parenthetical nicknames: "Angela (Yusi) Liu" → "Angela Liu"
-  let cleaned = fullName.replace(/\([^)]*\)/g, '').trim();
-  
-  // Remove common titles
-  cleaned = cleaned.replace(/^(Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.|Professor)\s+/i, '');
-  
-  // Split on spaces and take first part
-  const parts = cleaned.split(/\s+/);
-  
-  // Handle hyphenated first names like "Mary-Jane"
-  if (parts[0] && parts[0].includes('-')) {
-    return parts[0];
+
+  // Remove parenthetical nicknames and emojis
+  let cleaned = fullName
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[\u2600-\u27BF\uE000-\uF8FF]/g, ' ')
+    .replace(/[|•·–—]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Try to capture the actual name in common LinkedIn phrases
+  // Allow periods in names (for titles like "Dr.") - capture up to prepositions or end
+  const phrasePatterns = [
+    /say (?:happy )?birthday to\s+([A-Za-z][A-Za-z'’\-\. ]+)/i,
+    /say (?:congrats|congratulations) to\s+([A-Za-z][A-Za-z'’\-\. ]+)/i,
+    /congratulate\s+([A-Za-z][A-Za-z'’\-\. ]+)/i,
+    /message\s+([A-Za-z][A-Za-z'’\-\. ]+)/i,
+    /connect with\s+([A-Za-z][A-Za-z'’\-\. ]+)/i
+  ];
+
+  for (const pattern of phrasePatterns) {
+    const match = cleaned.match(pattern);
+    if (match?.[1]) {
+      cleaned = match[1];
+      break;
+    }
   }
-  
-  // Return first part, or empty string if none
-  return parts[0] || '';
+
+  // Drop trailing context after prepositions
+  cleaned = cleaned.replace(/\b(for|on|about|regarding|at)\b.*$/i, '').trim();
+
+  // Remove leading titles (with or without periods)
+  cleaned = cleaned.replace(/^(Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Professor)\s+/i, '');
+
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+
+  // Pick the first token that looks like a plausible name and not a stopword
+  const candidate = parts.find((part) => {
+    if (FIRST_NAME_STOPWORDS.has(part.toLowerCase())) return false;
+    if (!/^[A-Za-z][A-Za-z'’\-]*$/.test(part)) return false;
+    return part.length >= 2 && part.length <= 30;
+  });
+
+  return candidate || '';
 }
 
 /**

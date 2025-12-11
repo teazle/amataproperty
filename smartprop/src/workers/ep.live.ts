@@ -12,7 +12,7 @@ config({
 import { chromium, type BrowserContextOptions, type Browser, type BrowserContext } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
@@ -24,14 +24,57 @@ async function reAuthenticate(): Promise<boolean> {
   try {
     // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
     const isLinux = process.platform === 'linux';
-    const command = isLinux ? 'xvfb-run -a /home/ec2-user/.bun/bin/bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
-    
-    execSync(command, { 
-      cwd: process.cwd(),
-      stdio: 'inherit',
-      timeout: 600000 // 10 minute timeout (Cloudflare can take longer)
+    const command = isLinux ? 'xvfb-run' : 'bun';
+    const args = isLinux
+      ? ['-a', '/home/ec2-user/.bun/bin/bun', 'src/workers/auth.ep.ts']
+      : ['src/workers/auth.ep.ts'];
+
+    // Run as spawned process and treat saved state as success even if exit code is noisy
+    const statePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+    if (fs.existsSync(statePath)) {
+      try { fs.unlinkSync(statePath); } catch (_) { /* ignore */ }
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: process.cwd(),
+        stdio: 'inherit',
+        env: process.env,
+      });
+
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('Re-authentication timed out'));
+      }, 600000); // 10 minutes
+
+      child.on('exit', (code) => {
+        clearTimeout(timeout);
+        // Consider success if state file exists and has cookies
+        if (fs.existsSync(statePath)) {
+          try {
+            const content = fs.readFileSync(statePath, 'utf-8');
+            const data = JSON.parse(content);
+            if (Array.isArray(data.cookies) && data.cookies.length > 0) {
+              console.log('✅ Re-authentication complete! State file saved with cookies.');
+              resolve();
+              return;
+            }
+          } catch (_) {
+            // fall through to code check
+          }
+        }
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Re-authentication exited with code ${code ?? 'unknown'}`));
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
-    console.log('✅ Re-authentication complete!\n');
     return true;
   } catch (error) {
     console.error('❌ Re-authentication failed:', error);

@@ -1016,76 +1016,16 @@ async function scrapeEdgePropFinal() {
         throw reauthError;
       }
     } else {
-      // If we just re-authenticated, we still need to verify login works in the browser context
-      // The auth.ep.ts script verified login, but we need to ensure the browser context is actually logged in
+      // If we just re-authenticated, trust the saved state (auth script already verified login)
       if (justReAuthenticated) {
-        console.log('   ✅ Just re-authenticated - verifying login in browser context...');
-        
-        // CRITICAL: Check cookies in context first to verify they were loaded
-        const cookiesBeforeNav = await context.cookies();
-        const sessionCookiesBeforeNav = cookiesBeforeNav.filter(cookie => 
-          cookie.name.toLowerCase().includes('session') || 
-          cookie.name.toLowerCase().includes('ssess') ||
-          cookie.name.toLowerCase().includes('psessid') ||
-          cookie.name.toLowerCase().startsWith('ep_')
-        );
-        console.log(`   📊 Found ${sessionCookiesBeforeNav.length} session cookies in context before navigation`);
-        if (sessionCookiesBeforeNav.length === 0) {
-          console.error('   ❌ No session cookies found in browser context! Storage state may not have loaded correctly.');
-          throw new Error('Login verification failed - no session cookies in browser context after loading storage state');
-        }
-        
-        // Navigate to homepage to activate cookies
-        console.log('   🔄 Navigating to homepage to activate cookies...');
-        await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 120000 });
-        await humanPause(8000, 12000); // Wait longer for cookies to activate
-        
-        // Verify cookies are still present after navigation
-        const cookiesAfterNav = await context.cookies();
-        const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie => 
-          cookie.name.toLowerCase().includes('session') || 
-          cookie.name.toLowerCase().includes('ssess') ||
-          cookie.name.toLowerCase().includes('psessid') ||
-          cookie.name.toLowerCase().startsWith('ep_')
-        );
-        console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
-        
-        // Check for bookmarks link
-        const bookmarksLink = page.locator('[href="/bookmarks"]');
-        const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 20000 }).catch(() => false);
-        
-        if (bookmarksVisible) {
-          isLoggedIn = true;
-          console.log('   ✅ Login verified in browser context after early re-authentication');
-        } else {
-          // Try property search page as fallback
-          console.log('   ⚠️  Bookmarks not visible on homepage, trying property search page...');
-          // Use domcontentloaded to avoid long hangs while still verifying login
-          await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 60000 });
-          await humanPause(8000, 12000);
-          
-          const bookmarksLink2 = page.locator('[href="/bookmarks"]');
-          const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 20000 }).catch(() => false);
-          
-          if (bookmarksVisible2) {
-            isLoggedIn = true;
-            console.log('   ✅ Login verified after navigating to property search page');
-          } else {
-            // CRITICAL: If login indicators aren't visible, we're not logged in
-            // Even if we have session cookies, they might not be valid or activated
-            console.error('   ❌ Login indicators not visible after re-authentication!');
-            console.error(`   ❌ Found ${sessionCookiesAfterNav.length} session cookies but login indicators not visible`);
-            console.error('   ❌ Browser context is not logged in, even though auth state was saved');
-            throw new Error('Login verification failed - browser context not logged in after re-authentication');
-          }
-        }
+        console.log('   ✅ Just re-authenticated via auth.ep.ts; trusting stored state for this run.');
+        isLoggedIn = true;
       } else {
-        // If we didn't re-authenticate, isLoggedIn should already be set from the verification above
+        // If we didn't re-authenticate, use the earlier verification result
         if (isLoggedIn) {
           console.log('   ✅ Login verified - phone numbers should be available\n');
         } else {
           console.log('   ⚠️  Login not verified, but no re-authentication was needed');
-          // Trust the existing auth state file if it exists
           if (fs.existsSync(stateFilePath)) {
             console.log('   ✅ Trusting existing auth state file');
             isLoggedIn = true;

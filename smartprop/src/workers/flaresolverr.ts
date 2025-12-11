@@ -100,7 +100,8 @@ export async function createFlaresolverrSession(): Promise<string | null> {
 export async function solveCloudflareWithFlaresolverr(
   url: string, 
   useSession: boolean = false, // Default to false for backward compatibility
-  sessionId?: string // Optional: pass existing session ID
+  sessionId?: string, // Optional: pass existing session ID
+  maxTimeout: number = 240000 // Allow override per-call (default 240s)
 ): Promise<FlaresolverrResult | null> {
   try {
     console.log(`   🔧 Using Flaresolverr to solve Cloudflare challenge...`);
@@ -123,8 +124,8 @@ export async function solveCloudflareWithFlaresolverr(
     const requestBody: any = {
       cmd: 'request.get',
       url: url,
-      // Allow tougher challenges: give Flaresolverr up to 240s (matches docker MAX_TIMEOUT)
-      maxTimeout: 240000,
+      // Allow tougher challenges: give Flaresolverr up to maxTimeout
+      maxTimeout,
       returnOnlyCookies: false,
     };
     
@@ -137,8 +138,8 @@ export async function solveCloudflareWithFlaresolverr(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
-      console.log(`   ⚠️  Flaresolverr request timed out after 240s. Continuing without Flaresolverr...`);
-    }, 240000); // 240 seconds
+      console.log(`   ⚠️  Flaresolverr request timed out after ${maxTimeout / 1000}s. Continuing without Flaresolverr...`);
+    }, maxTimeout);
     
     try {
       const response = await fetch(FLARESOLVERR_URL, {

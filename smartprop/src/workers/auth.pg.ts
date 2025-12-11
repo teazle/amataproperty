@@ -173,37 +173,43 @@ async function authenticatePropertyGuru() {
   let flaresolverrSucceeded = false;
   if (isBlocked) {
     console.log('   🛡️  Cloudflare detected, using Flaresolverr to solve...');
-    try {
-      // Use Flaresolverr to solve Cloudflare on the current page
-      // Navigate to the current URL to get fresh cookies
-      const flaresolverrResult = await solveCloudflareWithFlaresolverr(page.url(), false);
-    
-    if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
-      await applyFlaresolverrToContext(context, flaresolverrResult);
-        flaresolverrSucceeded = true;
-      
-      // Save Cloudflare cookies immediately (will be overwritten with full auth state after login)
-      const storagePath = path.join(process.cwd(), 'storage');
-      if (!fs.existsSync(storagePath)) {
-        fs.mkdirSync(storagePath, { recursive: true });
-      }
-      const tempStatePath = path.join(storagePath, 'pg.state.temp.json');
+    const maxTimeout = 300000; // 300s for tough PG challenges
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts && !flaresolverrSucceeded; attempt++) {
       try {
-        await context.storageState({ path: tempStatePath });
-        console.log('   💾 Saved Cloudflare cookies temporarily');
-      } catch (saveError) {
-        console.log(`   ⚠️  Failed to save temp cookies: ${saveError}`);
+        console.log(`   🔧 Flaresolverr attempt ${attempt}/${maxAttempts} (timeout ${maxTimeout / 1000}s)...`);
+        const flaresolverrResult = await solveCloudflareWithFlaresolverr(page.url(), true, undefined, maxTimeout);
+        
+        if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
+          await applyFlaresolverrToContext(context, flaresolverrResult, '.propertyguru.com.sg');
+          flaresolverrSucceeded = true;
+          
+          const storagePath = path.join(process.cwd(), 'storage');
+          if (!fs.existsSync(storagePath)) {
+            fs.mkdirSync(storagePath, { recursive: true });
+          }
+          const tempStatePath = path.join(storagePath, 'pg.state.temp.json');
+          try {
+            await context.storageState({ path: tempStatePath });
+            console.log('   💾 Saved Cloudflare cookies temporarily');
+          } catch (saveError) {
+            console.log(`   ⚠️  Failed to save temp cookies: ${saveError}`);
+          }
+          
+          console.log('   🔄 Reloading page with Flaresolverr cookies...');
+          await page.reload({ waitUntil: 'load', timeout: 120000 });
+          await humanPause(4000, 7000);
+        } else {
+          console.log('   ⚠️  Flaresolverr returned no cookies - page may be blocked');
+        }
+      } catch (error) {
+        console.log(`   ⚠️  Flaresolverr attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       
-        // Reload the page with the new cookies
-        console.log('   🔄 Reloading page with Flaresolverr cookies...');
-        await page.reload({ waitUntil: 'load', timeout: 60000 });
-        await humanPause(3000, 5000);
-      } else {
-        console.log('   ⚠️  Flaresolverr returned no cookies - page may be blocked');
-    }
-  } catch (error) {
-      console.log('   ⚠️  Flaresolverr failed, will check if page is blocked...', error instanceof Error ? error.message : String(error));
+      if (!flaresolverrSucceeded && attempt < maxAttempts) {
+        console.log('   ⏳ Waiting before next Flaresolverr attempt...');
+        await humanPause(5000, 8000);
+      }
     }
   } else {
     console.log('   ✅ No Cloudflare detected, proceeding with login...');

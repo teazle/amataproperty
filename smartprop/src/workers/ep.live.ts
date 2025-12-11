@@ -24,12 +24,12 @@ async function reAuthenticate(): Promise<boolean> {
   try {
     // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
     const isLinux = process.platform === 'linux';
-    const command = isLinux ? 'xvfb-run -a bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
+    const command = isLinux ? 'xvfb-run -a /home/ec2-user/.bun/bin/bun src/workers/auth.ep.ts' : 'bun src/workers/auth.ep.ts';
     
     execSync(command, { 
       cwd: process.cwd(),
       stdio: 'inherit',
-      timeout: 300000 // 5 minute timeout (login can take time with Cloudflare)
+      timeout: 600000 // 10 minute timeout (Cloudflare can take longer)
     });
     console.log('✅ Re-authentication complete!\n');
     return true;

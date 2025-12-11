@@ -4415,8 +4415,18 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     lockData.status = 'stopped';
     writeLockFile(lockData);
     
-    // Close browser
+    // Close page/context/browser to avoid lingering Chromium processes
     try {
+      if (page && !page.isClosed()) {
+        console.log('   🔒 Closing page...');
+        await page.close();
+        console.log('   ✅ Page closed');
+      }
+      if (context) {
+        console.log('   🔒 Closing context...');
+        await context.close();
+        console.log('   ✅ Context closed');
+      }
       console.log('   🔒 Closing browser...');
       if (browser) {
         console.log(`   📊 Browser connected before close: ${!browser.isConnected() ? 'disconnected' : 'connected'}`);

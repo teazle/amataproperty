@@ -174,8 +174,10 @@ async function authenticatePropertyGuru() {
   if (isBlocked) {
     console.log('   🛡️  Cloudflare detected, using Flaresolverr to solve...');
     const maxTimeout = 300000; // 300s for tough PG challenges
-    const maxAttempts = 3;
+    const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts && !flaresolverrSucceeded; attempt++) {
+      // Reset session each attempt to avoid stuck session
+      flaresolverrSession = null;
       try {
         console.log(`   🔧 Flaresolverr attempt ${attempt}/${maxAttempts} (timeout ${maxTimeout / 1000}s)...`);
         const flaresolverrResult = await solveCloudflareWithFlaresolverr(page.url(), true, undefined, maxTimeout);
@@ -208,7 +210,17 @@ async function authenticatePropertyGuru() {
       
       if (!flaresolverrSucceeded && attempt < maxAttempts) {
         console.log('   ⏳ Waiting before next Flaresolverr attempt...');
-        await humanPause(5000, 8000);
+        await humanPause(4000, 7000);
+      }
+    }
+    // Final best-effort: if still blocked, try direct reload to collect any partial cookies
+    if (!flaresolverrSucceeded) {
+      console.log('   ⚠️  All Flaresolverr attempts failed, trying direct reload (best effort)...');
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        await humanPause(3000, 5000);
+      } catch (e) {
+        console.log('   ⚠️  Direct reload also failed:', e instanceof Error ? e.message : String(e));
       }
     }
   } else {

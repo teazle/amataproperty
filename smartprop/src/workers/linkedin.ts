@@ -1961,7 +1961,8 @@ async function processContact(
     try {
       // Check if there's an open messaging overlay dialog first
       const messagingOverlay = page.locator('[role="dialog"][aria-label*="Messaging" i]').first();
-      const overlayVisible = await messagingOverlay.isVisible({ timeout: 1000 }).catch(() => false);
+      // Give LinkedIn more time to respond; 1s was too aggressive and caused timeouts
+      const overlayVisible = await messagingOverlay.isVisible({ timeout: 5000 }).catch(() => false);
       
       if (overlayVisible) {
         console.log('   ⚠️  Messaging overlay is open, closing it...');
@@ -2296,11 +2297,11 @@ async function processContact(
       if (count > 0) {
         for (let i = 0; i < count; i++) {
           const btn = closeButtons.nth(i);
-          const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
+          const visible = await btn.isVisible({ timeout: 2000 }).catch(() => false);
           if (!visible) continue;
           // Try direct click; if it has a child SVG or text, click center
           try {
-            await btn.click({ timeout: 1000 });
+            await btn.click({ timeout: 5000 });
           } catch {
             const box = await btn.boundingBox().catch(() => null);
             if (box) {

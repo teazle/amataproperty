@@ -26,7 +26,7 @@ import fs from 'fs';
 import os from 'os';
 import { CHROME_UA, humanPause } from './stealth.js';
 import { upsertAgentAndListing } from './upsert.js';
-import { execSync, exec } from 'child_process';
+import { execSync, exec, spawn } from 'child_process';
 import { supabase } from './supa.js';
 import { 
   solveCloudflareWithFlaresolverr, 
@@ -36,32 +36,90 @@ import {
 } from './flaresolverr.js';
 
 // Helper function to re-authenticate if needed
-async function reAuthenticate() {
+async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
-  const runtimeCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bun-transpile-'));
+  const authScriptPath = path.join(process.cwd(), 'src', 'workers', 'auth.pg.ts');
+  const stateFilePath = path.join(process.cwd(), 'storage', 'pg.state.json');
+  const isLinux = process.platform === 'linux';
+  const bunPath = '/home/ec2-user/.bun/bin/bun'; // Explicit Bun path
+
   const env = {
     ...process.env,
-    BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeCacheDir, // force Bun to compile fresh code
-    BUN_INSTALL_CACHE_DIR: '/dev/null' // disable install cache just in case
+    PATH: `${bunPath}:${process.env.PATH}`, // Ensure Bun is in PATH
+    HOME: process.env.HOME || '/home/ec2-user',
   };
 
-  try {
-    console.log(`   ♻️  Using fresh Bun transpiler cache at ${runtimeCacheDir}`);
-    // Run auth script directly with xvfb; avoid heavy cache clearing to prevent failures
-    execSync('xvfb-run -a /home/ec2-user/.bun/bin/bun src/workers/auth.pg.ts', { 
+  // Get initial modification time of the state file
+  let initialMtimeMs = 0;
+  if (fs.existsSync(stateFilePath)) {
+    initialMtimeMs = fs.statSync(stateFilePath).mtimeMs;
+  }
+
+  return new Promise((resolve) => {
+    const command = isLinux ? 'xvfb-run' : bunPath;
+    const args = isLinux ? ['-a', bunPath, authScriptPath] : [authScriptPath];
+
+    console.log(`   🚀 Spawning auth process: ${command} ${args.join(' ')}`);
+    const child = spawn(command, args, {
       cwd: process.cwd(),
       stdio: 'inherit',
-      timeout: 600000, // 10 minutes timeout for re-authentication
-      env
+      env,
     });
-    console.log('✅ Re-authentication complete!\n');
-    return true;
-  } catch (_error) {
-    console.error('❌ Re-authentication failed:', _error);
-    return false;
-  } finally {
-    fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
-  }
+
+    let authSuccess = false;
+
+    // Set timeout for 15 minutes (allows for 5 Flaresolverr attempts at 300s each)
+    const timeout = setTimeout(() => {
+      console.log('   ⏱️  Re-authentication timeout (15 minutes) - killing process...');
+      child.kill('SIGKILL');
+      // Check state file one more time before resolving
+      if (fs.existsSync(stateFilePath)) {
+        const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
+        if (newMtimeMs > initialMtimeMs) {
+          console.log('✅ Authentication state file updated despite timeout.');
+          authSuccess = true;
+        }
+      }
+      if (authSuccess) {
+        console.log('✅ Re-authentication complete!\n');
+        resolve(true);
+      } else {
+        console.error('❌ Re-authentication failed (timeout).');
+        resolve(false);
+      }
+    }, 900000); // 15 minutes
+
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      console.error('❌ Failed to spawn auth process:', error);
+      resolve(false);
+    });
+
+    child.on('exit', async (code, signal) => {
+      clearTimeout(timeout);
+      console.log(`   Auth process exited with code ${code}, signal ${signal}`);
+      // Check if the state file was updated after the process started
+      if (fs.existsSync(stateFilePath)) {
+        const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
+        if (newMtimeMs > initialMtimeMs) {
+          console.log('✅ Authentication state file updated, assuming successful re-authentication.');
+          authSuccess = true;
+        } else {
+          console.log('⚠️  Authentication state file not updated, re-authentication may have failed.');
+        }
+      } else {
+        console.log('⚠️  Authentication state file does not exist after re-authentication attempt.');
+      }
+
+      if (authSuccess) {
+        console.log('✅ Re-authentication complete!\n');
+        resolve(true);
+      } else {
+        console.error('❌ Re-authentication failed (process exited abnormally or state not updated).');
+        resolve(false);
+      }
+    });
+  });
 }
 
 // Import the existing scraper functions

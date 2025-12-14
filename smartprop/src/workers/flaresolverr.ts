@@ -9,6 +9,13 @@
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1';
 let flaresolverrSession: string | null = null;
 
+/**
+ * Reset the Flaresolverr session (useful for retries)
+ */
+export function resetFlaresolverrSession(): void {
+  flaresolverrSession = null;
+}
+
 // Match Flaresolverr's user-agent exactly for cookie compatibility
 // Flaresolverr uses: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36
 export const FLARESOLVERR_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';

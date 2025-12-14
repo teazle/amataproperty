@@ -2,7 +2,7 @@ import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
-import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from './flaresolverr.js';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, resetFlaresolverrSession } from './flaresolverr.js';
 import { humanPause } from './stealth.js';
 
 async function authenticatePropertyGuru() {
@@ -177,7 +177,7 @@ async function authenticatePropertyGuru() {
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts && !flaresolverrSucceeded; attempt++) {
       // Reset session each attempt to avoid stuck session
-      flaresolverrSession = null;
+      resetFlaresolverrSession();
       try {
         console.log(`   🔧 Flaresolverr attempt ${attempt}/${maxAttempts} (timeout ${maxTimeout / 1000}s)...`);
         const flaresolverrResult = await solveCloudflareWithFlaresolverr(page.url(), true, undefined, maxTimeout);

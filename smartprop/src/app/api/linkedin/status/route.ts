@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import '@/lib/linkedin/scheduler';
 import { getLinkedInSettings, getTodayMessageCount } from '@/lib/linkedin/tracker';
 import { readLockFile, getStorageStatePath, hasStorageState, isProcessRunning } from '@/lib/linkedin/storage';
+import { getSchedulerStatus } from '@/lib/linkedin/scheduler';
 import { getSupabaseClient } from '@/workers/supa';
 
 /**
@@ -54,11 +54,15 @@ export async function GET(request: NextRequest) {
     // Check session validity
     const hasSession = hasStorageState();
     
+    // Get scheduler status
+    const schedulerStatus = getSchedulerStatus();
+    
     return NextResponse.json({
       success: true,
       settings: settings || null,
       isRunning,
       hasSession,
+      scheduler: schedulerStatus,
       today: {
         messagesSent: todayCount,
         messagesLimit: settings?.daily_limit || 25,

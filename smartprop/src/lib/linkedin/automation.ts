@@ -4,7 +4,8 @@ import fs from 'fs';
 import {
   getLockFilePath,
   readLockFile,
-  isProcessRunning
+  isProcessRunning,
+  deleteLockFile
 } from '@/lib/linkedin/storage';
 
 export interface AutomationOptions {
@@ -18,10 +19,20 @@ const LOG_FILE_PATH = '/tmp/linkedin-automation.log';
 export async function startLinkedInAutomation(options: AutomationOptions = {}): Promise<number> {
   const lockFile = getLockFilePath();
   const lockData = readLockFile();
-  if (lockData?.status === 'running' && lockData.pid) {
-    const running = await isProcessRunning(lockData.pid);
-    if (running) {
-      throw new Error('LinkedIn automation is already running');
+  
+  // Clean up stale lock files
+  if (lockData) {
+    if (lockData.status === 'stopped') {
+      console.log('🧹 Cleaning up stale lock file (status: stopped)');
+      deleteLockFile();
+    } else if (lockData.status === 'running' && lockData.pid) {
+      const running = await isProcessRunning(lockData.pid);
+      if (!running) {
+        console.log(`🧹 Cleaning up stale lock file (process ${lockData.pid} not running)`);
+        deleteLockFile();
+      } else {
+        throw new Error('LinkedIn automation is already running');
+      }
     }
   }
 

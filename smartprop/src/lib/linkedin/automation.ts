@@ -57,11 +57,27 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   ].filter(Boolean) as string[];
   
   // Check if bun exists at any of these paths
-  for (const path of possibleBunPaths) {
-    if (fs.existsSync(path)) {
-      bunPath = path;
-      console.log(`✅ Found bun at: ${bunPath}`);
-      break;
+  for (const testPath of possibleBunPaths) {
+    try {
+      if (fs.existsSync(testPath)) {
+        bunPath = testPath;
+        console.log(`✅ Found bun at: ${bunPath}`);
+        break;
+      }
+    } catch (e) {
+      // Continue checking other paths
+    }
+  }
+  
+  // If we didn't find bun, try to use which/whereis (but this won't work in spawn, so use absolute path)
+  if (bunPath === 'bun') {
+    // Default to the most common location on EC2
+    const defaultBunPath = '/home/ec2-user/.bun/bin/bun';
+    if (fs.existsSync(defaultBunPath)) {
+      bunPath = defaultBunPath;
+      console.log(`✅ Using default bun path: ${bunPath}`);
+    } else {
+      console.warn(`⚠️  Bun not found in common locations, will try 'bun' in PATH`);
     }
   }
   

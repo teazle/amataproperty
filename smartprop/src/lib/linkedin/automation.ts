@@ -45,8 +45,29 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
     console.warn('Failed to reset LinkedIn log file:', (error as Error).message);
   }
   const logStream = fs.openSync(LOG_FILE_PATH, 'a');
+  
+  // Find bun executable - check common locations
+  let bunPath = 'bun';
+  const possibleBunPaths = [
+    process.env.BUN_PATH,
+    '/home/ec2-user/.bun/bin/bun',
+    process.env.HOME ? `${process.env.HOME}/.bun/bin/bun` : null,
+    '/usr/local/bin/bun',
+    '/opt/bun/bin/bun'
+  ].filter(Boolean) as string[];
+  
+  // Check if bun exists at any of these paths
+  for (const path of possibleBunPaths) {
+    if (fs.existsSync(path)) {
+      bunPath = path;
+      console.log(`✅ Found bun at: ${bunPath}`);
+      break;
+    }
+  }
+  
   const env = {
     ...process.env,
+    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
     ...(options.headed
       ? {
           HEADLESS: '0',
@@ -55,12 +76,24 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
       : {})
   };
 
-  const child = spawn('bun', [scriptPath, ...args], {
+  // Add bun's directory to PATH if we found it in a specific location
+  if (bunPath !== 'bun' && !bunPath.includes('/')) {
+    const bunDir = path.dirname(bunPath);
+    env.PATH = `${bunDir}:${env.PATH}`;
+  }
+
+  console.log(`🚀 Spawning LinkedIn automation with: ${bunPath} ${scriptPath} ${args.join(' ')}`);
+  const child = spawn(bunPath, [scriptPath, ...args], {
     detached: true,
     stdio: ['ignore', logStream, logStream],
     env,
     cwd: process.cwd()
   });
+  
+  // Check if spawn failed
+  if (!child.pid) {
+    throw new Error(`Failed to spawn LinkedIn automation process. Bun path: ${bunPath}`);
+  }
 
   setTimeout(() => {
     try {

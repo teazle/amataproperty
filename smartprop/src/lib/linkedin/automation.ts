@@ -99,6 +99,9 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   }
 
   console.log(`🚀 Spawning LinkedIn automation with: ${bunPath} ${scriptPath} ${args.join(' ')}`);
+  console.log(`   Working directory: ${process.cwd()}`);
+  console.log(`   Bun exists: ${fs.existsSync(bunPath)}`);
+  console.log(`   Script exists: ${fs.existsSync(scriptPath)}`);
   
   // Add error handler to catch spawn errors
   const child = spawn(bunPath, [scriptPath, ...args], {
@@ -109,21 +112,30 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   });
   
   // Handle spawn errors
-  child.on('error', (error) => {
+  child.on('error', (error: any) => {
     console.error(`❌ Failed to spawn LinkedIn automation: ${error.message}`);
     console.error(`   Bun path: ${bunPath}`);
     console.error(`   Script path: ${scriptPath}`);
-    console.error(`   Error: ${error}`);
+    console.error(`   Error code: ${error.code}`);
+    console.error(`   Error syscall: ${error.syscall}`);
     try {
       fs.closeSync(logStream);
     } catch (e) {
       // Ignore close errors
     }
+    throw error; // Re-throw so the API can catch it
   });
   
   // Check if spawn failed immediately
   if (!child.pid) {
-    throw new Error(`Failed to spawn LinkedIn automation process. Bun path: ${bunPath}, Script: ${scriptPath}`);
+    const error = new Error(`Failed to spawn LinkedIn automation process. Bun path: ${bunPath}, Script: ${scriptPath}`);
+    console.error(`❌ ${error.message}`);
+    try {
+      fs.closeSync(logStream);
+    } catch (e) {
+      // Ignore close errors
+    }
+    throw error;
   }
 
   setTimeout(() => {

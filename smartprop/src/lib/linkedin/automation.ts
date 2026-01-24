@@ -83,6 +83,8 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   }
 
   console.log(`🚀 Spawning LinkedIn automation with: ${bunPath} ${scriptPath} ${args.join(' ')}`);
+  
+  // Add error handler to catch spawn errors
   const child = spawn(bunPath, [scriptPath, ...args], {
     detached: true,
     stdio: ['ignore', logStream, logStream],
@@ -90,9 +92,22 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
     cwd: process.cwd()
   });
   
-  // Check if spawn failed
+  // Handle spawn errors
+  child.on('error', (error) => {
+    console.error(`❌ Failed to spawn LinkedIn automation: ${error.message}`);
+    console.error(`   Bun path: ${bunPath}`);
+    console.error(`   Script path: ${scriptPath}`);
+    console.error(`   Error: ${error}`);
+    try {
+      fs.closeSync(logStream);
+    } catch (e) {
+      // Ignore close errors
+    }
+  });
+  
+  // Check if spawn failed immediately
   if (!child.pid) {
-    throw new Error(`Failed to spawn LinkedIn automation process. Bun path: ${bunPath}`);
+    throw new Error(`Failed to spawn LinkedIn automation process. Bun path: ${bunPath}, Script: ${scriptPath}`);
   }
 
   setTimeout(() => {

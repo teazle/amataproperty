@@ -1971,30 +1971,38 @@ async function processContact(
         if (count > 0) {
           console.log(`   🔄 Closing existing messaging overlay...`);
           
-          // CRITICAL: Aggressive blur before clicking close button to prevent Finder popup
-          for (let i = 0; i < 10; i++) {
-            await page.evaluate(() => {
-              if (document.activeElement && document.activeElement instanceof HTMLElement) {
-                document.activeElement.blur();
-              }
-              document.body.blur();
-              const buttons = document.querySelectorAll('button');
-              buttons.forEach((el: any) => {
-                if (el && el.blur) el.blur();
-              });
-              const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-              inputs.forEach((el: any) => {
-                if (el && el.blur) el.blur();
-              });
-              // Blur all focusable elements
-              const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
-              focusable.forEach((el: any) => {
-                if (el && el.blur) el.blur();
-              });
+          // Add timeout for closing overlay (30 seconds max)
+          try {
+            const closeTimeout = new Promise<void>((_, reject) => {
+              setTimeout(() => reject(new Error('Timeout closing messaging overlay')), 30000);
             });
-            await humanPause(30, 50);
-          }
-          await humanPause(300, 400);
+            
+            await Promise.race([
+              (async () => {
+                // CRITICAL: Aggressive blur before clicking close button to prevent Finder popup
+                for (let i = 0; i < 10; i++) {
+                  await page.evaluate(() => {
+                    if (document.activeElement && document.activeElement instanceof HTMLElement) {
+                      document.activeElement.blur();
+                    }
+                    document.body.blur();
+                    const buttons = document.querySelectorAll('button');
+                    buttons.forEach((el: any) => {
+                      if (el && el.blur) el.blur();
+                    });
+                    const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                    inputs.forEach((el: any) => {
+                      if (el && el.blur) el.blur();
+                    });
+                    // Blur all focusable elements
+                    const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
+                    focusable.forEach((el: any) => {
+                      if (el && el.blur) el.blur();
+                    });
+                  });
+                  await humanPause(30, 50);
+                }
+                await humanPause(300, 400);
           
           // CRITICAL: Use synthetic mouse event instead of click() to avoid keyboard events
           await closeButtons.evaluate((el: any) => {
@@ -2046,11 +2054,20 @@ async function processContact(
           await humanPause(200, 300);
           
           await humanPause(500, 1000);
+                })(),
+                closeTimeout
+              ]).catch((error) => {
+                console.warn(`   ⚠️  Error/timeout closing overlay: ${error.message}, continuing anyway...`);
+              });
+            } catch (e) {
+              console.warn(`   ⚠️  Error closing overlay: ${e}, continuing anyway...`);
+            }
+          }
         }
+      } catch (e) {
+        // Ignore errors - overlay might not be open
+        console.warn(`   ⚠️  Error checking/closing overlay: ${e}, continuing anyway...`);
       }
-    } catch (e) {
-      // Ignore errors - overlay might not be open
-    }
 
     // Proceed to send message
     console.log(`   ✅ ${contact.name} has message button - proceeding to send message...`);
@@ -4249,7 +4266,18 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           console.log(`   💬 Calling processContact for ${contact.name}...`);
           let processResult;
           try {
-            processResult = await processContact(page, contact, settings, lockData);
+            // Add timeout wrapper to prevent hanging on stuck contacts (5 minutes max per contact)
+            const CONTACT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+            const timeoutPromise = new Promise<{ success: boolean; error?: string }>((_, reject) => {
+              setTimeout(() => {
+                reject(new Error(`Timeout: Contact ${contact.name} took longer than ${CONTACT_TIMEOUT_MS / 1000 / 60} minutes to process`));
+              }, CONTACT_TIMEOUT_MS);
+            });
+            
+            processResult = await Promise.race([
+              processContact(page, contact, settings, lockData),
+              timeoutPromise
+            ]);
           } catch (error: any) {
             // If browser/page was closed, stop processing immediately
             if (error.message?.includes('Target page, context or browser has been closed') || 
@@ -4259,8 +4287,14 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               stopRequested = true;
               break;
             }
-            // Re-throw other errors
-            throw error;
+            // If timeout, mark as failed and continue
+            if (error.message?.includes('Timeout:')) {
+              console.error(`\n⏱️  ${error.message}, marking as failed and continuing...`);
+              processResult = { success: false, error: error.message };
+            } else {
+              // Re-throw other errors
+              throw error;
+            }
           }
           console.log(`   📊 Result for ${contact.name}: ${processResult.success ? '✅ Success' : '❌ Failed'}${processResult.error ? ` - ${processResult.error}` : ''}`);
           

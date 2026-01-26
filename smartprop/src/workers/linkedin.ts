@@ -2612,6 +2612,9 @@ async function processContact(
       return dialog;
     };
     
+    // Find dialog with timeout protection (10 seconds max)
+    const DIALOG_FIND_TIMEOUT = 10000;
+    const dialogFindStart = Date.now();
     let messageDialog: Locator | null = await findDialogForContact();
     
     // If not found, retry: re-click the message link once and wait again
@@ -2624,10 +2627,16 @@ async function processContact(
         await messageLink.evaluate((el: HTMLElement) => el.click());
       }
       await humanPause(2000, 3500);
+      
+      // Check timeout before retrying
+      if (Date.now() - dialogFindStart > DIALOG_FIND_TIMEOUT) {
+        throw new Error(`Timeout: Could not find message dialog for ${contact.name} within ${DIALOG_FIND_TIMEOUT / 1000}s`);
+      }
+      
       messageDialog = await findDialogForContact();
     }
     if (!messageDialog) {
-      throw new Error(`Could not find message dialog for ${contact.name} after clicking message link`);
+      throw new Error(`Could not find message dialog for ${contact.name} after clicking message link and retry`);
     }
     
     // FINAL VERIFICATION: Double-check the dialog contains the contact's name (warn only)
@@ -2640,10 +2649,21 @@ async function processContact(
       }
     }
     
-    await messageDialog.waitFor({ state: 'visible', timeout: 15000 });
+    // Wait for dialog to be visible with timeout protection
+    try {
+      await messageDialog.waitFor({ state: 'visible', timeout: 15000 });
+    } catch (e) {
+      // If dialog doesn't become visible, check if it exists at all
+      const dialogExists = await messageDialog.count().catch(() => 0);
+      if (dialogExists === 0) {
+        throw new Error(`Message dialog for ${contact.name} never appeared after clicking message link`);
+      }
+      // Dialog exists but not visible - might be a timing issue, try to continue
+      console.warn(`   ⚠️  Dialog exists but not visible, continuing anyway...`);
+    }
     await humanPause(1000, 2000);
     
-    // Wait for message input field - try multiple selectors
+    // Wait for message input field - try multiple selectors with timeout protection
     console.log('   🔍 Looking for message input field...');
     const messageInputSelectors = [
       'textbox[placeholder*="Write a message" i]',
@@ -2657,21 +2677,29 @@ async function processContact(
     ];
     
     let messageInput: Locator | null = null;
+    const INPUT_SEARCH_TIMEOUT = 30000; // 30 seconds max to find input
+    const inputSearchStart = Date.now();
+    
     for (const selector of messageInputSelectors) {
+      // Check timeout
+      if (Date.now() - inputSearchStart > INPUT_SEARCH_TIMEOUT) {
+        throw new Error(`Timeout: Could not find message input field after ${INPUT_SEARCH_TIMEOUT / 1000}s`);
+      }
+      
       const input = messageDialog.locator(selector).first();
       const count = await input.count();
       if (count > 0) {
         const isVisible = await input.isVisible({ timeout: 5000 }).catch(() => false);
         if (isVisible) {
-        messageInput = input;
-        console.log(`   ✅ Found message input with selector: ${selector}`);
-        break;
+          messageInput = input;
+          console.log(`   ✅ Found message input with selector: ${selector}`);
+          break;
         }
       }
     }
     
     if (!messageInput) {
-      throw new Error('Message input field not found - tried multiple selectors');
+      throw new Error(`Message input field not found - tried ${messageInputSelectors.length} selectors`);
     }
     
     await humanPause(500, 1000);
@@ -4114,13 +4142,19 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         tabScrollAttempts++;
         console.log(`   ℹ️  No contacts found on ${currentTab} tab (scroll attempt ${tabScrollAttempts}/${maxTabScrollAttempts}).`);
         
-        // Add diagnostic logging for "All" tab to understand why no contacts
-        if (currentTab === 'All' && tabScrollAttempts <= 3) {
+        // Add diagnostic logging to understand why no contacts (every 5 attempts)
+        if (tabScrollAttempts % 5 === 0 || tabScrollAttempts <= 3) {
           try {
             const currentUrl = page.url();
             const messageLinksCount = await page.locator('a[href*="/messaging/compose/"]').count().catch(() => 0);
             const mainContainer = await page.locator('main').count().catch(() => 0);
-            console.log(`   🔍 Diagnostic: URL=${currentUrl.includes('/all/') ? '✅ All tab' : '❌ Wrong tab'}, Message links=${messageLinksCount}, Main container=${mainContainer > 0 ? '✅ Found' : '❌ Missing'}`);
+            const allLinks = await page.locator('a').count().catch(() => 0);
+            console.log(`   🔍 Diagnostic: URL=${currentUrl.includes('/all/') || currentUrl.includes('/catch-up') ? '✅ Correct page' : '❌ Wrong page'}, Message links=${messageLinksCount}, Main container=${mainContainer > 0 ? '✅ Found' : '❌ Missing'}, Total links=${allLinks}`);
+            
+            // Check if we're actually on the catch-up page
+            if (!currentUrl.includes('/catch-up') && !currentUrl.includes('/mynetwork')) {
+              console.warn(`   ⚠️  WARNING: Not on catch-up page! Current URL: ${currentUrl}`);
+            }
           } catch (diagError: any) {
             console.log(`   🔍 Diagnostic check failed: ${diagError.message}`);
           }
@@ -4131,7 +4165,12 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           // Still scrolling on current tab
           console.log(`   📜 Scrolling down on ${currentTab} tab to load more contacts...`);
           scrollAttempts++;
-          await scrollToLoadMore(page, container);
+          
+          // Try more aggressive scrolling - scroll multiple times
+          for (let scrollIter = 0; scrollIter < 3; scrollIter++) {
+            await scrollToLoadMore(page, container);
+            await humanPause(1000, 1500);
+          }
           await humanPause(2000, 3000);
           continue;
         } else {

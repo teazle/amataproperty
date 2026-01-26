@@ -4105,13 +4105,41 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     console.log(`   - Batch size limit: 20 contacts per batch`);
     console.log(`   - Will process in batches until ${messagesPerJob} messages are sent\n`);
     
+    // Helper function to reload catch-up page if it crashes
+    const reloadCatchUpPage = async (): Promise<boolean> => {
+      try {
+        console.log('   🔄 Page crashed or invalid, reloading catch-up page...');
+        await page.goto('https://www.linkedin.com/mynetwork/catch-up/all/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await humanPause(3000, 4000);
+        
+        // Verify page loaded correctly
+        const mainExists = await page.locator('main').count().catch(() => 0);
+        if (mainExists > 0) {
+          console.log('   ✅ Catch-up page reloaded successfully');
+          return true;
+        } else {
+          console.warn('   ⚠️  Page reloaded but main container not found');
+          return false;
+        }
+      } catch (reloadError: any) {
+        console.error(`   ❌ Failed to reload catch-up page: ${reloadError.message}`);
+        return false;
+      }
+    };
+    
     // Continue scrolling until we reach messages_per_job limit or max scroll attempts
     while (totalSent < messagesPerJob && scrollAttempts < maxScrollAttempts) {
       // Check if page is still valid before extracting contacts
       if (!isPageValid(page)) {
-        console.error('\n❌ Page/browser has been closed, stopping automation');
-        result.errors.push('Browser/page was closed during automation');
-        break;
+        console.warn('\n⚠️  Page/browser appears invalid, attempting to reload...');
+        const reloaded = await reloadCatchUpPage();
+        if (!reloaded) {
+          console.error('\n❌ Failed to recover page, stopping automation');
+          result.errors.push('Browser/page crashed and could not be recovered');
+          break;
+        }
+        // Reset container reference after reload
+        container = page.locator('main').first();
       }
 
       // Limit batch size to avoid processing too many contacts at once
@@ -4167,11 +4195,36 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           scrollAttempts++;
           
           // Try more aggressive scrolling - scroll multiple times
-          for (let scrollIter = 0; scrollIter < 3; scrollIter++) {
-            await scrollToLoadMore(page, container);
-            await humanPause(1000, 1500);
+          // Check page validity before each scroll
+          try {
+            for (let scrollIter = 0; scrollIter < 3; scrollIter++) {
+              if (!isPageValid(page)) {
+                console.warn(`   ⚠️  Page invalid during scroll (iteration ${scrollIter + 1}), reloading...`);
+                const reloaded = await reloadCatchUpPage();
+                if (!reloaded) {
+                  console.error('   ❌ Failed to recover page after crash');
+                  break;
+                }
+                container = page.locator('main').first();
+              }
+              await scrollToLoadMore(page, container);
+              await humanPause(1000, 1500);
+            }
+            await humanPause(2000, 3000);
+          } catch (scrollError: any) {
+            if (scrollError.message?.includes('crashed') || scrollError.message?.includes('Target closed')) {
+              console.warn(`   ⚠️  Page crashed during scroll: ${scrollError.message}`);
+              const reloaded = await reloadCatchUpPage();
+              if (reloaded) {
+                container = page.locator('main').first();
+              } else {
+                console.error('   ❌ Failed to recover page after crash');
+                break;
+              }
+            } else {
+              throw scrollError;
+            }
           }
-          await humanPause(2000, 3000);
           continue;
         } else {
           // Exhausted scroll attempts on current tab, try next tab
@@ -4201,6 +4254,19 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               continue; // Go back to extract contacts on new tab
             } catch (tabError: any) {
               console.log(`   ⚠️  Error switching to Job changes tab: ${tabError.message}`);
+              
+              // If page crashed, try to reload
+              if (tabError.message?.includes('crashed') || tabError.message?.includes('Target closed')) {
+                console.log('   🔄 Page crashed during tab switch, reloading...');
+                const reloaded = await reloadCatchUpPage();
+                if (reloaded) {
+                  // Stay on All tab and continue
+                  currentTab = 'All';
+                  tabScrollAttempts = 0;
+                  continue;
+                }
+              }
+              
               // Fall through to try Birthdays tab
             }
           }
@@ -4229,6 +4295,19 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               continue; // Go back to extract contacts on new tab
             } catch (tabError: any) {
               console.log(`   ⚠️  Error switching to Birthdays tab: ${tabError.message}`);
+              
+              // If page crashed, try to reload
+              if (tabError.message?.includes('crashed') || tabError.message?.includes('Target closed')) {
+                console.log('   🔄 Page crashed during tab switch, reloading...');
+                const reloaded = await reloadCatchUpPage();
+                if (reloaded) {
+                  // Go back to All tab and continue
+                  currentTab = 'All';
+                  tabScrollAttempts = 0;
+                  continue;
+                }
+              }
+              
               // No more tabs to try, break
               console.log('   ⚠️  No more tabs to try. Stopping contact search.');
               break;

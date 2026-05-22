@@ -5,7 +5,7 @@ November 26, 2025
 
 ## EC2 Instance Information
 - **Instance ID**: i-0b41277535712c09b
-- **Public IP**: 52.76.114.103
+- **Public IP**: ${EC2_IP}
 - **State**: Running
 - **SSH User**: ec2-user
 - **Application Directory**: /opt/smartprop/app

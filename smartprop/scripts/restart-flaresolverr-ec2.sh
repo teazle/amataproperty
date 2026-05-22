@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to restart Flaresolverr on EC2
 
-EC2_IP="52.76.114.103"
+EC2_IP="${EC2_IP:?Set EC2_IP to the current VPS IP or hostname}"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 
@@ -22,14 +22,18 @@ echo ""
 echo "3. Starting Flaresolverr with proper configuration..."
 ssh -i ${PEM_KEY} -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_IP} "docker run -d \
   --name=flaresolverr \
+  --platform=linux/arm64/v8 \
   --restart=unless-stopped \
+  --shm-size=2g \
   -p 8191:8191 \
   -e LOG_LEVEL=info \
   -e LOG_HTML=false \
   -e CAPTCHA_SOLVER=none \
   -e TZ=Asia/Singapore \
-  --memory=1g \
-  --cpus=1.0 \
+  -e MAX_TIMEOUT=300000 \
+  -e BROWSER_TIMEOUT=300000 \
+  --memory=2g \
+  --cpus=1.5 \
   ghcr.io/flaresolverr/flaresolverr:latest"
 echo ""
 
@@ -54,4 +58,3 @@ echo "✅ Flaresolverr restart complete!"
 echo ""
 echo "To check logs:"
 echo "  ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'docker logs -f flaresolverr'"
-

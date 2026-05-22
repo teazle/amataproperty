@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to update PM2 ecosystem config with FLARESOLVERR_URL and test connectivity
 
-EC2_IP="52.76.114.103"
+EC2_IP="${EC2_IP:?Set EC2_IP to the current VPS IP or hostname}"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 

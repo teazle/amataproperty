@@ -26,46 +26,46 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
   const maxPages = parseInt(searchParams.get('pages') || '10');
   const method = searchParams.get('method') || 'mcp'; // 'mcp', 'combined', 'unified', or 'simple'
-  
+
   if (action === 'stop') {
     await stopUnifiedScraper();
     isScraperRunning = false;
     return new Response('Scraper stopped', { status: 200 });
   }
-  
+
   if (action === 'status') {
     return Response.json({ isRunning: isScraperRunning });
   }
-  
+
   // Start scraping with SSE
   if (isScraperRunning) {
     return new Response('Scraper already running', { status: 409 });
   }
-  
+
   isScraperRunning = true;
-  
+
   console.log('Starting scraper endpoint with maxPages:', maxPages);
-  
+
   // Create scrape session in database
   let sessionId: string | undefined;
   try {
     console.log('Creating scrape session...');
     console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'MISSING');
     console.log('Service Role Key:', process.env.SUPABASE_SERVICE_ROLE ? 'SET' : 'MISSING');
-    
+
     // Add timeout to database session creation (increased to 10 seconds)
     const sessionPromise = db.createScrapeSession();
-    const timeoutPromise = new Promise((_, reject) => 
+    const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Database session creation timeout after 10 seconds')), 10000)
     );
-    
+
     sessionId = await Promise.race([sessionPromise, timeoutPromise]) as string;
     console.log('Scrape session created:', sessionId);
   } catch (error: unknown) {
     console.error('Failed to create scrape session:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown database error';
     console.error('Error details:', errorMessage);
-    
+
     // Return error immediately if database connection fails
     return new Response(`data: ${JSON.stringify({
       status: 'error',
@@ -80,13 +80,12 @@ export async function GET(request: NextRequest) {
       },
     });
   }
-  
+
   // Create SSE stream
   const encoder = new TextEncoder();
+  let isClosed = false;
   const stream = new ReadableStream({
     async start(controller) {
-      let isClosed = false;
-      
       // Helper function to safely enqueue data
       const safeEnqueue = (data: string) => {
         if (!isClosed) {
@@ -102,10 +101,10 @@ export async function GET(request: NextRequest) {
           }
         }
       };
-      
+
       try {
         console.log('Starting scraper with maxPages:', maxPages);
-        
+
         // Send initial progress
         const initialData = `data: ${JSON.stringify({
           currentPage: 0,
@@ -119,7 +118,7 @@ export async function GET(request: NextRequest) {
           sessionId
         })}\n\n`;
         safeEnqueue(initialData);
-        
+
         // Send browser launch progress
         const browserData = `data: ${JSON.stringify({
           currentPage: 0,
@@ -133,7 +132,7 @@ export async function GET(request: NextRequest) {
           sessionId
         })}\n\n`;
         safeEnqueue(browserData);
-        
+
         // Choose scraper method
         const scraperPromise = method === 'combined'
           ? scrapeEdgePropCombined(maxPages, (progress) => {
@@ -163,7 +162,7 @@ export async function GET(request: NextRequest) {
                 }
               }
             }, sessionId)
-          : method === 'mcp' 
+          : method === 'mcp'
           ? scrapeEdgePropMCP(maxPages, (progress) => {
               if (!isClosed) {
                 try {
@@ -196,7 +195,7 @@ export async function GET(request: NextRequest) {
                 }
               }
             }, sessionId);
-        
+
         // No timeout needed since articles are saved immediately
         let scrapedArticles: any[] = [];
         try {
@@ -226,23 +225,23 @@ export async function GET(request: NextRequest) {
             }
           }
           if (sessionId) {
-            await db.completeScrapeSession(sessionId, 'error', scraperError?.message || 'Unknown error').catch(err => 
+            await db.completeScrapeSession(sessionId, 'error', scraperError?.message || 'Unknown error').catch(err =>
               console.error('Failed to complete session:', err)
             );
           }
           isScraperRunning = false;
           return;
         }
-        
+
         console.log(`📊 API: Scraper completed. Found ${scrapedArticles?.length || 0} articles`);
         console.log(`📊 API: Controller closed status: ${isClosed}`);
-        
+
         if (!isClosed) {
           if (scrapedArticles && Array.isArray(scrapedArticles) && scrapedArticles.length > 0) {
             if (method === 'mcp') {
               // Articles are already saved immediately for MCP, just send completion message
               console.log(`✅ API: Scraping completed. ${scrapedArticles.length} articles were processed and saved immediately.`);
-              
+
               const completionData = `data: ${JSON.stringify({
                 currentPage: maxPages,
                 totalPages: maxPages,
@@ -261,7 +260,7 @@ export async function GET(request: NextRequest) {
                 console.log(`📝 API: Saving ${scrapedArticles.length} articles to database...`);
                 const savedArticles = await db.upsertArticles(scrapedArticles, sessionId || '');
                 console.log(`✅ API: Saved ${savedArticles.newArticles} new articles and ${savedArticles.duplicates} duplicates to database`);
-                
+
                 // Save full content for methods that have it
                 if ((method === 'combined') && scrapedArticles[0] && ('text_content' in scrapedArticles[0])) {
                   console.log('📄 API: Saving full article content...');
@@ -278,20 +277,20 @@ export async function GET(request: NextRequest) {
                   }
                   console.log(`✅ API: Saved content for ${contentSaved} articles`);
                 }
-                
+
                 const completionData = `data: ${JSON.stringify({
                   currentPage: maxPages,
                   totalPages: maxPages,
                   currentArticle: 0,
                   articlesDiscovered: scrapedArticles.length,
-                  articlesScraped: savedArticles.newArticles + savedArticles.duplicates,
-                  articlesFailed: scrapedArticles.length - (savedArticles.newArticles + savedArticles.duplicates),
+                  articlesScraped: savedArticles.processedArticles,
+                  articlesFailed: Math.max(0, scrapedArticles.length - savedArticles.processedArticles - savedArticles.inputDuplicates),
                   status: 'completed',
                   message: `Scraping completed successfully! Saved ${savedArticles.newArticles} new articles and ${savedArticles.duplicates} duplicates to database.`,
                   sessionId
                 })}\n\n`;
                 safeEnqueue(completionData);
-                
+
               } catch (dbError: any) {
                 console.error('Database save error:', dbError);
                 if (!isClosed) {
@@ -315,11 +314,11 @@ export async function GET(request: NextRequest) {
                 }
               }
             }
-            
+
             // Mark session as completed
             await db.completeScrapeSession(sessionId, 'completed');
             console.log(`✅ API: Session ${sessionId} marked as completed`);
-            
+
           } else {
             // Send completion message for no articles found
             const completionData = `data: ${JSON.stringify({
@@ -334,11 +333,11 @@ export async function GET(request: NextRequest) {
               sessionId
             })}\n\n`;
             safeEnqueue(completionData);
-            
+
             // Mark session as completed
             await db.completeScrapeSession(sessionId, 'completed');
           }
-          
+
           // Close controller only once
           if (!isClosed) {
             controller.close();
@@ -349,12 +348,12 @@ export async function GET(request: NextRequest) {
         isScraperRunning = false;
       } catch (error: unknown) {
         console.error('Scraping error:', error);
-        
+
         // Mark session as failed
         if (sessionId) {
           await db.completeScrapeSession(sessionId, 'error', error instanceof Error ? error.message : String(error));
         }
-        
+
         if (!isClosed) {
           try {
             const errorData = `data: ${JSON.stringify({
@@ -391,7 +390,7 @@ export async function GET(request: NextRequest) {
       }
     }
   });
-  
+
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
@@ -403,4 +402,3 @@ export async function GET(request: NextRequest) {
     },
   });
 }
-

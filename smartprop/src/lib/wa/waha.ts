@@ -26,6 +26,80 @@ interface PresenceResponse {
 
 type PresenceState = 'composing' | 'recording' | 'paused' | 'available';
 
+const DEFAULT_WAHA_URL = 'http://localhost:3030';
+
+function getWAHAConfig() {
+  return {
+    url: process.env.WAHA_URL || DEFAULT_WAHA_URL,
+    session: process.env.WAHA_SESSION || 'default',
+  };
+}
+
+function normalizeChatId(to: string): string {
+  const trimmed = to.trim();
+  return trimmed.includes('@') ? trimmed : `${trimmed.replace(/[^\d]/g, '')}@c.us`;
+}
+
+function isWAHASessionReady(sessionData: any): boolean {
+  return sessionData?.status === 'WORKING' ||
+    Boolean(sessionData?.me?.id && sessionData?.engine?.state === 'CONNECTED');
+}
+
+export async function getWAHAReadiness(): Promise<{
+  online: boolean;
+  ready: boolean;
+  sessionStatus?: string;
+  engineState?: string;
+  me?: string;
+  error?: string;
+}> {
+  const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
+
+  try {
+    const response = await fetchWithTimeout(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`, {}, 5000);
+    if (!response.ok) {
+      return {
+        online: true,
+        ready: false,
+        error: `WAHA session check failed: HTTP ${response.status}`,
+      };
+    }
+
+    const sessionData = await response.json();
+    return {
+      online: true,
+      ready: isWAHASessionReady(sessionData),
+      sessionStatus: sessionData?.status || 'unknown',
+      engineState: sessionData?.engine?.state,
+      me: sessionData?.me?.id,
+      error: isWAHASessionReady(sessionData) ? undefined : `WAHA session is not ready (${sessionData?.status || 'unknown'})`,
+    };
+  } catch (error) {
+    return {
+      online: false,
+      ready: false,
+      error: error instanceof Error ? error.message : 'Unknown WAHA readiness error',
+    };
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 10000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Send a WhatsApp text message via WAHA
  * @param to - Recipient phone number (e.g., "6591234567" for Singapore)
@@ -36,8 +110,7 @@ export async function sendWhatsAppMessage(
   to: string,
   text: string
 ): Promise<SendMessageResponse> {
-  const WAHA_URL = process.env.WAHA_URL || 'http://localhost:3000';
-  const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
+  const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
 
   if (!WAHA_URL) {
     console.error('Missing WAHA configuration: WAHA_URL');
@@ -49,28 +122,22 @@ export async function sendWhatsAppMessage(
 
   // Check session status before attempting to send (with timeout)
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-    
-    const statusResponse = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`, {
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
+    const statusResponse = await fetchWithTimeout(`${WAHA_URL}/api/sessions/${WAHA_SESSION}`, {}, 5000);
     
     if (statusResponse.ok) {
       const sessionData = await statusResponse.json();
       const sessionStatus = sessionData?.status;
+      const isConnected = isWAHASessionReady(sessionData);
       
-      if (sessionStatus !== 'WORKING') {
-        console.error(`❌ WAHA session status is "${sessionStatus}", expected "WORKING"`);
+      if (!isConnected) {
+        console.error(`❌ WAHA session status is "${sessionStatus}", expected connected session`);
         console.error(`   Session details:`, JSON.stringify(sessionData, null, 2));
         return {
           success: false,
           error: `WAHA session is not ready (status: ${sessionStatus}). Please authenticate via QR code at ${WAHA_URL} or wait for session to initialize.`,
         };
       }
-      console.log(`✅ WAHA session status check passed: ${sessionStatus}`);
+      console.log(`✅ WAHA session status check passed: ${sessionStatus} (${sessionData?.engine?.state || 'no engine state'})`);
     } else {
       console.warn(`⚠️  WAHA session status check failed: ${statusResponse.status} - continuing anyway`);
       // Continue anyway - let the send attempt fail if session is not ready
@@ -85,7 +152,7 @@ export async function sendWhatsAppMessage(
   }
 
   // Format phone number for WhatsApp (must end with @c.us)
-  const chatId = to.includes('@') ? to : `${to}@c.us`;
+  const chatId = normalizeChatId(to);
 
   const url = `${WAHA_URL}/api/sendText`;
   
@@ -96,13 +163,13 @@ export async function sendWhatsAppMessage(
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-    });
+    }, 15000);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -267,8 +334,7 @@ export async function sendPresence(
   to: string,
   state: PresenceState = 'composing'
 ): Promise<PresenceResponse> {
-  const WAHA_URL = process.env.WAHA_URL || 'http://localhost:3000';
-  const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
+  const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
 
   if (!WAHA_URL) {
     console.error('Missing WAHA configuration: WAHA_URL');
@@ -279,7 +345,7 @@ export async function sendPresence(
   }
 
   // Format phone number for WhatsApp (must end with @c.us)
-  const chatId = to.includes('@') ? to : `${to}@c.us`;
+  const chatId = normalizeChatId(to);
 
   const url = `${WAHA_URL}/api/${WAHA_SESSION}/presence`;
   
@@ -289,13 +355,13 @@ export async function sendPresence(
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-    });
+    }, 10000);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));

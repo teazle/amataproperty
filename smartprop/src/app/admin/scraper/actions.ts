@@ -8,6 +8,9 @@ import fs from 'fs';
 import path from 'path';
 import { enqueueScraperJob } from '@/lib/queue/scraper-queue';
 import type { ScraperJobPayload } from '@/lib/queue/queue-types';
+import { checkFlaresolverr, inspectAuthState } from '@/lib/scraper/runtime-health';
+import { buildScraperStatusPayload, reconcileScraperRuntimeState } from '@/lib/scraper/runtime-state';
+import type { AuthStatus } from './types';
 
 /**
  * Safely revalidate a path - only works in request context, fails silently in background jobs
@@ -77,6 +80,34 @@ export interface ScraperJobStatus {
   error?: string;
 }
 
+async function validateScraperRuntime(
+  platform: ScraperConfig['platform']
+): Promise<{ success: true } | { success: false; error: string }> {
+  const authStatus = inspectAuthState(platform);
+  const credentialNames =
+    platform === 'propertyguru'
+      ? ['PG_EMAIL', 'PG_PASSWORD']
+      : ['EP_EMAIL', 'EP_PASSWORD'];
+  const missingCredentials = credentialNames.filter((name) => !process.env[name]);
+
+  if (!authStatus.isAuthenticated && missingCredentials.length > 0) {
+    return {
+      success: false,
+      error: `No fresh ${platform} auth state found and missing ${missingCredentials.join(', ')}. Add credentials or run authentication first.`,
+    };
+  }
+
+  const flaresolverrStatus = await checkFlaresolverr();
+  if (!flaresolverrStatus.reachable) {
+    return {
+      success: false,
+      error: `FlareSolverr is not reachable at ${flaresolverrStatus.url}: ${flaresolverrStatus.error ?? 'unknown error'}`,
+    };
+  }
+
+  return { success: true };
+}
+
 /**
  * Start a new scraper job
  */
@@ -87,27 +118,27 @@ export interface ScraperJobStatus {
 async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: string[] }> {
   const errors: string[] = [];
   let cleaned = 0;
-  
+
   const platforms = ['propertyguru', 'edgeprop'] as const;
-  
+
   for (const platform of platforms) {
-    const lockFile = path.join(process.cwd(), 'storage', 
+    const lockFile = path.join(process.cwd(), 'storage',
       platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-    
+
     if (!fs.existsSync(lockFile)) {
       continue; // No lock file, nothing to clean
     }
-    
+
     try {
       const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
       const pid = lockData.pid;
-      
+
       if (!pid || typeof pid !== 'number') {
         // Lock file exists but no valid PID - stale lock
         console.log(`🧹 Cleaning stale lock file (no PID): ${lockFile}`);
         fs.unlinkSync(lockFile);
         cleaned++;
-        
+
         // Also check if there's a job in database that should be marked as completed/failed
         const { data: jobs } = await supabase
           .from('scraper_jobs')
@@ -116,7 +147,7 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
           .in('status', ['queued', 'running'])
           .order('started_at', { ascending: false })
           .limit(1);
-        
+
         if (jobs && jobs.length > 0) {
           // Mark as failed since lock file exists but no process
           await supabase
@@ -130,16 +161,16 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
         }
         continue;
       }
-      
+
       // Check if process is actually running
       const isRunning = await isProcessRunning(pid);
-      
+
       if (!isRunning) {
         // Process is dead but lock file exists - stale lock
         console.log(`🧹 Cleaning stale lock file (process ${pid} not running): ${lockFile}`);
         fs.unlinkSync(lockFile);
         cleaned++;
-        
+
         // Mark corresponding job as failed
         const { data: jobs } = await supabase
           .from('scraper_jobs')
@@ -148,7 +179,7 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
           .in('status', ['queued', 'running'])
           .order('started_at', { ascending: false })
           .limit(1);
-        
+
         if (jobs && jobs.length > 0) {
           await supabase
             .from('scraper_jobs')
@@ -164,7 +195,7 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
       const errorMsg = `Error checking lock file ${lockFile}: ${error instanceof Error ? error.message : String(error)}`;
       console.error(errorMsg);
       errors.push(errorMsg);
-      
+
       // If we can't read the lock file, try to remove it anyway (might be corrupted)
       try {
         fs.unlinkSync(lockFile);
@@ -175,7 +206,7 @@ async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: str
       }
     }
   }
-  
+
   return { cleaned, errors };
 }
 
@@ -185,7 +216,7 @@ export async function startScrapeJob(
 ) {
   try {
     // First, check and clean up any stale locks
-    const cleanupResult = await checkAndCleanStaleLocks();
+    const cleanupResult = await reconcileScraperRuntimeState(supabase);
     if (cleanupResult.cleaned > 0) {
       console.log(`🧹 Cleaned up ${cleanupResult.cleaned} stale lock file(s)`);
     }
@@ -208,6 +239,11 @@ export async function startScrapeJob(
           error: 'Invalid district. Must be D01-D28'
         };
       }
+    }
+
+    const runtimeValidation = await validateScraperRuntime(config.platform);
+    if (!runtimeValidation.success) {
+      return runtimeValidation;
     }
 
     // Create job record
@@ -296,111 +332,28 @@ const SYNC_COOLDOWN = 10000; // Only sync once every 10 seconds per platform
  */
 export async function getActiveJob(): Promise<ScraperJobStatus | null> {
   try {
-    // Auto-sync completed.json files with database (with rate limiting)
-    const platforms = ['propertyguru', 'edgeprop'] as const;
     const now = Date.now();
-    
-    for (const platform of platforms) {
-      const lastSync = lastSyncCache.get(platform) || 0;
-      const timeSinceLastSync = now - lastSync;
-      
-      // Only sync if enough time has passed
-      if (timeSinceLastSync < SYNC_COOLDOWN) {
-        continue;
-      }
-      
-      const lockFile = path.join(process.cwd(), 'storage', 
-        platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-      const completedFile = lockFile.replace('.lock', '.completed.json');
-      
-      // Check for completed.json files and sync them automatically
-      if (fs.existsSync(completedFile) && !fs.existsSync(lockFile)) {
-        try {
-          const completedData = JSON.parse(fs.readFileSync(completedFile, 'utf-8'));
-          if (completedData.status === 'completed') {
-            // Find matching job by platform and started_at time (within 1 hour window)
-            const startedAt = new Date(completedData.startedAt);
-            const windowStart = new Date(startedAt.getTime() - 60 * 60 * 1000); // 1 hour before
-            const windowEnd = new Date(startedAt.getTime() + 60 * 60 * 1000); // 1 hour after
 
-            const { data: matchingJobs } = await supabase
-              .from('scraper_jobs')
-              .select('id, status')
-              .eq('platform', platform)
-              .in('status', ['running', 'queued'])
-              .gte('started_at', windowStart.toISOString())
-              .lte('started_at', windowEnd.toISOString())
-              .order('started_at', { ascending: false })
-              .limit(1);
-
-            if (matchingJobs && matchingJobs.length > 0) {
-              const job = matchingJobs[0];
-              // Auto-sync: Update database to completed status
-              await supabase
-                .from('scraper_jobs')
-                .update({
-                  status: 'completed',
-                  completed_at: completedData.completedAt || new Date().toISOString(),
-                  listings_processed: completedData.progress?.listingsProcessed || completedData.stats?.totalSuccess || 0,
-                  stats: completedData.stats || null,
-                  current_page: completedData.progress?.currentPage || null,
-                  current_district: completedData.progress?.currentDistrict || null
-                })
-                .eq('id', job.id);
-              console.log(`✅ getActiveJob: Auto-synced completed job ${job.id} for ${platform}`);
-              lastSyncCache.set(platform, now);
-            }
-          }
-        } catch (error) {
-          console.error(`Error auto-syncing completed job for ${platform}:`, error);
-        }
-      }
-    }
-    
-    // Use .maybeSingle() instead of .single() to handle cases where no job exists
-    // This prevents 406 errors when the query returns no results
-    const { data: job, error: jobError } = await supabase
-      .from('scraper_jobs')
-      .select('*')
-      .in('status', ['queued', 'running'])
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    // Handle 406 or other errors gracefully
-    if (jobError) {
-      // Check if it's a 406 error specifically
-      if (jobError.message?.includes('406') || jobError.code === 'PGRST116') {
-        console.warn('[getActiveJob] 406 error (likely no results), returning null:', jobError.message);
-        return null;
-      }
-      console.error('[getActiveJob] Error fetching active job:', jobError);
-      return null;
+    if (now - (lastSyncCache.get('all') || 0) >= SYNC_COOLDOWN) {
+      await reconcileScraperRuntimeState(supabase);
+      lastSyncCache.set('all', now);
     }
 
-    if (!job) return null;
-
-    // Also check lock file for real-time progress
-    const lockFile = path.join(process.cwd(), 'storage', 
-      job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-
-    let lockData: { progress?: { currentDistrict?: string; currentPage?: number; listingsProcessed?: number } } | null = null;
-    if (fs.existsSync(lockFile)) {
-      lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
-    }
+    const statusPayload = await buildScraperStatusPayload(supabase, { reconcile: false });
+    if (statusPayload.status !== 'active') return null;
+    const job = statusPayload.job;
 
     return {
       id: job.id,
       platform: job.platform,
       status: job.status,
-      currentDistrict: lockData?.progress?.currentDistrict || job.current_district,
-      currentPage: lockData?.progress?.currentPage || job.current_page,
-      totalPages: job.total_pages,
-      listingsProcessed: lockData?.progress?.listingsProcessed || job.listings_processed,
-      stats: job.stats,
-      startedAt: job.started_at,
-      completedAt: job.completed_at,
-      error: job.error_message
+      currentDistrict: job.currentDistrict ?? undefined,
+      currentPage: job.currentPage ?? undefined,
+      totalPages: job.totalPages ?? undefined,
+      listingsProcessed: job.listingsProcessed ?? undefined,
+      stats: (job.stats ?? undefined) as ScraperJobStatus['stats'],
+      startedAt: job.startedAt,
+      error: job.error ?? undefined,
     };
 
   } catch (error) {
@@ -464,7 +417,7 @@ export async function getDataQualityMetrics() {
     if (qualityMetricsCache && (now - qualityMetricsCache.timestamp) < QUALITY_METRICS_CACHE_TTL) {
       return qualityMetricsCache.data;
     }
-    
+
     // Get latest metrics for each platform
     const { data: metrics, error } = await supabase
       .from('scraper_metrics')
@@ -483,7 +436,7 @@ export async function getDataQualityMetrics() {
     // Get today's duplicates (upserted listings)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const { count: totalToday } = await supabase
       .from('listings')
       .select('*', { count: 'exact', head: true })
@@ -502,24 +455,24 @@ export async function getDataQualityMetrics() {
     if (recentListings && recentListings.length > 0) {
       const requiredFields = ['address', 'price', 'beds', 'baths', 'size_sqft'];
       const optionalFields = ['price_psf', 'year_built', 'tenure', 'property_type'];
-      
+
       let totalScore = 0;
       let phoneCount = 0;
 
       recentListings.forEach((listing: unknown) => {
         const listingObj = listing as Record<string, unknown>;
         let listingScore = 0;
-        
+
         // Required fields: 70% weight
         requiredFields.forEach(field => {
           if (listingObj[field] != null) listingScore += (0.7 / requiredFields.length);
         });
-        
+
         // Optional fields: 30% weight
         optionalFields.forEach(field => {
           if (listingObj[field] != null) listingScore += (0.3 / optionalFields.length);
         });
-        
+
         totalScore += listingScore;
       });
 
@@ -549,10 +502,10 @@ export async function getDataQualityMetrics() {
         staleListings: staleCount || 0
       }
     };
-    
+
     // Cache the result
     qualityMetricsCache = { data: result, timestamp: now };
-    
+
     return result;
 
   } catch (error) {
@@ -600,37 +553,33 @@ export async function triggerReAuth(platform: 'propertyguru' | 'edgeprop') {
  */
 export async function checkAuthStatus() {
   try {
-    const pgStateFile = path.join(process.cwd(), 'storage', 'pg.state.json');
-    const epStateFile = path.join(process.cwd(), 'storage', 'ep.state.json');
-
-    const pgExists = fs.existsSync(pgStateFile);
-    const epExists = fs.existsSync(epStateFile);
-
-    let pgLastAuth = null;
-    let epLastAuth = null;
-
-    if (pgExists) {
-      const stats = fs.statSync(pgStateFile);
-      pgLastAuth = stats.mtime.toISOString();
-    }
-
-    if (epExists) {
-      const stats = fs.statSync(epStateFile);
-      epLastAuth = stats.mtime.toISOString();
-    }
+    const pgStatus = inspectAuthState('propertyguru');
+    const epStatus = inspectAuthState('edgeprop');
 
     return {
       success: true,
       auth: {
         propertyguru: {
-          isAuthenticated: pgExists,
-          lastAuth: pgLastAuth
+          exists: pgStatus.exists,
+          isAuthenticated: pgStatus.isAuthenticated,
+          isFresh: pgStatus.isFresh,
+          cookieCount: pgStatus.cookieCount,
+          lastModified: pgStatus.lastModified,
+          lastAuth: pgStatus.lastModified,
+          stateAgeHours: pgStatus.stateAgeHours,
+          failureReason: pgStatus.failureReason,
         },
         edgeprop: {
-          isAuthenticated: epExists,
-          lastAuth: epLastAuth
+          exists: epStatus.exists,
+          isAuthenticated: epStatus.isAuthenticated,
+          isFresh: epStatus.isFresh,
+          cookieCount: epStatus.cookieCount,
+          lastModified: epStatus.lastModified,
+          lastAuth: epStatus.lastModified,
+          stateAgeHours: epStatus.stateAgeHours,
+          failureReason: epStatus.failureReason,
         }
-      }
+      } satisfies AuthStatus
     };
 
   } catch (error) {
@@ -639,9 +588,9 @@ export async function checkAuthStatus() {
       success: false,
       error: error instanceof Error ? error.message : String(error),
       auth: {
-        propertyguru: { isAuthenticated: false, lastAuth: null },
-        edgeprop: { isAuthenticated: false, lastAuth: null }
-      }
+        propertyguru: { exists: false, isAuthenticated: false, isFresh: false, cookieCount: 0, lastModified: null, lastAuth: null, stateAgeHours: null, failureReason: 'Auth check failed' },
+        edgeprop: { exists: false, isAuthenticated: false, isFresh: false, cookieCount: 0, lastModified: null, lastAuth: null, stateAgeHours: null, failureReason: 'Auth check failed' }
+      } satisfies AuthStatus
     };
   }
 }
@@ -693,9 +642,9 @@ export async function stopScraperJob() {
 
     // Try to get PID from lock file and kill the process
     let pid: number | null = null;
-    const lockFile = path.join(process.cwd(), 'storage', 
+    const lockFile = path.join(process.cwd(), 'storage',
       job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-    
+
     try {
       if (fs.existsSync(lockFile)) {
         const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
@@ -704,15 +653,15 @@ export async function stopScraperJob() {
     } catch (error) {
       console.log(`Could not read lock file for job ${job.id}:`, error);
     }
-    
+
     // Always try pkill first (most reliable for detached processes)
     try {
       const { execSync } = await import('child_process');
       const scriptPattern = job.platform === 'propertyguru' ? 'pg.districts.ts' : 'ep.live.ts';
       // Kill processes matching the script and job ID
-      execSync(`pkill -f "${scriptPattern}.*${job.id}" || pkill -f "${scriptPattern}" || true`, { 
+      execSync(`pkill -f "${scriptPattern}.*${job.id}" || pkill -f "${scriptPattern}" || true`, {
         stdio: 'ignore',
-        timeout: 5000 
+        timeout: 5000
       });
       console.log(`Used pkill to stop ${job.platform} scraper processes for job ${job.id}`);
     } catch (pkillError) {
@@ -735,10 +684,10 @@ export async function stopScraperJob() {
             console.log(`Process ${pid} may have already stopped`);
           }
         }
-        
+
         // Wait a bit, then force kill if still running
         await new Promise(resolve => setTimeout(resolve, 2000));
-        
+
         // Check if process is still running and force kill
         try {
           const { execSync } = await import('child_process');
@@ -829,7 +778,7 @@ export async function deleteScraperHistory() {
 
     if (jobsToDelete && jobsToDelete.length > 0) {
       const jobIds = jobsToDelete.map(job => job.id);
-      
+
       // Clear foreign key references in district_metadata before deleting
       const { error: updateError } = await supabase
         .from('district_metadata')
@@ -876,7 +825,7 @@ export async function deleteScraperHistory() {
     } else if (typeof error === 'string') {
       errorMessage = error;
     }
-    
+
     return {
       success: false,
       error: errorMessage
@@ -934,7 +883,7 @@ export async function deleteScraperJob(jobId: string) {
     } else if (typeof error === 'string') {
       errorMessage = error;
     }
-    
+
     return {
       success: false,
       error: errorMessage
@@ -965,13 +914,13 @@ export async function forceResetStuckJobs() {
     // Collect PIDs and verify processes are actually running
     for (const job of jobsToReset) {
       let pid: number | null | undefined = null;
-      
+
       // Try to get PID from lock file if not in database
       if (!pid) {
         try {
-          const lockFile = path.join(process.cwd(), 'storage', 
+          const lockFile = path.join(process.cwd(), 'storage',
             job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-          
+
           if (fs.existsSync(lockFile)) {
             const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
             pid = lockData.pid || null;
@@ -1033,7 +982,7 @@ export async function forceResetStuckJobs() {
     // Mark all stuck jobs as failed - update by specific job IDs for reliability
     if (jobsToReset.length > 0) {
       const jobIds = jobsToReset.map(job => job.id);
-      
+
       // Update each job individually to ensure they all get updated
       let updateCount = 0;
       for (const jobId of jobIds) {
@@ -1043,7 +992,7 @@ export async function forceResetStuckJobs() {
           completed_at: new Date().toISOString(),
           error_message: 'Force reset by user - job was stuck'
         };
-        
+
         const { error: updateError } = await supabase
           .from('scraper_jobs')
           .update(updateData)
@@ -1057,29 +1006,29 @@ export async function forceResetStuckJobs() {
       }
 
       console.log(`Successfully marked ${updateCount}/${jobsToReset.length} job(s) as failed`);
-      
+
       // Wait a moment for database to propagate
       await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       // Verify the updates worked by checking the database multiple times
       let verificationAttempts = 0;
       const maxAttempts = 5;
-      
+
       while (verificationAttempts < maxAttempts) {
         const { data: verifyJobs } = await supabase
           .from('scraper_jobs')
           .select('id, status')
           .in('id', jobIds);
-        
+
         const stillActive = verifyJobs?.filter(j => j.status === 'queued' || j.status === 'running');
-        
+
         if (!stillActive || stillActive.length === 0) {
           // All jobs successfully updated
           break;
         }
-        
+
         console.warn(`Attempt ${verificationAttempts + 1}: ${stillActive.length} job(s) still show as active, retrying...`);
-        
+
         // Force update again for jobs that are still active
         for (const job of stillActive) {
           const retryUpdateData: any = {
@@ -1087,13 +1036,13 @@ export async function forceResetStuckJobs() {
             completed_at: new Date().toISOString(),
             error_message: 'Force reset by user - job was stuck'
           };
-          
+
           await supabase
             .from('scraper_jobs')
             .update(retryUpdateData)
             .eq('id', job.id);
         }
-        
+
         // Wait before next verification
         await new Promise(resolve => setTimeout(resolve, 500));
         verificationAttempts++;
@@ -1126,7 +1075,7 @@ export async function forceResetStuckJobs() {
 
     // Final verification - make sure no jobs are still active
     await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for final propagation
-    
+
     const { data: finalCheck } = await supabase
       .from('scraper_jobs')
       .select('id, status')
@@ -1142,7 +1091,7 @@ export async function forceResetStuckJobs() {
           completed_at: new Date().toISOString(),
           error_message: 'Force reset by user - job was stuck'
         };
-        
+
         await supabase
           .from('scraper_jobs')
           .update(finalUpdateData)
@@ -1162,10 +1111,10 @@ export async function forceResetStuckJobs() {
     if (finalActiveCount > 0) {
       console.error(`⚠️  CRITICAL: ${finalActiveCount} job(s) still active after all reset attempts.`);
       console.error('Stuck jobs:', JSON.stringify(ultimateCheck, null, 2));
-      
+
       // Try one more time with even more aggressive approach - direct SQL update
       const stuckJobIds = ultimateCheck?.map(j => j.id) || [];
-      
+
       // Try using RPC or direct update with explicit error handling
       for (const stuckJob of ultimateCheck || []) {
         try {
@@ -1175,14 +1124,14 @@ export async function forceResetStuckJobs() {
             completed_at: new Date().toISOString(),
             error_message: 'Force reset by user - job was stuck (final attempt)'
           };
-          
+
           const { error: finalError, data: finalData } = await supabase
             .from('scraper_jobs')
             .update(finalUpdateData)
             .eq('id', stuckJob.id)
             .eq('status', stuckJob.status) // Only update if status hasn't changed
             .select();
-          
+
           if (finalError) {
             console.error(`Failed to update job ${stuckJob.id}:`, finalError);
           } else {
@@ -1192,23 +1141,23 @@ export async function forceResetStuckJobs() {
           console.error(`Exception updating job ${stuckJob.id}:`, err);
         }
       }
-      
+
       // One more verification after final attempt
       await new Promise(resolve => setTimeout(resolve, 1000));
       const { data: lastCheck } = await supabase
         .from('scraper_jobs')
         .select('id, status, platform')
         .in('id', stuckJobIds);
-      
+
       const stillStuck = lastCheck?.filter(j => j.status === 'queued' || j.status === 'running') || [];
-      
+
       if (stillStuck.length > 0) {
         const stuckJobDetails = stillStuck.map(j => ({
           id: j.id,
           platform: j.platform,
           status: j.status
         }));
-        
+
         return {
           success: false,
           error: `${stillStuck.length} job(s) could not be reset after multiple attempts. Job IDs: ${stillStuck.map(j => j.id).join(', ')}. Try using the diagnostic function or check database manually.`,
@@ -1255,15 +1204,15 @@ export async function diagnoseStuckJobs() {
     }
 
     const stuckJobs = [];
-    
+
     for (const job of activeJobs || []) {
       let pid: number | null | undefined = null;
-      
+
       // Try to get PID from lock file
       try {
-        const lockFile = path.join(process.cwd(), 'storage', 
+        const lockFile = path.join(process.cwd(), 'storage',
           job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-        
+
         if (fs.existsSync(lockFile)) {
           const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
           pid = lockData.pid || pid;
@@ -1284,7 +1233,7 @@ export async function diagnoseStuckJobs() {
         startedAt: job.started_at,
         pid: pid,
         isProcessRunning: isProcessRunningValue,
-        hasLockFile: fs.existsSync(path.join(process.cwd(), 'storage', 
+        hasLockFile: fs.existsSync(path.join(process.cwd(), 'storage',
           job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock')),
         errorMessage: job.error_message,
         sqlFix: `UPDATE scraper_jobs SET status = 'failed', completed_at = NOW(), error_message = 'Manually fixed - job was stuck' WHERE id = '${job.id}';`
@@ -1343,11 +1292,11 @@ export async function forceFixStuckJob(jobId: string) {
     // Kill process if PID exists and process is running
     // Get PID from lock file (pid column doesn't exist in database)
     let pid: number | null | undefined = null;
-    
+
       try {
-        const lockFile = path.join(process.cwd(), 'storage', 
+        const lockFile = path.join(process.cwd(), 'storage',
           job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-        
+
         if (fs.existsSync(lockFile)) {
           const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
           pid = lockData.pid || null;
@@ -1379,9 +1328,9 @@ export async function forceFixStuckJob(jobId: string) {
 
     // Remove lock file
     try {
-      const lockFile = path.join(process.cwd(), 'storage', 
+      const lockFile = path.join(process.cwd(), 'storage',
         job.platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');
-      
+
       if (fs.existsSync(lockFile)) {
         fs.unlinkSync(lockFile);
       }
@@ -1411,7 +1360,7 @@ export async function forceFixStuckJob(jobId: string) {
 
     if (updateError) {
       console.error('Standard update failed:', updateError);
-      
+
       // Approach 2: Update without pid field
       const { pid: _, ...updateWithoutPid } = updateData;
       const { error: updateError2 } = await supabase
@@ -1541,7 +1490,7 @@ export async function syncCompletedJobs() {
         }
 
         const job = matchingJobs[0];
-        
+
         // Update job to completed status
         const updateData: any = {
           status: 'completed',
@@ -1572,7 +1521,7 @@ export async function syncCompletedJobs() {
 
     return {
       success: syncedCount > 0 || errors.length === 0,
-      message: syncedCount > 0 
+      message: syncedCount > 0
         ? `Synced ${syncedCount} completed job(s) from completed.json files`
         : 'No jobs needed syncing',
       synced: syncedCount,

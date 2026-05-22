@@ -1,6 +1,10 @@
 import Link from 'next/link';
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AdminLogoutButton } from '@/components/AdminLogoutButton';
+import { ADMIN_SESSION_COOKIE, isValidAdminSession } from '@/lib/admin-auth';
 import { 
   Home, 
   Users, 
@@ -14,11 +18,18 @@ import {
   ChevronDown
 } from 'lucide-react';
 
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(ADMIN_SESSION_COOKIE)?.value;
+
+  if (!await isValidAdminSession(token)) {
+    redirect('/login?next=/admin');
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navbar */}
@@ -188,6 +199,7 @@ export default function AdminLayout({
                 </div>
               </div>
             </div>
+            <AdminLogoutButton />
           </div>
         </div>
       </nav>

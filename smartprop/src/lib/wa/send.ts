@@ -16,6 +16,30 @@ interface WAHATemplateResponse {
   to: string;
 }
 
+const DEFAULT_WAHA_URL = 'http://localhost:3030';
+
+function normalizeChatId(to: string): string {
+  const trimmed = to.trim();
+  return trimmed.includes('@') ? trimmed : `${trimmed.replace(/[^\d]/g, '')}@c.us`;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 15000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Send a WhatsApp template message via WAHA
  * @param to - Recipient phone number (e.g., "6591234567" for Singapore)
@@ -28,7 +52,7 @@ export async function sendTemplate(
   templateName: string,
   parameters: string[] = []
 ): Promise<SendTemplateResponse> {
-  const WAHA_URL = process.env.WAHA_URL || 'http://localhost:3000';
+  const WAHA_URL = process.env.WAHA_URL || DEFAULT_WAHA_URL;
   const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
 
   if (!WAHA_URL) {
@@ -40,7 +64,7 @@ export async function sendTemplate(
   }
 
   // Format phone number for WhatsApp (must end with @c.us)
-  const chatId = to.includes('@') ? to : `${to}@c.us`;
+  const chatId = normalizeChatId(to);
 
   const url = `${WAHA_URL}/api/sendTemplate`;
   
@@ -65,7 +89,7 @@ export async function sendTemplate(
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

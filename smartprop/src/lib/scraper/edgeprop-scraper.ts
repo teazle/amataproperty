@@ -48,6 +48,9 @@ export async function scrapeEdgeProp(
   const allArticles: Article[] = [];
   const seenIds = new Set<string>(); // Track unique article IDs for deduplication
   let capturedData: CapturedApiData | null = null;
+  let totalProcessedArticles = 0;
+  let totalNewArticles = 0;
+  let totalDuplicates = 0;
   
   // Import database functions if session ID provided
   let dbModule: typeof import('@/lib/db/articles') | null = null;
@@ -102,8 +105,14 @@ export async function scrapeEdgeProp(
         break;
       }
       
-      // Wait for data to be captured
-      await page.waitForTimeout(2000);
+      // Wait for data to be captured. If the first navigation misses the API
+      // response, reload and process the same page instead of exiting the loop.
+      for (let captureAttempt = 1; captureAttempt <= 2 && !capturedData; captureAttempt++) {
+        await page.waitForTimeout(captureAttempt === 1 ? 2000 : 3000);
+        if (!capturedData && captureAttempt === 1) {
+          await page.reload({ waitUntil: 'domcontentloaded' });
+        }
+      }
       
       if ((capturedData as unknown as CapturedApiData)?.results && (capturedData as unknown as CapturedApiData).results!.length > 0) {
         // Type assertion to help TypeScript understand the type
@@ -114,6 +123,8 @@ export async function scrapeEdgeProp(
         
         // Deduplicate articles based on nid (article ID)
         let newArticlesCount = 0;
+        let persistedNewArticles = 0;
+        let persistedDuplicates = 0;
         const pageArticles: Article[] = [];
         
         for (const article of data.results) {
@@ -128,16 +139,24 @@ export async function scrapeEdgeProp(
         // Save to database if session ID provided
         if (sessionId && dbModule && pageArticles.length > 0) {
           try {
-            const { newArticles, duplicates } = await dbModule.upsertArticles(pageArticles, sessionId);
+            const { newArticles, duplicates, processedArticles } = await dbModule.upsertArticles(pageArticles, sessionId);
+            persistedNewArticles = newArticles;
+            persistedDuplicates = duplicates;
+            totalProcessedArticles += processedArticles;
+            totalNewArticles += newArticles;
+            totalDuplicates += duplicates;
             await dbModule.updateScrapeSession(sessionId, {
               pages_scraped: pageNum,
-              articles_scraped: allArticles.length,
-              unique_articles: allArticles.length,
-              duplicates_found: duplicates
+              articles_scraped: totalProcessedArticles,
+              unique_articles: totalNewArticles,
+              duplicates_found: totalDuplicates
             });
           } catch (_error: unknown) {
             console.error('Failed to save articles to database:', _error);
           }
+        } else {
+          persistedNewArticles = newArticlesCount;
+          persistedDuplicates = data.results.length - newArticlesCount;
         }
         
         onProgress({
@@ -147,7 +166,7 @@ export async function scrapeEdgeProp(
           totalArticles: data.total || 0,
           maxPagesAvailable: apiMaxPages,
           status: 'running',
-          message: `Scraped page ${pageNum} (${newArticlesCount} new, ${data.results.length - newArticlesCount} duplicates)`,
+          message: `Scraped page ${pageNum} (${persistedNewArticles} new, ${persistedDuplicates} duplicates)`,
           articles: [...allArticles] // Send copy
         });
         
@@ -172,11 +191,15 @@ export async function scrapeEdgeProp(
           }
         }
       } else {
-        // Retry once
-        await page.waitForTimeout(2000);
-        if (!capturedData) {
-          await page.reload({ waitUntil: 'domcontentloaded' });
-        }
+        onProgress({
+          currentPage: pageNum,
+          totalPages: maxPages,
+          articlesCollected: allArticles.length,
+          totalArticles: allArticles.length,
+          status: 'running',
+          message: `No article API data captured for page ${pageNum} after reload retry`,
+          articles: [...allArticles]
+        });
       }
     }
     
@@ -237,4 +260,3 @@ export async function stopScraper() {
     currentBrowser = null;
   }
 }
-

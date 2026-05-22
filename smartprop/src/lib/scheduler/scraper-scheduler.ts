@@ -13,11 +13,11 @@ import { createClient } from '@supabase/supabase-js';
 function getSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE;
-  
+
   if (!supabaseUrl || !supabaseKey) {
     throw new Error('Missing Supabase environment variables: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE are required');
   }
-  
+
   return createClient(supabaseUrl, supabaseKey, {
     auth: {
       autoRefreshToken: false,
@@ -98,7 +98,7 @@ class ScraperScheduler {
       // Try to load enabled schedules from database
       // If this fails (e.g., rate limits), we'll initialize with empty schedules and allow manual reload
       let schedules: ScheduledJob[] = [];
-      
+
       try {
         const supabase = getSupabaseClient();
         const { data, error } = await supabase
@@ -386,7 +386,7 @@ class ScraperScheduler {
     });
     const nextRun = tempTask.getNextRun();
     tempTask.destroy();
-    
+
     // If no next run, calculate manually (fallback)
     if (!nextRun) {
       // Simple calculation: assume it's daily at the specified hour
@@ -396,7 +396,7 @@ class ScraperScheduler {
       tomorrow.setHours(10, 0, 0, 0); // Default to 10am
       return tomorrow;
     }
-    
+
     return nextRun;
   }
 
@@ -448,12 +448,16 @@ class ScraperScheduler {
       nextRun: Date | null;
     }>;
   } {
-    const jobDetails = Array.from(this.jobs.entries()).map(([id, task]) => ({
-      id,
-      name: task.name || 'Unknown',
-      status: task.getStatus(),
-      nextRun: task.getNextRun(),
-    }));
+    const jobDetails = Array.from(this.jobs.entries()).map(([id, task]) => {
+      const status = task.getStatus();
+
+      return {
+        id,
+        name: task.name || 'Unknown',
+        status: typeof status === 'string' ? status : 'unknown',
+        nextRun: task.getNextRun(),
+      };
+    });
 
     return {
       initialized: this.initialized,

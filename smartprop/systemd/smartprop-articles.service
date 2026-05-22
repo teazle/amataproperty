@@ -1,0 +1,18 @@
+[Unit]
+Description=SmartProp EdgeProp article metadata scrape
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/smartprop/app/smartprop
+Environment=HOME=/root
+Environment=PM2_HOME=/root/.pm2
+Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ARTICLE_SCRAPE_METHOD=metadata
+Environment=ARTICLE_SCRAPE_PAGES=1
+Environment=ARTICLE_SCRAPE_MAX_ARTICLES=all
+ExecStart=/root/.bun/bin/bun scripts/run-article-scrape.ts
+TimeoutStartSec=900
+StandardOutput=append:/opt/smartprop/logs/smartprop-articles.log
+StandardError=append:/opt/smartprop/logs/smartprop-articles.log

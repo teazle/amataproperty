@@ -32,7 +32,7 @@ FlareSolverr is now automatically monitored and will restart itself if it fails.
 ./scripts/check-flaresolverr-monitoring.sh
 
 # Or SSH to EC2
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 sudo systemctl status flaresolverr-monitor.timer
 ```
 
@@ -150,11 +150,11 @@ The FlareSolverr monitor works alongside:
 
 ## Benefits
 
-✅ **Proactive**: Detects issues before they affect scrapers  
-✅ **Automatic**: No manual intervention needed  
-✅ **Safe**: Prevents restart loops and resource exhaustion  
-✅ **Observable**: All actions are logged  
-✅ **Reliable**: Uses systemd for guaranteed execution  
+✅ **Proactive**: Detects issues before they affect scrapers
+✅ **Automatic**: No manual intervention needed
+✅ **Safe**: Prevents restart loops and resource exhaustion
+✅ **Observable**: All actions are logged
+✅ **Reliable**: Uses systemd for guaranteed execution
 
 ## Next Steps
 

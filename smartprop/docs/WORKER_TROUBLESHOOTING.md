@@ -34,7 +34,7 @@ The scraping system uses a job queue architecture:
 
 ```bash
 # SSH into EC2
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 
 # Check PM2 status
 pm2 status
@@ -84,15 +84,15 @@ cat .env.local | grep -E "SUPABASE|DATABASE|PG_BOSS"
 Query the database to see how many jobs are queued:
 
 ```sql
-SELECT 
-  id, 
-  platform, 
-  status, 
+SELECT
+  id,
+  platform,
+  status,
   started_at,
   error_message
-FROM scraper_jobs 
-WHERE status = 'queued' 
-ORDER BY started_at DESC 
+FROM scraper_jobs
+WHERE status = 'queued'
+ORDER BY started_at DESC
 LIMIT 10;
 ```
 
@@ -189,7 +189,7 @@ Or run directly on EC2:
 
 ```bash
 # SSH into EC2 first
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 
 # Then run
 cd /opt/smartprop/app/smartprop
@@ -224,8 +224,8 @@ After fixing the issue, verify:
 
 3. **Jobs are being processed:**
    ```sql
-   SELECT status, COUNT(*) 
-   FROM scraper_jobs 
+   SELECT status, COUNT(*)
+   FROM scraper_jobs
    GROUP BY status;
    ```
    - `queued` count should decrease

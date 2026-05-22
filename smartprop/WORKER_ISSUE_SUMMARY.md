@@ -38,7 +38,7 @@ cd smartprop
 Or manually SSH and check:
 
 ```bash
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 pm2 status
 pm2 logs scraper-worker --lines 50
 ```
@@ -49,7 +49,7 @@ If the worker is not running, start it:
 
 ```bash
 # SSH into EC2
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 
 # Navigate to app directory
 cd /opt/smartprop/app/smartprop

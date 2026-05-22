@@ -4,7 +4,12 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { sendCoBrokingInquiry } from '@/lib/wa/waha';
+import {
+  generateCoBrokingInquiryMessage,
+  getWAHAReadiness,
+  sendCoBrokingInquiry
+} from '@/lib/wa/waha';
+import { logWhatsAppMessage } from '@/lib/wa/message-log';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
@@ -43,6 +48,27 @@ interface Outreach {
   status: string;
   created_at: string;
 }
+
+type MatchingJobOptions = {
+  dryRun?: boolean;
+  preview?: boolean;
+};
+
+type OutreachProcessStats = {
+  processed: number;
+  sent: number;
+  failed: number;
+  queued?: number;
+  dryRun?: boolean;
+  previews?: Array<{
+    outreachId: string;
+    agentName: string;
+    phone: string;
+    message: string;
+  }>;
+  wahaReady?: boolean;
+  wahaError?: string;
+};
 
 /**
  * Fetches new listings from the last 24 hours matching criteria
@@ -88,7 +114,11 @@ async function fetchAgents(): Promise<Agent[]> {
 /**
  * Creates outreach entries for agent-listing combinations that don't exist
  */
-async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Promise<Outreach[]> {
+async function upsertOutreachEntries(
+  listings: Listing[],
+  agents: Agent[],
+  options: MatchingJobOptions = {}
+): Promise<Partial<Outreach>[]> {
   const outreachEntries: Partial<Outreach>[] = [];
   
   // Create all possible agent-listing combinations
@@ -139,6 +169,11 @@ async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Prom
     return [];
   }
 
+  if (options.dryRun) {
+    console.log(`[dry-run] Would create ${newEntries.length} outreach entries`);
+    return newEntries;
+  }
+
   // Insert new outreach entries
   const { data: insertedEntries, error: insertError } = await supabase
     .from('outreach')
@@ -161,8 +196,9 @@ async function upsertOutreachEntries(listings: Listing[], agents: Agent[]): Prom
  */
 export async function processOutreachMessages(
   limit: number = 15,
-  delayBetweenMessages: number = 1000
-): Promise<{ processed: number; sent: number; failed: number }> {
+  delayBetweenMessages: number = 1000,
+  options: MatchingJobOptions = {}
+): Promise<OutreachProcessStats> {
   // Ensure limit is within safe range (10-20 recommended by WAHA docs)
   const safeLimit = Math.max(1, Math.min(limit, 20));
   
@@ -190,7 +226,42 @@ export async function processOutreachMessages(
 
   if (!queuedOutreach || queuedOutreach.length === 0) {
     console.log('No queued outreach messages found');
-    return { processed: 0, sent: 0, failed: 0 };
+    return { processed: 0, sent: 0, failed: 0, dryRun: options.dryRun || undefined };
+  }
+
+  if (options.dryRun) {
+    console.log(`[dry-run] Would process ${queuedOutreach.length} queued outreach messages`);
+    const previews = queuedOutreach.map((outreach: any) => ({
+      outreachId: outreach.id,
+      agentName: outreach.agents.name,
+      phone: outreach.agents.phone,
+      message: generateCoBrokingInquiryMessage(
+        outreach.agents.name,
+        outreach.listings.title || 'New Property',
+        outreach.listings.url
+      ),
+    }));
+
+    return {
+      processed: queuedOutreach.length,
+      sent: 0,
+      failed: 0,
+      dryRun: true,
+      previews: options.preview === false ? undefined : previews,
+    };
+  }
+
+  const waha = await getWAHAReadiness();
+  if (!waha.ready) {
+    console.warn(`WAHA is not ready; leaving ${queuedOutreach.length} outreach messages queued: ${waha.error || 'unknown readiness error'}`);
+    return {
+      processed: queuedOutreach.length,
+      sent: 0,
+      failed: 0,
+      queued: queuedOutreach.length,
+      wahaReady: false,
+      wahaError: waha.error || 'WAHA is not ready',
+    };
   }
 
   let sent = 0;
@@ -248,6 +319,16 @@ export async function processOutreachMessages(
             })
             .eq('id', outreach.id);
 
+          await logWhatsAppMessage({
+            outreachId: outreach.id,
+            agentId: outreach.agent_id,
+            direction: 'outbound',
+            phone: outreach.agents.phone,
+            wahaMessageId: result.messageId || null,
+            body: result.messageText || 'Co-broking inquiry sent',
+            rawPayload: result,
+          });
+
           console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
           sent++;
         } else {
@@ -288,9 +369,10 @@ export async function processOutreachMessages(
  * Main matching job function
  * @param outreachLimit - Optional limit for outreach messages (defaults to 15 if not provided)
  */
-export async function runMatchingJob(outreachLimit?: number): Promise<{
+export async function runMatchingJob(outreachLimit?: number, options: MatchingJobOptions = {}): Promise<{
   success: boolean;
   message: string;
+  dryRun?: boolean;
   stats: {
     listingsFound: number;
     agentsFound: number;
@@ -298,10 +380,12 @@ export async function runMatchingJob(outreachLimit?: number): Promise<{
     messagesProcessed: number;
     messagesSent: number;
     messagesFailed: number;
+    messagesQueued?: number;
+    previewMessages?: number;
   };
 }> {
   try {
-    console.log('Starting property matching job...');
+    console.log(`Starting property matching job${options.dryRun ? ' (dry-run)' : ''}...`);
 
     // Fetch new listings
     const listings = await fetchNewListings();
@@ -312,23 +396,26 @@ export async function runMatchingJob(outreachLimit?: number): Promise<{
     console.log(`Found ${agents.length} agents`);
 
     // Create outreach entries
-    const outreachEntries = await upsertOutreachEntries(listings, agents);
-    console.log(`Created ${outreachEntries.length} new outreach entries`);
+    const outreachEntries = await upsertOutreachEntries(listings, agents, options);
+    console.log(`${options.dryRun ? 'Would create' : 'Created'} ${outreachEntries.length} new outreach entries`);
 
     // Process queued messages (use provided limit or default)
-    const messageStats = await processOutreachMessages(outreachLimit);
-    console.log(`Processed ${messageStats.processed} messages: ${messageStats.sent} sent, ${messageStats.failed} failed`);
+    const messageStats = await processOutreachMessages(outreachLimit, undefined, options);
+    console.log(`${options.dryRun ? 'Would process' : 'Processed'} ${messageStats.processed} messages: ${messageStats.sent} sent, ${messageStats.failed} failed`);
 
     return {
       success: true,
-      message: 'Matching job completed successfully',
+      message: options.dryRun ? 'Matching job dry-run completed successfully' : 'Matching job completed successfully',
+      dryRun: options.dryRun || undefined,
       stats: {
         listingsFound: listings.length,
         agentsFound: agents.length,
         outreachCreated: outreachEntries.length,
         messagesProcessed: messageStats.processed,
         messagesSent: messageStats.sent,
-        messagesFailed: messageStats.failed
+        messagesFailed: messageStats.failed,
+        messagesQueued: messageStats.queued,
+        previewMessages: messageStats.previews?.length
       }
     };
   } catch (error) {
@@ -336,6 +423,7 @@ export async function runMatchingJob(outreachLimit?: number): Promise<{
     return {
       success: false,
       message: `Matching job failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      dryRun: options.dryRun || undefined,
       stats: {
         listingsFound: 0,
         agentsFound: 0,

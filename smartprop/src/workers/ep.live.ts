@@ -4,7 +4,7 @@ import path from 'path';
 // Load environment variables from .env.local only
 // CRITICAL: override: false ensures job-specific env vars (from queue worker) take precedence
 // .env.local only provides defaults when env vars aren't already set
-config({ 
+config({
   path: path.resolve(process.cwd(), '.env.local'),
   override: false  // Don't override existing env vars (set by queue worker from frontend config)
 });
@@ -17,65 +17,147 @@ import { CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
+import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health';
+
+const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to EdgeProp...');
+
+  // Check if credentials are available
+  if (!process.env.EP_EMAIL || !process.env.EP_PASSWORD) {
+    console.error('❌ EP_EMAIL and EP_PASSWORD environment variables are not set!');
+    return false;
+  }
+
   try {
     // Use xvfb-run on Linux, direct bun on macOS (xvfb-run doesn't exist on macOS)
     const isLinux = process.platform === 'linux';
-    const command = isLinux ? 'xvfb-run' : 'bun';
+    const bunCandidates = [
+      process.env.BUN_PATH,
+      '/usr/local/bin/bun',
+      '/root/.bun/bin/bun',
+      '/home/ec2-user/.bun/bin/bun',
+      'bun',
+    ].filter((value): value is string => Boolean(value));
+    const bunPath =
+      bunCandidates.find((candidate) => candidate === 'bun' || fs.existsSync(candidate)) ?? 'bun';
+    const command = isLinux ? 'xvfb-run' : bunPath;
     const args = isLinux
-      ? ['-a', '/home/ec2-user/.bun/bin/bun', 'src/workers/auth.ep.ts']
+      ? ['-a', bunPath, 'src/workers/auth.ep.ts']
       : ['src/workers/auth.ep.ts'];
 
     // Run as spawned process and treat saved state as success even if exit code is noisy
     const statePath = path.join(process.cwd(), 'storage', 'ep.state.json');
+
+    // Get initial modification time if file exists
+    let initialMtimeMs = 0;
     if (fs.existsSync(statePath)) {
-      try { fs.unlinkSync(statePath); } catch (_) { /* ignore */ }
+      initialMtimeMs = fs.statSync(statePath).mtimeMs;
+      try {
+        fs.unlinkSync(statePath);
+        console.log('   🗑️  Removed old auth state file');
+      } catch (_) {
+        /* ignore */
+      }
     }
 
-    await new Promise<void>((resolve, reject) => {
+    // Ensure storage directory exists
+    const storageDir = path.dirname(statePath);
+    if (!fs.existsSync(storageDir)) {
+      fs.mkdirSync(storageDir, { recursive: true });
+    }
+
+    return await new Promise<boolean>((resolve) => {
+      console.log(`   🚀 Spawning auth process: ${command} ${args.join(' ')}`);
+
       const child = spawn(command, args, {
         cwd: process.cwd(),
         stdio: 'inherit',
-        env: process.env,
+        env: {
+          ...process.env,
+          // Ensure Bun is in PATH for Linux
+          PATH: isLinux ? `${bunPath}:${process.env.PATH}` : process.env.PATH,
+        },
       });
 
-      const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error('Re-authentication timed out'));
-      }, 600000); // 10 minutes
+      let authSuccess = false;
 
-      child.on('exit', (code) => {
-        clearTimeout(timeout);
-        // Consider success if state file exists and has cookies
+      // Increased timeout to 15 minutes (matching PropertyGuru) for Cloudflare challenges
+      const timeout = setTimeout(() => {
+        console.log('   ⏱️  Re-authentication timeout (15 minutes) - killing process...');
+        child.kill('SIGKILL');
+        // Check state file one more time before resolving
         if (fs.existsSync(statePath)) {
-          try {
-            const content = fs.readFileSync(statePath, 'utf-8');
-            const data = JSON.parse(content);
-            if (Array.isArray(data.cookies) && data.cookies.length > 0) {
-              console.log('✅ Re-authentication complete! State file saved with cookies.');
-              resolve();
-              return;
-            }
-          } catch (_) {
-            // fall through to code check
+          const newMtimeMs = fs.statSync(statePath).mtimeMs;
+          if (newMtimeMs > initialMtimeMs) {
+            console.log('✅ Authentication state file updated despite timeout.');
+            authSuccess = true;
           }
         }
-        if (code === 0) {
-          resolve();
+        if (authSuccess) {
+          console.log('✅ Re-authentication complete!\n');
+          resolve(true);
         } else {
-          reject(new Error(`Re-authentication exited with code ${code ?? 'unknown'}`));
+          console.error('❌ Re-authentication failed (timeout).');
+          resolve(false);
         }
+      }, 900000); // 15 minutes (increased from 10 minutes)
+
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        console.error('❌ Failed to spawn auth process:', error);
+        resolve(false);
       });
 
-      child.on('error', (err) => {
+      child.on('exit', (code, signal) => {
         clearTimeout(timeout);
-        reject(err);
+        console.log(`   Auth process exited with code ${code ?? 'null'}, signal ${signal ?? 'none'}`);
+
+        // Wait a moment for file writes to complete
+        setTimeout(() => {
+          // Check if the state file was updated after the process started
+          if (fs.existsSync(statePath)) {
+            const newMtimeMs = fs.statSync(statePath).mtimeMs;
+            if (newMtimeMs > initialMtimeMs) {
+              try {
+                const content = fs.readFileSync(statePath, 'utf-8');
+                const data = JSON.parse(content);
+                if (Array.isArray(data.cookies) && data.cookies.length > 0) {
+                  console.log(`✅ Authentication state file updated with ${data.cookies.length} cookies.`);
+                  authSuccess = true;
+                } else {
+                  console.log('⚠️  Authentication state file updated but has no cookies.');
+                  console.log(`   State file keys: ${Object.keys(data).join(', ')}`);
+                }
+              } catch (parseError) {
+                console.error('⚠️  Could not parse state file:', parseError);
+              }
+            } else {
+              console.log(`⚠️  Authentication state file not updated (mtime unchanged: ${initialMtimeMs} -> ${newMtimeMs}).`);
+            }
+          } else {
+            console.log('⚠️  Authentication state file does not exist after re-authentication attempt.');
+            console.log(`   Expected path: ${statePath}`);
+          }
+
+          if (authSuccess) {
+            console.log('✅ Re-authentication complete!\n');
+            resolve(true);
+          } else if (code === 0 || code === null) {
+            // Exit code 0 or null but no state file - might still be OK if file check passed
+            console.log('⚠️  Process exited with code 0/null but state file check failed - treating as failure');
+            console.log(`   Possible causes: Authentication script failed silently, Flaresolverr unavailable, or login flow changed`);
+            resolve(false);
+          } else {
+            console.error(`❌ Re-authentication failed (process exited with code ${code}).`);
+            console.error(`   Common causes: Invalid credentials, Cloudflare blocking, Flaresolverr unavailable, or website changes`);
+            resolve(false);
+          }
+        }, 1000); // Wait 1 second for file writes to complete
       });
     });
-    return true;
   } catch (error) {
     console.error('❌ Re-authentication failed:', error);
     return false;
@@ -89,16 +171,16 @@ async function reAuthenticate(): Promise<boolean> {
  */
 function cleanPropertyTitle(title: string): string {
   let cleaned = title;
-  
+
   // Remove EdgeProp suffix
   cleaned = cleaned.replace(/\s*\|\s*EdgeProp.*$/i, '');
-  
+
   // Remove "For Sale at S$..." suffix
   cleaned = cleaned.replace(/\s+(For Sale|For Rent)\s+at\s+S\$.*$/i, '');
-  
+
   // Remove property type at the end if redundant
   cleaned = cleaned.replace(/\s+(Condominium|Apartment|HDB|Landed|Terrace)$/i, '');
-  
+
   return cleaned.trim();
 }
 
@@ -109,25 +191,25 @@ function cleanPropertyTitle(title: string): string {
  */
 function cleanPhoneNumber(phoneText: string): string {
   if (!phoneText) return '';
-  
+
   // Remove all non-numeric characters
   const cleaned = phoneText.replace(/[^\d]/g, '');
-  
+
   // If it starts with 65, remove it (Singapore country code)
   const withoutCountryCode = cleaned.startsWith('65') ? cleaned.slice(2) : cleaned;
-  
-  // Return only if it's a valid Singapore phone number (8 digits)
+
+  // Return only if it's a valid Singapore phone number (8 digits, starting with 6/8/9)
   // Also handle cases where phone might be in format like "+65 97400311" or "tel:+6597400311"
-  if (withoutCountryCode.length === 8) {
+  if (/^[689]\d{7}$/.test(withoutCountryCode)) {
     return withoutCountryCode;
   }
-  
-  // Try to extract 8-digit number from longer strings
-  const eightDigitMatch = withoutCountryCode.match(/(\d{8})/);
+
+  // Try to extract a valid Singapore number from longer strings
+  const eightDigitMatch = withoutCountryCode.match(/([689]\d{7})/);
   if (eightDigitMatch) {
     return eightDigitMatch[1];
   }
-  
+
   return '';
 }
 
@@ -136,19 +218,19 @@ function cleanPhoneNumber(phoneText: string): string {
  */
 function parsePrice(priceStr: string): number | undefined {
   if (!priceStr) return undefined;
-  
+
   const cleaned = priceStr.replace(/[$,\s]/g, '');
-  
+
   if (cleaned.toLowerCase().includes('m')) {
     const num = parseFloat(cleaned.replace(/m/i, ''));
     return Math.round(num * 1000000);
   }
-  
+
   if (cleaned.toLowerCase().includes('k')) {
     const num = parseFloat(cleaned.replace(/k/i, ''));
     return Math.round(num * 1000);
   }
-  
+
   const num = parseFloat(cleaned);
   return isNaN(num) ? undefined : num;
 }
@@ -157,25 +239,25 @@ function parsePrice(priceStr: string): number | undefined {
 
 async function scrapeEdgePropFinal() {
   console.log('🚀 Starting Final EdgeProp Scraper...');
-  
+
   const maxPages = parseInt(process.env.EP_MAX_PAGES || '10'); // Default to 10 pages
   const maxListings = process.env.EP_MAX_LISTINGS ? parseInt(process.env.EP_MAX_LISTINGS, 10) : undefined;
   const jobId = process.env.EP_JOB_ID;
   const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
   const lockFile = path.join(process.cwd(), 'storage', 'ep-scraper.lock');
   const hasStorageState = fs.existsSync(stateFilePath);
-  
+
   // Flag to track if we should stop gracefully
   let shouldStop = false;
-  
+
   // Declare context variable outside so it's accessible in cleanup
   let context: BrowserContext | null = null;
-  
+
   // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
   const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
     try {
       console.log(`🧹 Closing browser resources (${reason})...`);
-      
+
       // Close context first, then browser
       if (context) {
         try {
@@ -186,7 +268,7 @@ async function scrapeEdgePropFinal() {
         }
         context = null;
       }
-      
+
       if (browserInstance && browserInstance.isConnected()) {
         await browserInstance.close();
         console.log('✅ Browser closed successfully');
@@ -208,10 +290,10 @@ async function scrapeEdgePropFinal() {
   const handleStopSignal = async (signal: string) => {
     console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
     shouldStop = true;
-    
+
     // CRITICAL: Close browser FIRST before doing anything else
     await cleanupBrowser(browser, `signal: ${signal}`);
-    
+
     // Update and remove lock file
     if (fs.existsSync(lockFile)) {
       try {
@@ -235,7 +317,7 @@ async function scrapeEdgePropFinal() {
         }
       }
     }
-    
+
     // Update database if jobId exists
     if (jobId) {
       try {
@@ -252,34 +334,34 @@ async function scrapeEdgePropFinal() {
         console.error('Failed to update database:', error);
       }
     }
-    
+
     // Clean up and exit
     process.exit(0);
   };
-  
+
   // Register signal handlers
   process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
   process.on('SIGINT', () => handleStopSignal('SIGINT'));
-  
+
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
   process.on('uncaughtException', async (error) => {
     console.error('❌ Uncaught exception:', error);
     await cleanupBrowser(browser, 'uncaughtException');
     process.exit(1);
   });
-  
+
   // CRITICAL: Handle unhandled promise rejections - close browser before crashing
   process.on('unhandledRejection', async (reason, promise) => {
     console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
     await cleanupBrowser(browser, 'unhandledRejection');
     process.exit(1);
   });
-  
+
   // Check for existing lock file
   if (fs.existsSync(lockFile)) {
     const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
     const lockAge = Date.now() - new Date(lockData.startedAt).getTime();
-    
+
     // Check if the process is actually running
     let processRunning = false;
     if (lockData.pid) {
@@ -302,7 +384,7 @@ async function scrapeEdgePropFinal() {
     } else {
       console.log('   ⚠ No PID in lock file, cannot verify process');
     }
-    
+
     // If process is not running, remove stale lock file
     if (!processRunning) {
       console.log('⚠️  Found stale lock file (process not running), removing...');
@@ -323,7 +405,7 @@ async function scrapeEdgePropFinal() {
       process.exit(1);
     }
   }
-  
+
   console.log(`📍 Districts: ALL`);
   console.log(`💰 Price range: $1,000,000 - $3,000,000`);
   console.log(`📄 Max pages: ${maxPages}`);
@@ -332,7 +414,7 @@ async function scrapeEdgePropFinal() {
   }
   console.log(`📁 Storage state: ${hasStorageState ? 'Found' : 'Not found'}`);
   console.log(`🔧 Job ID: ${jobId || 'Not provided'}, EP_MAX_LISTINGS=${process.env.EP_MAX_LISTINGS || 'unlimited'}`);
-  
+
   // Create initial lock file for progress tracking
   const jobStatus = {
     startedAt: new Date().toISOString(),
@@ -340,6 +422,7 @@ async function scrapeEdgePropFinal() {
     jobId: jobId || null,
     status: 'running',
     statusMessage: 'Starting scraper...',
+    dryRun: isDryRun,
     progress: {
       currentPage: 0,
       totalPages: maxPages,
@@ -352,14 +435,14 @@ async function scrapeEdgePropFinal() {
     },
     completedAt: undefined as string | undefined
   };
-  
+
   fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
   console.log('📝 Lock file created for progress tracking');
-  
+
   // Check if auth state file exists and is recent (less than 24 hours old)
   const stateFileExists = fs.existsSync(stateFilePath);
   let shouldReAuth = !stateFileExists;
-  
+
   // If state file exists, validate it's not corrupted
   if (stateFileExists) {
     try {
@@ -374,8 +457,8 @@ async function scrapeEdgePropFinal() {
         shouldReAuth = true;
       } else {
         // Check if cookies include session/auth cookies
-        const hasSessionCookie = stateData.cookies.some((cookie: any) => 
-          cookie.name.toLowerCase().includes('session') || 
+        const hasSessionCookie = stateData.cookies.some((cookie: any) =>
+          cookie.name.toLowerCase().includes('session') ||
           cookie.name.toLowerCase().includes('auth') ||
           cookie.name.toLowerCase().includes('token')
         );
@@ -389,7 +472,7 @@ async function scrapeEdgePropFinal() {
       shouldReAuth = true;
     }
   }
-  
+
   let stateAgeHours: number | null = null;
   if (stateFileExists) {
     const stats = fs.statSync(stateFilePath);
@@ -403,22 +486,22 @@ async function scrapeEdgePropFinal() {
       // If login indicators aren't visible, we'll re-auth regardless of file age
     }
   }
-  
+
   // Track if we just re-authenticated to prevent double re-auth
   let justReAuthenticated = false;
-  
+
   // Re-authenticate only if needed
   if (shouldReAuth) {
     console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
     const authSuccess = await reAuthenticate();
-    
+
     if (!authSuccess) {
       console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
       // Update lock file and database, then remove lock file
       jobStatus.status = 'failed';
       jobStatus.statusMessage = 'Re-authentication failed';
       jobStatus.completedAt = new Date().toISOString();
-      
+
       if (fs.existsSync(lockFile)) {
         try {
           fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
@@ -436,7 +519,7 @@ async function scrapeEdgePropFinal() {
           }
         }
       }
-      
+
       if (jobId) {
         try {
           const supabase = getSupabaseClient();
@@ -452,13 +535,13 @@ async function scrapeEdgePropFinal() {
           console.error('Failed to update database:', error);
         }
       }
-      
+
       process.exit(1);
     }
-    
+
     // Mark that we just re-authenticated successfully
     justReAuthenticated = true;
-    
+
     // Verify auth state exists after re-auth (only if we re-authenticated)
     const updatedStateExists = fs.existsSync(stateFilePath);
     if (!updatedStateExists) {
@@ -467,7 +550,7 @@ async function scrapeEdgePropFinal() {
       jobStatus.status = 'failed';
       jobStatus.statusMessage = 'Authentication state file not found';
       jobStatus.completedAt = new Date().toISOString();
-      
+
       if (fs.existsSync(lockFile)) {
         try {
           fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
@@ -485,7 +568,7 @@ async function scrapeEdgePropFinal() {
           }
         }
       }
-      
+
       if (jobId) {
         try {
           const supabase = getSupabaseClient();
@@ -501,18 +584,18 @@ async function scrapeEdgePropFinal() {
           console.error('Failed to update database:', error);
         }
       }
-      
+
       process.exit(1);
     }
   }
-  
+
   // Final check: ensure auth state file exists before proceeding
   if (!fs.existsSync(stateFilePath)) {
     console.error('❌ Authentication state file not found! Cannot proceed.');
     jobStatus.status = 'failed';
     jobStatus.statusMessage = 'Authentication state file not found';
     jobStatus.completedAt = new Date().toISOString();
-    
+
     if (fs.existsSync(lockFile)) {
       try {
         fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
@@ -530,15 +613,18 @@ async function scrapeEdgePropFinal() {
         }
       }
     }
-    
+
     process.exit(1);
   }
-  
+
   // CRITICAL: Declare browser at function scope so cleanup handlers can access it
   let browser: Browser | null = null;
-  
+
   // Use playwright-ghost with recommended plugins for best stealth (same as PG scraper)
   browser = await chromium.launch({
+    executablePath: resolveChromiumExecutablePath(
+      typeof chromium.executablePath === 'function' ? chromium.executablePath() : undefined
+    ) || undefined,
     headless: process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0', // Allow headed mode for debugging
     plugins: [
       ...plugins.recommended({
@@ -601,7 +687,7 @@ async function scrapeEdgePropFinal() {
       'Cache-Control': 'max-age=0',
     },
   };
-  
+
   // Only add storageState if file exists and browser is ready
   if (fs.existsSync(stateFilePath) && browser && !browser.isConnected() === false) {
     try {
@@ -620,27 +706,27 @@ async function scrapeEdgePropFinal() {
   }
 
   context = await browser.newContext(contextOptions);
-  
+
   // playwright-ghost handles most stealth automatically via plugins
   // Just add a minimal script to ensure webdriver is undefined (plugins handle the rest)
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-    
+
     // Fix __name error that EdgeProp's JavaScript expects
     if (typeof (window as any).__name === 'undefined') {
       (window as any).__name = function() { return ''; };
     }
   });
-  
+
   let totalProcessed = 0;
   let totalSuccess = 0;
   let totalErrors = 0;
   let totalSkipped = 0; // Track duplicates/already processed
   const startTime = Date.now();
   let currentPage = 1;
-  
+
   // Helper function to update lock file and database
   async function updateProgress(statusMessage?: string) {
     try {
@@ -653,7 +739,7 @@ async function scrapeEdgePropFinal() {
         jobStatus.statusMessage = statusMessage;
       }
       fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-      
+
       // Update database job status periodically (every 5 listings or on page change)
       if (jobId && (totalProcessed % 5 === 0 || statusMessage?.includes('PAGE'))) {
         try {
@@ -689,7 +775,7 @@ async function scrapeEdgePropFinal() {
       // Navigate to EdgeProp homepage to check login status
       await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await humanPause(2000, 3000);
-      
+
       // Check for logged-in indicators
       const loginIndicators = [
         'a[href*="/user/logout"]',           // Logout link
@@ -699,7 +785,7 @@ async function scrapeEdgePropFinal() {
         'button:has-text("Logout")',          // Logout button
         'button:has-text("Sign Out")'         // Sign out button
       ];
-      
+
       for (const selector of loginIndicators) {
         try {
           const element = page.locator(selector).first();
@@ -716,7 +802,7 @@ async function scrapeEdgePropFinal() {
           // Continue checking other indicators
         }
       }
-      
+
       // Also check for NOT logged-in indicators
       if (!isLoggedIn) {
         const notLoggedInIndicators = [
@@ -724,7 +810,7 @@ async function scrapeEdgePropFinal() {
           'button:has-text("Login")',         // Login button
           'button:has-text("Sign In")'        // Sign in button
         ];
-        
+
         for (const selector of notLoggedInIndicators) {
           try {
             const element = page.locator(selector).first();
@@ -741,25 +827,25 @@ async function scrapeEdgePropFinal() {
           }
         }
       }
-      
+
       // Alternative: Check cookies for session/auth tokens
       const cookies = await context.cookies();
-      const hasAuthCookie = cookies.some(cookie => 
-        cookie.name.toLowerCase().includes('session') || 
+      const hasAuthCookie = cookies.some(cookie =>
+        cookie.name.toLowerCase().includes('session') ||
         cookie.name.toLowerCase().includes('auth') ||
         cookie.name.toLowerCase().includes('login') ||
         cookie.name.toLowerCase().includes('user')
       );
-      
+
       // If login indicators are not visible, skip cookie check and just re-authenticate
       if (!isLoggedIn) {
         console.log('   ⚠️  Login indicators not visible - will re-authenticate');
       }
-      
+
     } catch (verifyError) {
       console.log(`   ⚠️  Login verification failed: ${verifyError}`);
     }
-    
+
     // If login indicators are not visible, re-authenticate immediately
     // BUT: Skip if we just re-authenticated (auth state was just saved)
     if (!isLoggedIn && !justReAuthenticated) {
@@ -773,7 +859,7 @@ async function scrapeEdgePropFinal() {
 
     if (!isLoggedIn && !justReAuthenticated) {
       console.log('\n⚠️  Login indicators not visible - re-authenticating now...');
-      
+
       // Trigger re-authentication
       try {
         // Re-authenticate using shared helper (handles xvfb and timeouts)
@@ -781,13 +867,13 @@ async function scrapeEdgePropFinal() {
         if (!authSuccess) {
           throw new Error('Re-authentication failed');
         }
-        
+
         // CRITICAL: Reload storage state after re-auth by recreating the context
         // Just adding cookies doesn't fully replace the session - we need a fresh context
         const freshStatePath = path.join(process.cwd(), 'storage', 'ep.state.json');
         if (fs.existsSync(freshStatePath)) {
           console.log('   🔄 Recreating browser context with fresh authentication state...');
-          
+
           // Close existing page and context safely
           try {
             if (page && !page.isClosed()) {
@@ -796,15 +882,15 @@ async function scrapeEdgePropFinal() {
           } catch (e) {
             // Ignore errors closing page
           }
-          
+
           try {
             // Check if browser is still connected before closing context
             const browserStillConnected = browser && !browser.isConnected() === false;
-            
+
             if (context) {
               await context.close().catch(() => {});
             }
-            
+
             // If browser is not connected, recreate it
             if (!browserStillConnected || !browser) {
               try {
@@ -814,8 +900,11 @@ async function scrapeEdgePropFinal() {
               } catch (e) {
                 // Browser already closed
               }
-              
+
               browser = await chromium.launch({
+                executablePath: resolveChromiumExecutablePath(
+                  typeof chromium.executablePath === 'function' ? chromium.executablePath() : undefined
+                ) || undefined,
                 headless: true,
                 plugins: plugins.recommended({
                   humanize: {
@@ -854,6 +943,9 @@ async function scrapeEdgePropFinal() {
               // Browser already closed
             }
             browser = await chromium.launch({
+              executablePath: resolveChromiumExecutablePath(
+                typeof chromium.executablePath === 'function' ? chromium.executablePath() : undefined
+              ) || undefined,
               headless: true,
               plugins: plugins.recommended({
                 humanize: {
@@ -881,7 +973,7 @@ async function scrapeEdgePropFinal() {
               ]
             });
           }
-          
+
           // Recreate context with fresh storage state
           // CRITICAL: Match auth.ep.ts context options exactly for cookie compatibility
           const freshContextOptions: BrowserContextOptions = {
@@ -907,37 +999,37 @@ async function scrapeEdgePropFinal() {
               'Cache-Control': 'max-age=0',
             },
           };
-          
+
           context = await browser.newContext(freshContextOptions);
-          
+
           // Re-add init scripts to the new context
           await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', {
               get: () => undefined,
             });
-            
+
             // Fix __name error that EdgeProp's JavaScript expects
             if (typeof (window as any).__name === 'undefined') {
               (window as any).__name = function() { return ''; };
             }
           });
-          
+
           // Create new page from fresh context
           page = await context.newPage();
-          
+
           console.log('   ✅ Browser context recreated with fresh authentication state');
-          
+
           // CRITICAL: Verify login again after re-auth with the new page
           // We MUST verify login is actually working, not just trust the saved state
           // Use the same method that worked in auth.ep.ts - check for bookmarks link
           console.log('   🔐 Verifying login on recreated context...');
           await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
           await humanPause(5000, 8000); // Give page more time to load and cookies to activate
-          
+
           // Check for bookmarks link first (this is what auth.ep.ts uses and it works)
           const bookmarksLink = page.locator('[href="/bookmarks"]');
           const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 15000 }).catch(() => false);
-          
+
           if (bookmarksVisible) {
             isLoggedIn = true;
             console.log('   ✅ Login verified after re-auth - bookmarks link found');
@@ -952,7 +1044,7 @@ async function scrapeEdgePropFinal() {
               'button:has-text("Logout")',
               'button:has-text("Sign Out")'
             ];
-            
+
             for (const selector of loginIndicators) {
               try {
                 const element = page.locator(selector).first();
@@ -970,30 +1062,30 @@ async function scrapeEdgePropFinal() {
               }
             }
           }
-          
+
           // CRITICAL: If login is still not verified, the auth state might not be working
           // Check cookies to see if we have session cookies
           if (!isLoggedIn) {
             const cookies = await context.cookies();
-            const hasSessionCookie = cookies.some(cookie => 
-              cookie.name.toLowerCase().includes('session') || 
+            const hasSessionCookie = cookies.some(cookie =>
+              cookie.name.toLowerCase().includes('session') ||
               cookie.name.toLowerCase().includes('auth') ||
               cookie.name.toLowerCase().includes('ssess') ||
               cookie.name.toLowerCase().includes('psessid')
             );
-            
+
             if (hasSessionCookie) {
               console.log('   ⚠️  Login indicators not visible, but session cookies found');
               console.log('   ⚠️  Cookies might not be activated yet - will try to navigate to activate them');
-              
+
               // Try navigating to homepage first to activate cookies
               await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 120000 });
               await humanPause(5000, 8000); // Wait longer for cookies to activate
-              
+
               // Check for bookmarks link
               const bookmarksLink2 = page.locator('[href="/bookmarks"]');
               const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 15000 }).catch(() => false);
-              
+
               if (bookmarksVisible2) {
                 isLoggedIn = true;
                 console.log('   ✅ Login verified after navigating to homepage');
@@ -1002,7 +1094,7 @@ async function scrapeEdgePropFinal() {
                 console.log('   ⚠️  Still not visible on homepage, trying property search page...');
                 await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 120000 });
                 await humanPause(5000, 8000);
-                
+
                 const bookmarksLink3 = page.locator('[href="/bookmarks"]');
                 const bookmarksVisible3 = await bookmarksLink3.isVisible({ timeout: 15000 }).catch(() => false);
                 if (bookmarksVisible3) {
@@ -1011,14 +1103,14 @@ async function scrapeEdgePropFinal() {
                 } else {
                   // Final check: verify cookies are actually in the context
                   const cookiesAfterNav = await context.cookies();
-                  const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie => 
-                    cookie.name.toLowerCase().includes('session') || 
+                  const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie =>
+                    cookie.name.toLowerCase().includes('session') ||
                     cookie.name.toLowerCase().includes('auth') ||
                     cookie.name.toLowerCase().includes('ssess') ||
                     cookie.name.toLowerCase().includes('psessid')
                   );
                   console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
-                  
+
                   // CRITICAL: If login indicators aren't visible, we're not logged in
                   // Even if we have session cookies, they might be invalid or not activated
                   // We must fail if login indicators aren't visible - phone numbers require login
@@ -1029,7 +1121,7 @@ async function scrapeEdgePropFinal() {
                   } else {
                     console.error('   ❌ No session cookies found after navigation');
                   }
-                  
+
                   // Fail - we cannot proceed without login
                   console.error('   ❌ Login verification failed after re-authentication!');
                   console.error('   ❌ Auth state file exists but login is not working in browser context');
@@ -1037,14 +1129,14 @@ async function scrapeEdgePropFinal() {
                 }
               }
             }
-            
+
             if (!isLoggedIn) {
               console.error('   ❌ Login verification failed after re-authentication!');
               console.error('   ❌ Auth state file exists but login is not working in browser context');
               throw new Error('Login verification failed after re-authentication - browser context not logged in');
             }
           }
-          
+
           if (isLoggedIn) {
             console.log('   ✅ Login successful - phone numbers should be available\n');
           }
@@ -1076,7 +1168,7 @@ async function scrapeEdgePropFinal() {
         }
       }
     }
-    
+
     // CRITICAL: Final check - if we're not logged in at this point, fail the job
     // Phone numbers are required and only available when logged in
     if (!isLoggedIn) {
@@ -1084,7 +1176,7 @@ async function scrapeEdgePropFinal() {
       console.error('❌ Cannot proceed - phone numbers are required and only available when logged in');
       throw new Error('Login verification failed - cannot proceed without authentication');
     }
-    
+
     // CRITICAL: If we're not logged in at this point, fail the job
     // Phone numbers are required and only available when logged in
     if (!isLoggedIn) {
@@ -1092,10 +1184,10 @@ async function scrapeEdgePropFinal() {
       console.error('❌ Cannot proceed - phone numbers are required and only available when logged in');
       throw new Error('Login verification failed - cannot proceed without authentication');
     }
-    
+
     // Base URL (page will be appended in the loop)
     const baseUrl = 'https://www.edgeprop.sg/property-search?listing_type=sale&property_type=9%252C103%252C107%252C105%252C106%252C104&district=&bedroom_min=&asking_price_min=1000000&asking_price_max=3000000&floor_area_min=&floor_area_max=&land_area_min=&land_area_max=&tenure=&bathroom=&furnishing=&completed=&level=&completion_year_min=&completion_year_max=&rental_yield=&high_rental_volume=&high_sales_volume=&deals=&nearby_amenities=&amenities_distance=500&rental_type=&keyword_features=&keyword=&mrt_keywords=&school_keywords=&hdbtowns_keywords=&areas_keywords=&district_keywords=&asset_id=&resource_type=&x=&y=&radius=1000&search_by=&search_by_distance=&search_by_location=&search_by_showmap=true&below_valuation=&map_zoom=&asset_lat=&asset_lng=&pageSize=20&order_by=recommended&fittings=&with_new_launches=0&area=&region=&subzone=&subzone_keywords=';
-    
+
     // CRITICAL: Create a Flaresolverr session at the start to maintain cookies across all requests
     // Sessions retain cookies until destroyed, which is essential for Cloudflare bypass across multiple pages
     console.log('\n🔧 Creating Flaresolverr session for persistent cookie management...');
@@ -1106,11 +1198,11 @@ async function scrapeEdgePropFinal() {
     } else {
       console.log('⚠️  Failed to create Flaresolverr session - will use temporary sessions (may cause cookie issues)');
     }
-    
+
     // Track cookie saves to avoid excessive disk writes
     let listingsSinceLastCookieSave = 0;
     const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
-    
+
     // Loop through pages
     while (currentPage <= maxPages && !shouldStop) {
       // Check if we should stop before processing each page
@@ -1118,23 +1210,23 @@ async function scrapeEdgePropFinal() {
         console.log('\n🛑 Stop signal received, exiting gracefully...');
         break;
       }
-      
+
       console.log(`\n${'='.repeat(60)}`);
       console.log(`📄 PAGE ${currentPage}/${maxPages}`);
       console.log(`${'='.repeat(60)}`);
-      
+
       // Update progress for new page
       await updateProgress(`Processing page ${currentPage}/${maxPages}`);
-      
+
       const searchUrl = `${baseUrl}&page=${currentPage}`;
-      
+
       console.log(`📖 Navigating to page ${currentPage}...`);
-      
+
       // Navigate with retry logic for Cloudflare
       let navigationSuccess = false;
       let navRetryCount = 0;
       const maxNavRetries = 3;
-      
+
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
         try {
           // Use Flaresolverr to solve Cloudflare before navigating (first attempt only)
@@ -1148,13 +1240,13 @@ async function scrapeEdgePropFinal() {
             } catch (navError) {
               console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
             }
-            
+
             // Use the persistent session for search page
             const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true, flaresolverrSessionId || undefined);
-            
+
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-              
+
               // Save fresh Cloudflare cookies to storage state for reuse
               const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
               try {
@@ -1164,18 +1256,18 @@ async function scrapeEdgePropFinal() {
               } catch (saveError) {
                 console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
               }
-              
+
               await humanPause(500, 1000);
             }
           }
 
           await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-          
+
           // Check for Cloudflare on the search page
           await humanPause(2000, 3000);
           const pageText = await page.textContent('body').catch(() => '') || '';
-          
-          if (pageText.includes('Pardon Our Interruption') || 
+
+          if (pageText.includes('Pardon Our Interruption') ||
               pageText.includes('Verify you are human') ||
               pageText.includes('Enable JavaScript and cookies') ||
               pageText.includes('Just a moment') ||
@@ -1191,7 +1283,7 @@ async function scrapeEdgePropFinal() {
               break;
             }
           }
-          
+
           navigationSuccess = true;
         } catch (e) {
           navRetryCount++;
@@ -1203,38 +1295,38 @@ async function scrapeEdgePropFinal() {
           }
         }
       }
-      
+
       if (!navigationSuccess) {
         console.log('   ⚠️  Skipping this page due to Cloudflare errors');
         currentPage++;
         continue;
       }
-      
+
       // Wait for content to load
       console.log(`⏳ Waiting for content to load...`);
       await humanPause(3000, 4000);
-    
+
       // Find property listings using the search-listing-collection container
       const listingCollection = page.locator('.search-listing-collection');
       const listingCollectionExists = await listingCollection.count();
-      
+
       if (listingCollectionExists === 0) {
         console.log('❌ Listing collection not found. Page structure may have changed.');
         break;
       }
-      
+
       // Find all property listing cards
       const propertyCards = await listingCollection.locator('.search-listing-card').all();
       console.log(`📦 Found ${propertyCards.length} property listing cards`);
-      
+
       if (propertyCards.length === 0) {
         console.log('❌ No property cards found');
         break;
       }
-      
+
       // Extract property names and clickable elements from cards
       const propertyListings = [];
-      
+
       for (const card of propertyCards) {
         try {
           // Find the property name link within the card
@@ -1242,33 +1334,33 @@ async function scrapeEdgePropFinal() {
           // Look for the main property link (not asking-price, not property-detail-wrapper)
           const allPropertyLinks = card.locator('a[href*="listing/"]');
           const linkCount = await allPropertyLinks.count();
-          
+
           if (linkCount > 0) {
             // Find the link that contains the property name (usually the one with class jsx-* but not asking-price or detail)
             let propertyLink = null;
             let propertyName = '';
-            
+
             for (let j = 0; j < linkCount; j++) {
               const link = allPropertyLinks.nth(j);
               const className = await link.getAttribute('class').catch(() => '') || '';
               const text = await link.textContent().catch(() => '') || '';
-              
+
               // Skip image wrappers, price links, detail links, and AI Redesign button
-              if (className.includes('image-wrapper') || 
-                  className.includes('asking-price') || 
+              if (className.includes('image-wrapper') ||
+                  className.includes('asking-price') ||
                   className.includes('property-detail') ||
                   className.includes('redesign-btn') ||
                   text.includes('AI Redesign')) {
                 continue;
               }
-              
+
               // The property name link usually has substantial text and contains the property name
               // It should be visible and have a reasonable bounding box
               const isVisible = await link.isVisible({ timeout: 1000 }).catch(() => false);
               if (!isVisible) {
                 continue;
               }
-              
+
               if (text.length > 10 && !text.startsWith('$') && !text.includes('PSF')) {
                 // Try to extract property name from text (before "Less than", "Only", etc.)
                 // Property names are typically uppercase or title case
@@ -1276,7 +1368,7 @@ async function scrapeEdgePropFinal() {
                 if (match && match[1]) {
                   const candidate = match[1].trim();
                   // Validate it's a reasonable property name (3-60 chars, not just numbers)
-                  if (candidate.length >= 3 && candidate.length <= 60 && 
+                  if (candidate.length >= 3 && candidate.length <= 60 &&
                       !candidate.match(/^\d+$/) &&
                       !candidate.includes('Bed') && !candidate.includes('Bath')) {
                     propertyLink = link;
@@ -1284,7 +1376,7 @@ async function scrapeEdgePropFinal() {
                     break;
                   }
                 }
-                
+
                 // Fallback: try to get first meaningful words (uppercase/title case)
                 if (!propertyLink) {
                   const words = text.trim().split(/\s+/);
@@ -1313,12 +1405,12 @@ async function scrapeEdgePropFinal() {
                 }
               }
             }
-            
+
             // If we found a property name, add it to the list
             if (propertyLink && propertyName.length > 0) {
-              propertyListings.push({ 
-                element: propertyLink, 
-                text: propertyName 
+              propertyListings.push({
+                element: propertyLink,
+                text: propertyName
               });
             }
           }
@@ -1326,66 +1418,66 @@ async function scrapeEdgePropFinal() {
           // Skip this card if there's an error
           continue;
         }
-        
+
         // Stop at 20 listings (EdgeProp shows exactly 20 per page)
         if (propertyListings.length >= 20) {
           break;
         }
       }
-      
+
       console.log(`🏠 Found ${propertyListings.length} property listings`);
-      
+
       if (propertyListings.length === 0) {
         console.log('❌ No property names found');
         break;
       }
-      
+
       // Process exactly 20 properties per page (EdgeProp shows exactly 20 per page)
       // If we found more than 20, take only the first 20
       const processCount = Math.min(20, propertyListings.length);
       console.log(`\n🧪 Processing ${processCount} properties on page ${currentPage}/${maxPages}:`);
-      
+
       if (propertyListings.length > 20) {
         console.log(`⚠️  Found ${propertyListings.length} listings but EdgeProp shows only 20 per page. Taking first 20.`);
       }
-      
-      
+
+
       for (let i = 0; i < processCount; i++) {
         const { element, text: propertyName } = propertyListings[i];
         const propertyStartTime = Date.now();
         console.log(`\n--- Property ${i + 1}/${processCount}: ${propertyName} ---`);
-        
+
         try {
           let stepStart = Date.now();
-          
+
           // Skip card extraction - go straight to popup for all details
           console.log(`🖱️  Opening property listing... (${Date.now() - propertyStartTime}ms)`);
-          
+
           // Get the href from the element first
           const href = await element.getAttribute('href').catch(() => null);
           if (!href) {
             throw new Error('Could not get href from property link');
           }
-          
+
           // Construct full URL
-          const propertyUrl = href.startsWith('http') 
-            ? href 
+          const propertyUrl = href.startsWith('http')
+            ? href
             : `https://www.edgeprop.sg/${href.startsWith('/') ? href.slice(1) : href}`;
-          
+
           console.log(`   🔗 Property URL: ${propertyUrl}`);
-          
+
           // CRITICAL: Use Flaresolverr on EACH property URL to get URL-specific cookies
           // Cloudflare cookies are URL-path specific - cookies from one property URL don't work for another
           // Using the same Flaresolverr session ensures cookies persist across requests
           console.log(`   🔄 Solving Cloudflare for this property URL...`);
-          
+
           // Use Flaresolverr on the ACTUAL property URL with the same session to maintain cookies
           const flaresolverrResult = await solveCloudflareWithFlaresolverr(propertyUrl, true, flaresolverrSessionId || undefined);
-          
+
           if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
             // Apply cookies to context BEFORE creating new page
             await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-            
+
             // Save fresh cookies periodically (every 5 listings to avoid too many writes)
             if (listingsSinceLastCookieSave >= COOKIE_SAVE_INTERVAL) {
               const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
@@ -1399,22 +1491,22 @@ async function scrapeEdgePropFinal() {
             } else {
               listingsSinceLastCookieSave++;
             }
-            
+
             // Wait for cookies to be fully applied to context
             await humanPause(2000, 3000);
           } else {
             console.log(`   ⚠️  Flaresolverr returned no cookies, continuing with existing cookies...`);
           }
-          
+
           // Use a more reliable method: wait for new page event on context level
           // This works better than page.waitForEvent('popup') for target="_blank" links
           let popup = null;
           const currentUrl = page.url();
           const currentPageCount = context.pages().length;
-          
+
           // Set up page listener BEFORE clicking
           const newPagePromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
-          
+
           // Scroll element into view and ensure it's clickable
           try {
             await element.scrollIntoViewIfNeeded();
@@ -1423,7 +1515,7 @@ async function scrapeEdgePropFinal() {
           } catch (e) {
             console.log(`   ⚠️  Could not scroll element into view: ${e}`);
           }
-          
+
           // Click the link
           try {
             await element.click({ timeout: 10000, force: false });
@@ -1432,15 +1524,15 @@ async function scrapeEdgePropFinal() {
             // If click fails, try navigating directly
             console.log(`   ⚠️  Click failed, navigating directly to URL...`);
             popup = await context.newPage(); // Cookies are already in context from Flaresolverr above
-            
-            await popup.goto(propertyUrl, { 
-              waitUntil: 'domcontentloaded', 
+
+            await popup.goto(propertyUrl, {
+              waitUntil: 'domcontentloaded',
               timeout: 30000,
               referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
             });
             console.log(`   ✅ Navigated directly to property page`);
           }
-          
+
           // Wait for new page if click succeeded
           if (!popup) {
             try {
@@ -1451,7 +1543,7 @@ async function scrapeEdgePropFinal() {
             } catch (e) {
               // No new page event, check manually
             }
-            
+
             // Fallback: Check for new pages manually
             if (!popup) {
               await humanPause(1500, 2000);
@@ -1468,9 +1560,9 @@ async function scrapeEdgePropFinal() {
                 // Still on search page - navigate directly
                 console.log(`   ⚠️  Still on search page, navigating directly...`);
                 popup = await context.newPage(); // Cookies are already in context from Flaresolverr above
-                
-                await popup.goto(propertyUrl, { 
-                  waitUntil: 'domcontentloaded', 
+
+                await popup.goto(propertyUrl, {
+                  waitUntil: 'domcontentloaded',
                   timeout: 30000,
                   referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
                 });
@@ -1478,40 +1570,40 @@ async function scrapeEdgePropFinal() {
               }
             }
           }
-        
+
           console.log(`✅ Popup/tab opened! (popup: ${Date.now() - stepStart}ms, total: ${Date.now() - propertyStartTime}ms)`);
           await humanPause(2000, 3000);
-          
+
           // Wait for popup to fully load and check for errors with retry logic
           // Use smarter detection: wait for actual property content, not just check for errors
           let cloudflareDetected = false;
           let retryCount = 0;
           const maxRetries = 5;
-          
+
           while (retryCount < maxRetries && !cloudflareDetected) {
             try {
               // Wait for page to load
               await popup.waitForLoadState('domcontentloaded', { timeout: 20000 });
-              
+
               // Give page time to render (Cloudflare might need a moment)
               await humanPause(3000, 5000);
-              
+
               // Check for actual Cloudflare ERRORS (not just Cloudflare presence)
               const pageText = await popup.textContent('body').catch(() => '') || '';
               const pageTitle = await popup.title().catch(() => '') || '';
-              
+
               // Only check for actual error messages, not just "cloudflare.com" (which is normal)
-              const hasActualError = pageText.includes('Bad gateway') || 
-                                    pageText.includes('Error code 502') || 
+              const hasActualError = pageText.includes('Bad gateway') ||
+                                    pageText.includes('Error code 502') ||
                                     pageText.includes('Error code 503') ||
                                     pageText.includes('Pardon Our Interruption') ||
                                     pageText.includes('Verify you are human') ||
                                     pageText.includes('Enable JavaScript and cookies to continue') ||
                                     (pageText.includes('Just a moment') && pageText.length < 500) || // Short page = challenge page
                                     (pageTitle.includes('Just a moment') && pageText.length < 500);
-              
+
               // Check for actual property content (positive check)
-              const hasPropertyContent = pageText.includes('Bed') || 
+              const hasPropertyContent = pageText.includes('Bed') ||
                                        pageText.includes('Bath') ||
                                        pageText.includes('sqft') ||
                                        pageText.includes('Property Type') ||
@@ -1519,17 +1611,17 @@ async function scrapeEdgePropFinal() {
                                        pageText.includes('Bedrooms') ||
                                        pageText.includes('Bathrooms') ||
                                        pageText.length > 10000; // Large page = likely loaded
-              
+
               // If we have actual errors AND no property content, it's a real Cloudflare error
               if (hasActualError && !hasPropertyContent) {
                 retryCount++;
                 if (retryCount < maxRetries) {
                   const waitTime = 5000 * retryCount; // Exponential backoff: 5s, 10s, 15s, 20s, 25s
                   console.log(`   ⚠️  Cloudflare error detected (attempt ${retryCount}/${maxRetries}), waiting ${waitTime/1000}s and retrying...`);
-                  
+
                   // Wait with exponential backoff
                   await humanPause(waitTime, waitTime + 2000);
-                  
+
                   // Try reloading the page
                   try {
                     console.log(`   🔄 Reloading page...`);
@@ -1541,8 +1633,8 @@ async function scrapeEdgePropFinal() {
                     const popupUrl = popup.url() || propertyUrl;
                     try {
                     // Cookies are already in context from Flaresolverr above
-                    await popup.goto(popupUrl, { 
-                      waitUntil: 'domcontentloaded', 
+                    await popup.goto(popupUrl, {
+                      waitUntil: 'domcontentloaded',
                       timeout: 20000,
                       referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
                     });
@@ -1558,13 +1650,13 @@ async function scrapeEdgePropFinal() {
                   throw new Error('Cloudflare error - max retries exceeded');
                 }
               }
-              
+
               // If we have property content, page loaded successfully (even if it mentions cloudflare)
               if (hasPropertyContent) {
                 console.log(`   ✅ Page loaded successfully (found property content)`);
                 break;
               }
-              
+
               // If no error but also no content, wait a bit more and check again
               if (!hasActualError && !hasPropertyContent && retryCount < maxRetries - 1) {
                 retryCount++;
@@ -1572,25 +1664,25 @@ async function scrapeEdgePropFinal() {
                 await humanPause(3000, 5000);
                 continue;
               }
-              
+
               // Check if we're on an agent profile page instead of property listing
               const popupUrl = popup.url();
               if (popupUrl.includes('/property-agents/') || popupUrl.includes('/agent/')) {
                 console.log('   ⚠️  Navigated to agent profile instead of property listing, skipping');
                 throw new Error('Wrong page type: agent profile');
               }
-              
+
               // Verify we're on a property listing page
               if (!popupUrl.includes('listing/') && !popupUrl.includes('/property/')) {
                 console.log(`   ⚠️  Unexpected URL: ${popupUrl}, might be wrong page`);
               }
-              
+
               // If we get here and still no content, it might be a slow-loading page
               if (!hasPropertyContent) {
                 console.log(`   ⚠️  No property content detected, but no errors either. Continuing...`);
                 break;
               }
-              
+
             } catch (e) {
               if (e instanceof Error && (e.message.includes('Cloudflare') || e.message.includes('Wrong page'))) {
                 throw e; // Re-throw to skip this listing
@@ -1606,13 +1698,13 @@ async function scrapeEdgePropFinal() {
               }
             }
           }
-          
+
           if (cloudflareDetected) {
             throw new Error('Cloudflare error - skipping listing');
           }
-          
+
           await humanPause(2000, 3000);
-          
+
           // Scroll down to find agent section with phone button
           try {
             await popup.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
@@ -1620,14 +1712,14 @@ async function scrapeEdgePropFinal() {
           } catch (e) {
             // Scroll failed, continue anyway
           }
-          
+
           // Click WhatsApp button then Phone Number link to reveal agent phone (with retry)
           stepStart = Date.now();
           console.log(`📞 Revealing phone number... (${Date.now() - propertyStartTime}ms)`);
           let cleanPhone = '';
           let phoneAttempts = 0;
           const maxPhoneAttempts = 2;
-          
+
           while (phoneAttempts < maxPhoneAttempts && !cleanPhone) {
             phoneAttempts++;
             try {
@@ -1642,7 +1734,7 @@ async function scrapeEdgePropFinal() {
                 'button:has-text("Phone")',
                 'button:has-text("Call")'
               ];
-              
+
               // Try to click phone button
               let phoneButtonClicked = false;
               for (const selector of phoneButtonSelectors) {
@@ -1668,15 +1760,15 @@ async function scrapeEdgePropFinal() {
                   // Try next selector
                 }
               }
-              
+
               if (!phoneButtonClicked) {
                 console.log(`   ⚠️  Could not find phone button to click`);
               }
-              
+
               // Extract phone number - try tel: link first (get href, not text, as it's more reliable)
               // Wait a bit longer after clicking for phone to appear
               await humanPause(1000, 1500);
-              
+
               // Try getting href from tel: link first (more reliable than text)
               const phoneLinkHref = await popup.locator('a[href^="tel:"]').first().getAttribute('href', { timeout: 5000 }).catch(() => null);
               if (phoneLinkHref) {
@@ -1686,7 +1778,7 @@ async function scrapeEdgePropFinal() {
                   console.log(`   📱 Phone from href: ${cleanPhone}`);
                 }
               }
-              
+
               // If href didn't work, try text content
               if (!cleanPhone) {
                 const phoneLink = await popup.locator('a[href^="tel:"]').first().textContent({ timeout: 3000 }).catch(() => null);
@@ -1697,7 +1789,7 @@ async function scrapeEdgePropFinal() {
                   }
                 }
               }
-              
+
               // If still no phone, try other selectors
               if (!cleanPhone) {
                 // Fallback: try other selectors for phone number
@@ -1708,7 +1800,7 @@ async function scrapeEdgePropFinal() {
                   '.contact-info',
                   '[class*="contact"]'
                 ];
-                
+
                 for (const selector of phoneSelectors) {
                   try {
                     const phoneElement = await popup.locator(selector).first();
@@ -1728,11 +1820,58 @@ async function scrapeEdgePropFinal() {
                   }
                 }
               }
+
+              // Some EdgeProp layouts reveal the number as plain text on the button
+              // or elsewhere in the contact section instead of a tel: link.
+              if (!cleanPhone) {
+                const revealedCandidates = await popup.evaluate(() => {
+                  const selectors = [
+                    'button.mobile-btn',
+                    '[class*="mobile-btn"]',
+                    'button[class*="phone"]',
+                    '[class*="agent-contact"]',
+                    '[class*="contact"]',
+                    '[class*="phone"]',
+                    'a[href^="tel:"]',
+                  ];
+
+                  const values = new Set<string>();
+
+                  for (const selector of selectors) {
+                    for (const node of Array.from(document.querySelectorAll(selector))) {
+                      const text = (node.textContent || '').trim();
+                      const ariaLabel = node.getAttribute('aria-label') || '';
+                      const title = node.getAttribute('title') || '';
+                      const href = node.getAttribute('href') || '';
+                      const dataAttrs = Array.from(node.attributes)
+                        .filter((attr) => attr.name.startsWith('data-'))
+                        .map((attr) => attr.value)
+                        .join(' ');
+
+                      for (const value of [text, ariaLabel, title, href, dataAttrs]) {
+                        if (value) values.add(value);
+                      }
+                    }
+                  }
+
+                  values.add(document.body?.innerText || '');
+                  return Array.from(values);
+                }).catch(() => []);
+
+                for (const candidate of revealedCandidates) {
+                  const maybePhone = cleanPhoneNumber(candidate);
+                  if (maybePhone) {
+                    cleanPhone = maybePhone;
+                    console.log(`   📱 Phone from fallback scan: ${cleanPhone}`);
+                    break;
+                  }
+                }
+              }
             } catch (error: unknown) {
               console.log(`   ⚠️  Phone extraction attempt ${phoneAttempts}/${maxPhoneAttempts} failed: ${error}`);
             }
           }
-          
+
           // Extract all info from the listing-info-container
           let extractedBeds = '';
           let extractedBaths = '';
@@ -1744,7 +1883,7 @@ async function scrapeEdgePropFinal() {
           let agentName = '';
           let extractedAddress = '';
           let extractedTenure = '';
-          
+
           try {
             // Try multiple selectors for listing info container (JSX hashes change)
             let listingInfoText = '';
@@ -1755,7 +1894,7 @@ async function scrapeEdgePropFinal() {
               '.property-details',
               '[id*="details"]'
             ];
-            
+
             for (const selector of listingInfoSelectors) {
               try {
                 const container = popup.locator(selector).first();
@@ -1770,33 +1909,33 @@ async function scrapeEdgePropFinal() {
                 continue;
               }
             }
-            
+
             console.log(`   📊 Listing info text length: ${listingInfoText.length}`);
-            
+
             if (listingInfoText && listingInfoText.length > 0) {
               console.log(`   📊 Listing info text: ${listingInfoText.substring(0, 200)}...`);
-              
+
               // Parse: "$ 2,280,0002 Beds2 Bath829 sqftCondominium$ 3531 psfD92025"
               // Price format is always ",XXX" (comma + 3 digits), so after ",000" the next digit(s) are beds
               // Match digits after the last occurrence of ",XXX" followed by "Beds"
               const bedsMatch = listingInfoText.match(/,\d{3}(\d{1,2})\s*Beds?/);
               const bathsMatch = listingInfoText.match(/Beds?(\d{1,2})\s*Baths?/);
-              
+
               extractedBeds = bedsMatch ? bedsMatch[1] : '';
               extractedBaths = bathsMatch ? bathsMatch[1] : '';
-              
+
               const sizeMatch = listingInfoText.match(/([\d,]+)\s*sqft/);
               const psfMatch = listingInfoText.match(/\$\s*([\d,]+)\s*psf/);
-              
+
               // Parse district, year from "D92025" or "D232013"
               const districtYearMatch = listingInfoText.match(/D(\d{1,2})(\d{4})/);
-              
+
               // No need to reassign, already extracted above
               extractedSize = sizeMatch ? `${sizeMatch[1]} sqft` : '';
               extractedPsf = psfMatch ? `$${psfMatch[1]} psf` : '';
               extractedDistrict = districtYearMatch ? `D${districtYearMatch[1]}` : '';
               extractedYear = districtYearMatch ? districtYearMatch[2] : '';
-              
+
               // Extract property type
               if (listingInfoText.includes('Condominium')) {
                 extractedPropertyType = 'Condominium';
@@ -1809,7 +1948,7 @@ async function scrapeEdgePropFinal() {
           } catch (error: unknown) {
             console.log(`   ⚠️  Could not extract listing info: ${error}`);
           }
-          
+
           // Extract agent name using flexible selectors
           try {
             const agentNameSelectors = [
@@ -1821,7 +1960,7 @@ async function scrapeEdgePropFinal() {
               '[class*="agent"] h2',
               '[class*="agent"] h3'
             ];
-            
+
             for (const selector of agentNameSelectors) {
               try {
                 const agentElement = popup.locator(selector).first();
@@ -1841,46 +1980,46 @@ async function scrapeEdgePropFinal() {
           } catch (error: unknown) {
             console.log(`   ⚠️  Could not extract agent name: ${error}`);
           }
-          
+
           // Extract address and more details from _keydetails
           try {
             // Extract listing info
             const listingInfo = await popup.locator('[id="_keydetails"]').first();
             const listingText = await listingInfo.textContent({ timeout: 2000 }).catch(() => '');
-            
+
             if (listingText) {
               // Extract property type
               const propertyTypeMatch = listingText.match(/Property Type:\s*([^,\n]+)/);
               extractedPropertyType = propertyTypeMatch ? propertyTypeMatch[1].trim() : extractedPropertyType;
-              
+
               // Extract district
               const districtMatch = listingText.match(/District:\s*D(\d+)/);
               extractedDistrict = districtMatch ? `D${districtMatch[1]}` : extractedDistrict;
-              
+
               // Extract beds
               const bedsMatch = listingText.match(/Bedrooms:\s*(\d+)/);
               extractedBeds = bedsMatch ? bedsMatch[1] : extractedBeds;
-              
+
               // Extract baths
               const bathsMatch = listingText.match(/Bathrooms:\s*(\d+)/);
               extractedBaths = bathsMatch ? bathsMatch[1] : extractedBaths;
-              
+
               // Extract size
               const sizeMatch = listingText.match(/Size \(sqft\):\s*([\d,]+)/);
               extractedSize = sizeMatch ? `${sizeMatch[1]} sqft` : extractedSize;
-              
+
               // Extract PSF
               const psfMatch = listingText.match(/PSF:\s*\$([\d,.]+)/);
               extractedPsf = psfMatch ? `$${psfMatch[1]} psf` : extractedPsf;
-              
+
               // Extract year built
               const yearMatch = listingText.match(/Year Built:\s*(\d{4})/);
               extractedYear = yearMatch ? yearMatch[1] : extractedYear;
-              
+
               // Extract tenure
               const tenureMatch = listingText.match(/Tenure:\s*([^,\n]+)/);
               extractedTenure = tenureMatch ? tenureMatch[1].trim() : extractedTenure;
-              
+
               console.log(`   📝 Extracted details:
                 Property Type: ${extractedPropertyType || 'N/A'}
                 District: ${extractedDistrict || 'N/A'}
@@ -1894,28 +2033,28 @@ async function scrapeEdgePropFinal() {
           } catch (error: unknown) {
             console.log(`   ⚠️  Could not extract listing info: ${error}`);
           }
-          
+
           // Extract address from _keydetails
           try {
             // First try with the specific filter for common street types (including Malay/Chinese street names)
-            let detailsText = await popup.locator('[id="_keydetails"] div').filter({ 
-              hasText: /Avenue|Road|Street|Drive|Lane|Walk|Close|Crescent|Place|Park|Way|Hill|View|Estate|Jalan|Lorong|Bukit|Taman/ 
+            let detailsText = await popup.locator('[id="_keydetails"] div').filter({
+              hasText: /Avenue|Road|Street|Drive|Lane|Walk|Close|Crescent|Place|Park|Way|Hill|View|Estate|Jalan|Lorong|Bukit|Taman/
             }).first().textContent({ timeout: 2000 }).catch(() => '') || '';
-            
+
             // If no match, try getting the first div in _keydetails (fallback)
             if (!detailsText) {
               detailsText = await popup.locator('[id="_keydetails"] div').first().textContent({ timeout: 2000 }).catch(() => '') || '';
             }
-            
+
             if (detailsText) {
               console.log(`   📄 Details text: ${detailsText.substring(0, 150)}...`);
-              
+
               // Extract address (first part before comma)
               const addressMatch = detailsText.match(/^([^,\n]+),/);
               if (addressMatch) {
                 extractedAddress = addressMatch[1].trim();
               }
-              
+
               // Extract tenure - look for patterns like "99 years", "999 years", "Freehold"
               // More flexible to catch "99 years", "99 Years", "999 years of lease", "Freehold"
               const tenureMatch = detailsText.match(/(\d+\s*[Yy]ears|Freehold)/i);
@@ -1934,7 +2073,7 @@ async function scrapeEdgePropFinal() {
           } catch (error: unknown) {
             console.log(`   ⚠️  Could not extract address details: ${error}`);
           }
-          
+
           // Extract price from popup
           let priceElement = null;
           let price = undefined;
@@ -1949,14 +2088,14 @@ async function scrapeEdgePropFinal() {
           } catch (error: unknown) {
             console.log(`   ⚠️  Could not extract price from popup`);
           }
-          
+
           console.log(`   ✅ All details extracted (${Date.now() - stepStart}ms, total: ${Date.now() - propertyStartTime}ms)`);
-          
+
           // Format beds/baths professionally
           const bedsFormatted = extractedBeds ? `${extractedBeds} Bed${extractedBeds !== '1' ? 's' : ''}` : '';
           const bathsFormatted = extractedBaths ? `${extractedBaths} Bath${extractedBaths !== '1' ? 's' : ''}` : '';
           const bedsBathsDisplay = bedsFormatted && bathsFormatted ? `${bedsFormatted}, ${bathsFormatted}` : '';
-          
+
           console.log(`✅ Agent: ${agentName} - ${cleanPhone}`);
           console.log(`   💰 Price: ${priceElement || 'Not found'}`);
           console.log(`   🏠 ${bedsBathsDisplay}`);
@@ -1967,7 +2106,7 @@ async function scrapeEdgePropFinal() {
           console.log(`   📅 Year: ${extractedYear}`);
           console.log(`   🏠 Tenure: ${extractedTenure}`);
           console.log(`   📍 Address: ${extractedAddress}`);
-          
+
           if (agentName && cleanPhone) {
             // Save to database (with deduplication handled by Supabase unique constraints)
             try {
@@ -1977,7 +2116,7 @@ async function scrapeEdgePropFinal() {
               const sizeSqftNum = extractedSize ? parseFloat(extractedSize.replace(/[^\d.]/g, '')) : undefined;
               const pricePsfNum = extractedPsf ? parseFloat(extractedPsf.replace(/[^\d.]/g, '')) : undefined;
               const yearBuiltNum = extractedYear ? parseInt(extractedYear) : undefined;
-              
+
               const _result = await upsertAgentAndListing({
                 agent: {
                   name: agentName.trim(),
@@ -2002,17 +2141,17 @@ async function scrapeEdgePropFinal() {
                   tenure: extractedTenure || undefined,
                 }
               });
-              
-              console.log(`💾 Saved to database: ${agentName} (${cleanPhone})`);
+
+              console.log(`💾 ${isDryRun ? 'Validated without saving' : 'Saved to database'}: ${agentName} (${cleanPhone})`);
               totalSuccess++;
-              
+
               // Check if we've reached max listings
               if (maxListings && totalSuccess >= maxListings) {
                 console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
                 shouldStop = true;
                 break;
               }
-              
+
               await updateProgress();
             } catch (dbError: unknown) {
               // Check if it's a duplicate error (unique constraint violation)
@@ -2031,7 +2170,7 @@ async function scrapeEdgePropFinal() {
             totalErrors++;
             await updateProgress();
           }
-          
+
           // Close popup (only if it's not the main page)
           if (popup !== page) {
             try {
@@ -2049,17 +2188,17 @@ async function scrapeEdgePropFinal() {
               console.log('   ⚠️  Could not navigate back, continuing...');
             }
           }
-          
+
           totalProcessed++;
           await updateProgress();
-          
+
         } catch (error: unknown) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error(`❌ Error processing property ${i + 1}: ${errorMessage}`);
           totalErrors++;
           totalProcessed++;
           await updateProgress();
-          
+
           // Try to close popup if it's still open and navigate back
           try {
             const pages = context.pages();
@@ -2073,7 +2212,7 @@ async function scrapeEdgePropFinal() {
                 }
               }
             }
-            
+
             // Always try to get back to search page
             const currentPageUrl = page.url();
             if (!currentPageUrl.includes('property-search') || currentPageUrl !== searchUrl) {
@@ -2103,25 +2242,25 @@ async function scrapeEdgePropFinal() {
           }
         }
       } // End of property loop
-      
+
       console.log(`\n✅ Page ${currentPage} completed: ${propertyListings.length} properties processed`);
-      
+
       // Check if we've reached max listings after processing this page
       if (maxListings && totalSuccess >= maxListings) {
         console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
         break;
       }
-      
+
       // Wait before going to next page (reduced for speed)
       if (currentPage < maxPages) {
         console.log(`⏳ Waiting before next page...`);
         await humanPause(1000, 1500);
       }
-      
+
       currentPage++;
       await updateProgress();
     } // End of while loop
-    
+
   } catch (error: unknown) {
     console.error('❌ Fatal error during scraping:', error);
     // Update lock file and database on error (lock file will be removed in finally block)
@@ -2133,7 +2272,7 @@ async function scrapeEdgePropFinal() {
     jobStatus.stats.totalSuccess = totalSuccess;
     jobStatus.stats.totalSkippedNoPhone = totalSkipped;
     jobStatus.stats.totalErrors = totalErrors;
-    
+
     if (jobId) {
       try {
         const supabase = getSupabaseClient();
@@ -2155,11 +2294,11 @@ async function scrapeEdgePropFinal() {
     // Use cleanupBrowser to ensure proper cleanup even if browser.close() fails
     await cleanupBrowser(browser, 'finally block');
     browser = null; // Clear reference
-    
+
     const endTime = Date.now();
     const totalTime = Math.round((endTime - startTime) / 1000);
     const avgTimePerListing = totalProcessed > 0 ? Math.round(totalTime / totalProcessed) : 0;
-    
+
     console.log('\n' + '='.repeat(60));
     console.log('📊 Scraping Summary:');
     console.log(`   Total processed: ${totalProcessed}`);
@@ -2170,12 +2309,12 @@ async function scrapeEdgePropFinal() {
     console.log(`   Avg time per listing: ${avgTimePerListing}s`);
     console.log(`   Success rate: ${totalProcessed > 0 ? Math.round((totalSuccess / totalProcessed) * 100) : 0}%`);
     console.log('='.repeat(60));
-    
+
     // Always remove lock file, regardless of success or failure
     if (fs.existsSync(lockFile)) {
       try {
         // Update job status with final values
-        jobStatus.status = jobStatus.status || 'completed';
+        jobStatus.status = normalizeCompletionStatus(jobStatus.status, 'completed');
         jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
         jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
         jobStatus.progress.currentPage = currentPage;
@@ -2183,7 +2322,7 @@ async function scrapeEdgePropFinal() {
         jobStatus.stats.totalSuccess = totalSuccess;
         jobStatus.stats.totalSkippedNoPhone = totalSkipped;
         jobStatus.stats.totalErrors = totalErrors;
-        
+
         // Save completed/failed status to a separate file before removing lock
         fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
         fs.unlinkSync(lockFile);
@@ -2201,7 +2340,7 @@ async function scrapeEdgePropFinal() {
         }
       }
     }
-    
+
     // Update database job status
     if (jobId) {
       try {
@@ -2209,7 +2348,7 @@ async function scrapeEdgePropFinal() {
         await supabase
           .from('scraper_jobs')
           .update({
-            status: 'completed',
+            status: normalizeCompletionStatus(jobStatus.status, 'completed'),
             completed_at: new Date().toISOString(),
             listings_processed: totalProcessed,
             stats: {
@@ -2226,6 +2365,22 @@ async function scrapeEdgePropFinal() {
         console.error('⚠️  Failed to update database job status:', error);
       }
     }
+
+    if (isDryRun) {
+      console.log(JSON.stringify({
+        kind: 'scraper-smoke-result',
+        platform: 'edgeprop',
+        dryRun: true,
+        status: normalizeCompletionStatus(jobStatus.status, 'completed'),
+        jobId: jobId || null,
+        listingsProcessed: totalProcessed,
+        stats: {
+          totalSuccess,
+          totalSkippedNoPhone: totalSkipped,
+          totalErrors,
+        },
+      }, null, 2));
+    }
   }
 }
 
@@ -2235,4 +2390,3 @@ scrapeEdgePropFinal().catch((error) => {
   // Browser will be closed in finally block, so we can exit safely
   process.exit(1);
 });
-

@@ -19,7 +19,7 @@ export function cleanQuotes(message: string): string {
   // Step 1: Handle escaped quotes FIRST (before JSON parsing)
   // This handles cases where quotes are escaped like \"message\" or \'message\'
   cleaned = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
-  
+
   // Step 2: Handle JSON-encoded strings (the AI might return the message as a JSON string)
   // Try parsing as JSON if it looks like a JSON string
   if (cleaned.trim().startsWith('"') && cleaned.trim().endsWith('"')) {
@@ -34,7 +34,7 @@ export function cleanQuotes(message: string): string {
       // Not valid JSON, continue with normal cleaning
     }
   }
-  
+
   // Step 3: Remove any remaining escaped quotes (double pass to be sure)
   cleaned = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
 
@@ -46,25 +46,25 @@ export function cleanQuotes(message: string): string {
   const maxIterations = 20; // Increased from 10 to handle deeply nested quotes
   while (iterations < maxIterations) {
     const before = cleaned;
-    
+
     // Remove outer quotes if they match (both single and double)
     if ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
         (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
       cleaned = cleaned.slice(1, -1).trim();
     }
-    
+
     // Also handle mismatched quotes (start with one type, end with another)
     if ((cleaned.startsWith('"') && cleaned.endsWith("'")) ||
         (cleaned.startsWith("'") && cleaned.endsWith('"'))) {
       // Remove both
       cleaned = cleaned.replace(/^["']/, '').replace(/["']$/, '').trim();
     }
-    
+
     // If no change, break
     if (cleaned === before) {
       break;
     }
-    
+
     iterations++;
   }
 
@@ -92,7 +92,7 @@ export function cleanQuotes(message: string): string {
 
   // Step 10: Check for common AI patterns that include quotes
   // Pattern: "message" or 'message' at the start/end
-  const startEndQuotePattern = /^["'](.+?)["']$/s;
+  const startEndQuotePattern = /^["']([\s\S]+?)["']$/;
   const startEndMatch = cleaned.match(startEndQuotePattern);
   if (startEndMatch) {
     cleaned = startEndMatch[1].trim();
@@ -130,4 +130,3 @@ export function hasQuotes(message: string): boolean {
     trimmed.match(/["']$/) !== null
   );
 }
-

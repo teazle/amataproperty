@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-EC2_IP="52.76.114.103"
+EC2_IP="${EC2_IP:?Set EC2_IP to the current VPS IP or hostname}"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 IMAGE_NAME="smartprop"
@@ -112,5 +112,5 @@ echo -e "${GREEN}🎉 Deployment completed successfully!${NC}"
 echo -e "${BLUE}📝 Next steps:${NC}"
 echo -e "  - Check logs: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'docker logs -f ${CONTAINER_NAME}'"
 echo -e "  - Check health: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'curl http://localhost:3000/api/health'"
-echo -e "  - Access app: http://${EC2_IP}:3000"
+echo -e "  - Access app: http://<NEW_VPS_HOST>:3000"
 

@@ -1,8 +1,8 @@
 # EC2 System Crash Analysis & Recovery Report
 
-**Date:** 2025-11-26  
-**Instance:** i-0b41277535712c09b (t4g.medium - 4GB RAM)  
-**Public IP:** 52.76.114.103  
+**Date:** 2025-11-26
+**Instance:** i-0b41277535712c09b (t4g.medium - 4GB RAM)
+**Public IP:** ${EC2_IP}
 **Status:** Rebooted, services need verification
 
 ## 🔍 Root Cause Analysis
@@ -15,7 +15,7 @@ The system crashed due to **excessive memory consumption** from multiple concurr
 
 1. **OOM Kills Detected:**
    - Process 1009377 (chromium) - Memory cgroup OOM
-   - Process 2701424 (chrome) - Global OOM  
+   - Process 2701424 (chrome) - Global OOM
    - Process 2204308 (chromium) - Docker container OOM
 
 2. **Memory Consumption Pattern:**

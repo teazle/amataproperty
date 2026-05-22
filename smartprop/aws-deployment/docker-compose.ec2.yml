@@ -73,8 +73,8 @@ services:
     restart: unless-stopped
     environment:
       - WAHA_DASHBOARD_ENABLED=true
-      - WAHA_WEBHOOK_URL=${PUBLIC_BASE_URL}/api/whatsapp/webhook
-      - WAHA_WEBHOOK_EVENTS=message,message.any,state.change,group.join,presence.update
+      - WHATSAPP_HOOK_URL=${PUBLIC_BASE_URL}/api/wa/webhook
+      - WHATSAPP_HOOK_EVENTS=message,message.any,state.change,group.join,presence.update
       - WAHA_SESSION_STORE_ENABLED=true
       - WAHA_SESSION_STORE_PATH=/app/sessions
       - WAHA_FILES_STORE_ENABLED=true
@@ -165,7 +165,7 @@ services:
       - EP_MAX_PAGES=${EP_MAX_PAGES:-3}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
-    command: ["bun", "worker.ts"]
+    command: ["bun", "src/lib/queue/scraper-worker.ts"]
     volumes:
       - app-storage:/app/storage
       - app-logs:/opt/smartprop/logs
@@ -189,6 +189,10 @@ services:
         max-file: "3"
 
   # Flaresolverr - Cloudflare bypass for scrapers
+  # CRITICAL FIXES for ARM64 Chrome session crashes:
+  # 1. Add shm_size for shared memory (Chrome needs /dev/shm)
+  # 2. Increase timeouts for aggressive Cloudflare challenges
+  # 3. Add environment variables to prevent crashes
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
@@ -197,11 +201,20 @@ services:
       - "8191"
     environment:
       - LOG_LEVEL=info
+      - LOG_HTML=false  # Reduce log size
       - TZ=Asia/Singapore
+      - LANG=en_SG  # Match Singapore locale
+      # CRITICAL: Increase timeouts for PropertyGuru's aggressive Cloudflare
+      - MAX_TIMEOUT=300000  # 5 minutes (300s) - allow more time for tough challenges
+      - BROWSER_TIMEOUT=300000  # Match MAX_TIMEOUT
+      # Disable IPv6 to prevent connection issues (common on ARM64)
+      - DISABLE_IPV6=true
     networks:
       - smartprop-network
+    # CRITICAL: Add shared memory size - Chrome crashes without enough /dev/shm
+    shm_size: 2gb  # Give Chromium enough shared memory to avoid crashes
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"sessions.list\"}", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -209,11 +222,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '0.5'
+          memory: 2G  # Increased from 1G - Chrome sessions need more memory
+          cpus: '1.5'  # Increased from 1.0 - more CPU for Cloudflare solving
         reservations:
-          memory: 256M
-          cpus: '0.25'
+          memory: 1G   # Increased from 512M
+          cpus: '0.75'  # Increased from 0.5
     logging:
       driver: "json-file"
       options:

@@ -47,7 +47,7 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
     if (!confirm('Are you sure you want to delete this scraper job record? This will only remove the job history entry, not the actual listings that were scraped.')) {
       return;
     }
-    
+
     setDeletingJobs(prev => new Set(prev).add(jobId));
     try {
       const result = await deleteScraperJob(jobId);
@@ -57,17 +57,17 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
         onHistoryChanged?.();
       } else {
         // Ensure error is a string, not an object
-        const errorMessage = typeof result.error === 'string' 
-          ? result.error 
-          : result.error?.message || JSON.stringify(result.error) || 'Failed to delete job';
+        const errorMessage = result.error
+          ? String(result.error)
+          : 'Failed to delete job';
         toast.error(errorMessage);
       }
     } catch (error) {
       // Handle unexpected errors
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : typeof error === 'string' 
-        ? error 
+      const errorMessage = error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+        ? error
         : 'Failed to delete job';
       toast.error(errorMessage);
       console.error('Error deleting job:', error);
@@ -84,7 +84,7 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
     if (!confirm('Are you sure you want to delete all scraping history records? This will only remove job history entries, not the actual listings that were scraped. This action cannot be undone.')) {
       return;
     }
-    
+
     setIsDeletingAll(true);
     try {
       const result = await deleteScraperHistory();
@@ -94,17 +94,17 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
         onHistoryChanged?.();
       } else {
         // Ensure error is a string, not an object
-        const errorMessage = typeof result.error === 'string' 
-          ? result.error 
-          : result.error?.message || JSON.stringify(result.error) || 'Failed to delete history';
+        const errorMessage = result.error
+          ? String(result.error)
+          : 'Failed to delete history';
         toast.error(errorMessage);
       }
     } catch (error) {
       // Handle unexpected errors
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : typeof error === 'string' 
-        ? error 
+      const errorMessage = error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+        ? error
         : 'Failed to delete history';
       toast.error(errorMessage);
       console.error('Error deleting history:', error);
@@ -114,12 +114,12 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
   };
   const formatDuration = (started: string, completed: string | null) => {
     if (!completed) return 'In progress';
-    
+
     const start = new Date(started);
     const end = new Date(completed);
     const diffMs = end.getTime() - start.getTime();
     const minutes = Math.floor(diffMs / 60000);
-    
+
     if (minutes < 60) return `${minutes}m`;
     const hours = Math.floor(minutes / 60);
     const remainingMins = minutes % 60;
@@ -133,7 +133,7 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
       failed: 'destructive',
       cancelled: 'outline'
     };
-    
+
     return <Badge variant={variants[status] || 'outline'}>{status}</Badge>;
   };
 
@@ -213,4 +213,3 @@ export function HistoryTable({ initialHistory, onHistoryChanged }: HistoryTableP
     </Card>
   );
 }
-

@@ -20,10 +20,10 @@ export interface AsyncMessagePayload {
  */
 export async function processMessageAsync(payload: AsyncMessagePayload): Promise<void> {
   console.log(`🚀 [ASYNC] Starting background processing for ${payload.agentPhone}`);
-  
+
   try {
     const supabase = getSupabaseClient();
-    
+
     // Find the agent
     const { data: agents } = await supabase
       .from('agents')
@@ -56,7 +56,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
     console.log(`📋 [ASYNC] Found outreach record: ${outreach.id}`);
 
     // Calculate days elapsed
-    const firstMessageDate = outreach.first_message_sent_at 
+    const firstMessageDate = outreach.first_message_sent_at
       ? new Date(outreach.first_message_sent_at)
       : new Date(outreach.created_at);
     const now = new Date();
@@ -68,7 +68,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       : (typeof outreach.conversation_history === 'string'
         ? JSON.parse(outreach.conversation_history)
         : []);
-    
+
     // Add agent's message to history
     conversationHistory.push({
       role: 'agent',
@@ -88,10 +88,10 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       lastMessageAt: outreach.last_message_at,
       previousCoBrokingStatus: outreach.co_broking_status || 'unknown',
       objectivesStatus: {
-        timeslotsReceived: outreach.conversation_phase === 'timeslots_received' || 
+        timeslotsReceived: outreach.conversation_phase === 'timeslots_received' ||
                           outreach.conversation_phase === 'viewing_confirmed' ||
                           outreach.conversation_phase === 'completed',
-        coBrokingConfirmed: outreach.co_broking_status === 'willing' || 
+        coBrokingConfirmed: outreach.co_broking_status === 'willing' ||
                            outreach.co_broking_status === 'not_willing',
         coBrokingStatus: outreach.co_broking_status || 'unknown'
       }
@@ -109,20 +109,20 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       agency: outreach.agents?.agency,
       experience: 'Unknown'
     };
-    
+
     const propertyContext = {
       title: outreach.listings?.title || 'Property',
       price: outreach.listings?.price || 0,
       district: outreach.listings?.district || 'Unknown',
       propertyType: outreach.listings?.property_type || 'Unknown'
     };
-    
+
     console.log('🤖 [ASYNC] Starting AI analysis...');
-    
+
     // Analyze with advanced AI (this is the slow part)
     const decision = await analyzeConversationWithAdvancedContext(
-      context, 
-      agentProfile, 
+      context,
+      agentProfile,
       propertyContext
     );
 
@@ -143,7 +143,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         'gracefully_ended',
         'property_unavailable'
       ];
-      
+
       // Map AI-returned phases to valid database phases
       const phaseMap: Record<string, string> = {
         'co-broking_agreed': 'agent_engaging',
@@ -154,17 +154,17 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         'awaiting_cobroking_confirmation': 'agent_engaging',
         'awaiting_timeslots': 'agent_engaging',
       };
-      
+
       // Check if phase is already valid
       if (validPhases.includes(phase)) {
         return phase;
       }
-      
+
       // Check if we have a mapping
       if (phaseMap[phase]) {
         return phaseMap[phase];
       }
-      
+
       // Default fallback based on objectives
       if (decision.timeslotsReceived && decision.coBrokingStatus === 'willing') {
         return 'timeslots_received';
@@ -175,13 +175,13 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       if (decision.coBrokingStatus === 'willing' || decision.coBrokingStatus === 'needs_discussion') {
         return 'agent_engaging';
       }
-      
+
       // Default to current phase or initial_request
       return context.currentPhase || 'initial_request';
     };
-    
+
     const normalizedPhase = normalizePhase(decision.newPhase);
-    
+
     // Always update conversation history with incoming message first
     const baseUpdateData: Record<string, unknown> = {
       conversation_phase: normalizedPhase,
@@ -201,7 +201,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
     if (decision.coBrokingStatus && decision.coBrokingStatus !== 'unknown') {
       baseUpdateData.co_broking_status = decision.coBrokingStatus;
       console.log(`🤝 [ASYNC] Co-broking status detected: ${decision.coBrokingStatus}`);
-      
+
         if (decision.coBrokingStatus === 'not_willing') {
           baseUpdateData.status = 'opted_out';
           baseUpdateData.conversation_phase = 'gracefully_ended';
@@ -209,7 +209,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
           console.log('🚫 [ASYNC] Agent won\'t co-broke - marking as opted_out');
         }
     }
-    
+
     if (decision.coBrokingNotes) {
       baseUpdateData.co_broking_notes = decision.coBrokingNotes;
     }
@@ -217,14 +217,15 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
     // Handle the decision
     try {
       // Ensure replyMessage is not empty - check both existence and non-empty content
-      const hasValidReply = decision.shouldReply && 
-                           decision.replyMessage && 
-                           decision.replyMessage.trim().length > 0;
-      
+      const replyMessage = decision.replyMessage;
+      const hasValidReply = decision.shouldReply &&
+                           typeof replyMessage === 'string' &&
+                           replyMessage.trim().length > 0;
+
       if (hasValidReply) {
       console.log(`✅ [ASYNC] Sending reply: ${decision.reason}`);
-      console.log(`📝 [ASYNC] Reply message: "${decision.replyMessage}"`);
-      
+      console.log(`📝 [ASYNC] Reply message: "${replyMessage}"`);
+
       // Prepare timing context
       const timingContext = {
         currentPhase: context.currentPhase,
@@ -233,11 +234,11 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         hasQuestion: payload.messageText.includes('?'),
         isFirstReply: (outreach.auto_reply_count || 0) === 0
       };
-      
+
       console.log('📤 [ASYNC] Calling sendAutoReply...');
       const sent = await sendAutoReply(
         payload.agentPhone,
-        decision.replyMessage,
+        replyMessage,
         outreach.id,
         outreach.auto_reply_count || 0,
         timingContext
@@ -248,16 +249,16 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         // IMPORTANT: Clean quotes again before storing in database (final safety check)
         // This ensures no quotes are stored even if they somehow got through earlier
         const { cleanQuotes } = await import('./quote-cleaner');
-        const cleanedReplyMessage = cleanQuotes(decision.replyMessage);
-        
+        const cleanedReplyMessage = cleanQuotes(replyMessage);
+
         // Log if we cleaned quotes at this stage (shouldn't happen, but good to know)
-        if (cleanedReplyMessage !== decision.replyMessage) {
+        if (cleanedReplyMessage !== replyMessage) {
           console.log('🧹 [ASYNC] Cleaned quotes before storing in database:', {
-            before: decision.replyMessage.substring(0, 60),
+            before: replyMessage.substring(0, 60),
             after: cleanedReplyMessage.substring(0, 60)
           });
         }
-        
+
         // Add our reply to conversation history (with cleaned message)
         conversationHistory.push({
           role: 'user',
@@ -272,8 +273,8 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
           last_auto_reply_at: new Date().toISOString(),
           conversation_state: decision.gracefulExit ? 'failed' : 'awaiting_timeslots',
           conversation_history: conversationHistory, // Updated with reply
-          deflection_count: decision.deflectionDetected 
-            ? (outreach.deflection_count || 0) + 1 
+          deflection_count: decision.deflectionDetected
+            ? (outreach.deflection_count || 0) + 1
             : outreach.deflection_count || 0,
           first_message_sent_at: outreach.first_message_sent_at || new Date().toISOString(),
           reply_text: cleanedReplyMessage, // Set the cleaned AI reply message (no quotes)
@@ -300,18 +301,18 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
         console.log('❌ [ASYNC] Failed to send reply');
       }
     } else {
-      const reason = !decision.shouldReply 
-        ? decision.reason 
+      const reason = !decision.shouldReply
+        ? decision.reason
         : (!decision.replyMessage || decision.replyMessage.trim().length === 0)
           ? 'Empty reply message - skipping'
           : decision.reason;
       console.log(`ℹ️  [ASYNC] Not replying: ${reason}`);
-      
+
       // Use base update data with additional fields for no-reply case
       const updateData = {
         ...baseUpdateData,
-        deflection_count: decision.deflectionDetected 
-          ? (outreach.deflection_count || 0) + 1 
+        deflection_count: decision.deflectionDetected
+          ? (outreach.deflection_count || 0) + 1
           : outreach.deflection_count || 0,
         status: decision.timeslotsReceived || decision.gracefulExit ? 'replied' : outreach.status
       };

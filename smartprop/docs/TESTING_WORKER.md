@@ -6,7 +6,7 @@
 
 1. **Open the admin scraper page:**
    ```
-   http://52.76.114.103/admin/scraper
+   http://<NEW_VPS_HOST>/admin/scraper
    ```
 
 2. **Create a small test job:**
@@ -40,7 +40,7 @@ This will:
 SSH into EC2 and monitor the worker logs:
 
 ```bash
-ssh -i smartprop-new-key.pem ec2-user@52.76.114.103
+ssh -i smartprop-new-key.pem ${EC2_USER:-ec2-user}@${EC2_IP}
 cd /opt/smartprop/app/smartprop
 pm2 logs scraper-worker --lines 50
 ```
@@ -114,10 +114,10 @@ Look for:
 
 1. **Check error message in database:**
    ```sql
-   SELECT id, status, error_message 
-   FROM scraper_jobs 
-   WHERE status = 'failed' 
-   ORDER BY started_at DESC 
+   SELECT id, status, error_message
+   FROM scraper_jobs
+   WHERE status = 'failed'
+   ORDER BY started_at DESC
    LIMIT 5;
    ```
 
@@ -164,9 +164,9 @@ pm2 status scraper-worker
 
 # Check recent jobs
 # (via Supabase MCP or SQL)
-SELECT id, platform, status, started_at, completed_at 
-FROM scraper_jobs 
-ORDER BY started_at DESC 
+SELECT id, platform, status, started_at, completed_at
+FROM scraper_jobs
+ORDER BY started_at DESC
 LIMIT 10;
 ```
 

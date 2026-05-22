@@ -114,7 +114,7 @@ services:
     networks:
       - smartprop-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"sessions.list\"}", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -191,4 +191,3 @@ volumes:
     driver: local
   letsencrypt-certs:
     driver: local
-

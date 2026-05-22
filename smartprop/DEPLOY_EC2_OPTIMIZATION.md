@@ -2,7 +2,7 @@
 
 ## Changes Deployed
 - ✅ Flaresolverr called once per district (search page)
-- ✅ Cookies reused for all listing pages  
+- ✅ Cookies reused for all listing pages
 - ✅ Flaresolverr only called again if Cloudflare blocks detected
 - ✅ Cookies saved after Flaresolverr solves Cloudflare
 
@@ -10,7 +10,7 @@
 
 ### 1. SSH to EC2
 ```bash
-ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ${EC2_USER:-ec2-user}@${EC2_IP}
 ```
 
 ### 2. Pull Latest Code

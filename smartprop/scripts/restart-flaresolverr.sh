@@ -14,13 +14,16 @@ docker pull ghcr.io/flaresolverr/flaresolverr:latest
 docker run -d \
   --name=flaresolverr \
   --restart=unless-stopped \
+  --shm-size=2g \
   -p 8191:8191 \
   -e LOG_LEVEL=info \
   -e LOG_HTML=false \
   -e CAPTCHA_SOLVER=none \
   -e TZ=Asia/Singapore \
-  --memory=500m \
-  --cpus=0.5 \
+  -e MAX_TIMEOUT=300000 \
+  -e BROWSER_TIMEOUT=300000 \
+  --memory=2g \
+  --cpus=1.5 \
   ghcr.io/flaresolverr/flaresolverr:latest
 
 echo "✅ Flaresolverr restarted!"

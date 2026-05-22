@@ -24,12 +24,6 @@ if (process.env.PG_FORCE_IPV4 !== 'false') {
   }
 }
 
-// If SSL verification is disabled, also disable global TLS verification for this process.
-// This is a last-resort fix for SELF_SIGNED_CERT_IN_CHAIN on some EC2 images.
-if (process.env.PG_SSL_REJECT_UNAUTHORIZED === 'false') {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
-
 async function getConnectionString(): Promise<string> {
   // Prefer PG_BOSS_DATABASE_URL if explicitly set
   if (process.env.PG_BOSS_DATABASE_URL) {
@@ -49,14 +43,14 @@ async function getConnectionString(): Promise<string> {
   // Auto-construct from Supabase URL if we have the password
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseDbPassword = process.env.SUPABASE_DB_PASSWORD;
-  
+
   if (supabaseUrl && supabaseDbPassword) {
     // Extract project ref from Supabase URL (e.g., https://pfdsmpfgwbbeijdzevpu.supabase.co -> pfdsmpfgwbbeijdzevpu)
     const urlMatch = supabaseUrl.match(/https?:\/\/([^.]+)\.supabase\.co/);
     if (urlMatch) {
       const projectRef = urlMatch[1];
       const encodedPassword = encodeURIComponent(supabaseDbPassword);
-      
+
       // Use Supavisor session mode pooler (port 5432) for IPv4 compatibility
       // Session mode is compatible with pg-boss and supports IPv4
       // Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-[N]-[REGION].pooler.supabase.com:5432/postgres
@@ -66,13 +60,13 @@ async function getConnectionString(): Promise<string> {
       // For ap-southeast-1, the correct format is aws-1-ap-southeast-1
       // Get the exact connection string from Supabase Dashboard → Connect → Session pooler
       const region = process.env.SUPABASE_REGION || 'ap-southeast-1'; // Default to ap-southeast-1 (Singapore)
-      
+
       // Determine the correct pooler endpoint based on region
       // ap-southeast-1 uses aws-1, other regions may use aws-0
-      const poolerEndpoint = region === 'ap-southeast-1' 
-        ? 'aws-1-ap-southeast-1' 
+      const poolerEndpoint = region === 'ap-southeast-1'
+        ? 'aws-1-ap-southeast-1'
         : `aws-0-${region}`;
-      
+
       // Construct pooler connection string
       // Note: Username format is postgres.[PROJECT-REF] for Supavisor
       // Add connection timeout and keepalive parameters to prevent timeouts
@@ -80,9 +74,9 @@ async function getConnectionString(): Promise<string> {
       const keepalive = process.env.PG_KEEPALIVE !== 'false'; // Enable keepalive by default
       const keepaliveIdle = process.env.PG_KEEPALIVE_IDLE || '60000'; // 60 seconds
       const keepaliveInterval = process.env.PG_KEEPALIVE_INTERVAL || '10000'; // 10 seconds
-      
+
       const connectionString = `postgresql://postgres.${projectRef}:${encodedPassword}@${poolerEndpoint}.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=${connectTimeout}${keepalive ? `&keepalive=1&keepalive_idle=${keepaliveIdle}&keepalive_interval=${keepaliveInterval}` : ''}`;
-      
+
       console.log(`[pg-boss] Auto-constructed connection string using Supavisor session mode pooler (${poolerEndpoint}, IPv4-compatible)`);
       console.log(`[pg-boss] Connection settings: timeout=${connectTimeout}s, keepalive=${keepalive}`);
       return connectionString;
@@ -92,9 +86,9 @@ async function getConnectionString(): Promise<string> {
   // Provide helpful error message
   const hasSupabaseUrl = !!supabaseUrl;
   const hasPassword = !!supabaseDbPassword;
-  
+
   let errorMessage = 'Missing database connection string for pg-boss.\n\n';
-  
+
   if (hasSupabaseUrl && !hasPassword) {
     errorMessage += `You have NEXT_PUBLIC_SUPABASE_URL set (${supabaseUrl}), but need to also set SUPABASE_DB_PASSWORD.\n\n`;
     errorMessage += `To fix this:\n`;
@@ -126,12 +120,12 @@ function parseConnectionString(connectionString: string): {
   // URL parser needs brackets removed for hostname
   const url = new URL(connectionString);
   let host = url.hostname;
-  
+
   // If hostname is wrapped in brackets (IPv6), remove them
   if (host.startsWith('[') && host.endsWith(']')) {
     host = host.slice(1, -1);
   }
-  
+
   return {
     host: host,
     port: parseInt(url.port) || 5432,
@@ -147,11 +141,11 @@ async function createBoss(): Promise<PgBoss> {
   const connectionString = await getConnectionString();
   const sslRejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false';
   const sslCa = process.env.PG_SSL_CA;
-  
+
   // Parse connection string
   const connParams = parseConnectionString(connectionString);
   const isPooler = connParams.host.includes('pooler.supabase.com');
-  
+
   // Configure SSL options
   // sslRejectUnauthorized=true means reject unauthorized certs (default), false means don't reject
   // For pooler connections, always configure SSL with rejectUnauthorized based on env var
@@ -174,7 +168,7 @@ async function createBoss(): Promise<PgBoss> {
   // Session mode pooler has limits per user+db+mode combination
   // Using 3 connections instead of 5 to leave room for other services
   const poolMax = Number(process.env.PG_BOSS_POOL_MAX || 3);
-  
+
   const boss = new PgBoss({
     host: connParams.host,
     port: connParams.port,
@@ -184,7 +178,6 @@ async function createBoss(): Promise<PgBoss> {
     schema: process.env.PG_BOSS_SCHEMA || 'jobqueue', // Uses dedicated jobqueue schema
     application_name: 'smartprop-scraper-worker',
     max: poolMax, // Reduced from 5 to 3 to avoid connection exhaustion with Supavisor
-    newJobCheckIntervalSeconds: Number(process.env.PG_BOSS_POLL_INTERVAL || 5),
     monitorIntervalSeconds: Number(process.env.PG_BOSS_MONITOR_INTERVAL || 60),
     maintenanceIntervalSeconds: Number(process.env.PG_BOSS_MAINTENANCE_INTERVAL || 300),
     // SSL configuration
@@ -251,10 +244,10 @@ export async function stopBoss(options?: StopOptions): Promise<void> {
 
 export async function ensureScraperQueues(boss?: PgBoss): Promise<void> {
   const client = boss ?? (await getBoss());
-  
+
   // Create dead letter queue first (must exist before being referenced)
   await client.createQueue(SCRAPER_DLQ_NAME);
-  
+
   // Then create main queue with dead letter reference
   const queueConfig: Queue = {
     name: SCRAPER_QUEUE_NAME,
@@ -277,7 +270,7 @@ export async function enqueueScraperJob(
     const boss = await getBoss();
     await ensureScraperQueues(boss);
 
-    const bossJobId = await boss.send<ScraperJobPayload>(SCRAPER_QUEUE_NAME, payload, {
+    const bossJobId = await boss.send(SCRAPER_QUEUE_NAME, payload, {
       priority: payload.priority,
       retryLimit: 3,
       retryDelay: 60,
@@ -287,6 +280,10 @@ export async function enqueueScraperJob(
       singletonKey: payload.idempotencyKey,
       keepUntil: Number(process.env.SCRAPER_KEEP_UNTIL || 86400), // seconds to retain for idempotency
     });
+
+    if (!bossJobId) {
+      return { success: false, error: 'pg-boss did not return a job id' };
+    }
 
     return { success: true, bossJobId };
   } catch (error) {

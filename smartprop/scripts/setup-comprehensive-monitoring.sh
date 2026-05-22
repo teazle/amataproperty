@@ -1,7 +1,7 @@
 #!/bin/bash
 # Comprehensive monitoring and auto-recovery setup for all systems
 
-EC2_IP="52.76.114.103"
+EC2_IP="${EC2_IP:?Set EC2_IP to the current VPS IP or hostname}"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 
@@ -55,22 +55,22 @@ check_pm2() {
         log "ERROR" "PM2 not found"
         return 1
     fi
-    
+
     local smartprop_status=$(pm2 jlist 2>/dev/null | grep -o '"name":"smartprop"[^}]*"pm2_env":{"status":"[^"]*"' | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
     local worker_status=$(pm2 jlist 2>/dev/null | grep -o '"name":"scraper-worker"[^}]*"pm2_env":{"status":"[^"]*"' | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
-    
+
     if [ "$smartprop_status" != "online" ]; then
         log "ERROR" "PM2 smartprop is not online (status: $smartprop_status)"
         pm2 restart smartprop
         return 1
     fi
-    
+
     if [ "$worker_status" != "online" ]; then
         log "ERROR" "PM2 scraper-worker is not online (status: $worker_status)"
         pm2 restart scraper-worker
         return 1
     fi
-    
+
     log "INFO" "PM2 processes healthy (smartprop: $smartprop_status, worker: $worker_status)"
     return 0
 }
@@ -81,21 +81,21 @@ check_docker() {
         log "ERROR" "Docker not found"
         return 1
     fi
-    
+
     # Check FlareSolverr
     if ! docker ps --format '{{.Names}}' | grep -q "^flaresolverr$"; then
         log "ERROR" "FlareSolverr container is not running"
         docker start flaresolverr 2>/dev/null || log "ERROR" "Failed to start FlareSolverr"
         return 1
     fi
-    
+
     # Check WAHA
     if ! docker ps --format '{{.Names}}' | grep -q "^smartprop-waha$"; then
         log "ERROR" "WAHA container is not running"
         docker start smartprop-waha 2>/dev/null || log "ERROR" "Failed to start WAHA"
         return 1
     fi
-    
+
     log "INFO" "Docker containers healthy"
     return 0
 }
@@ -114,13 +114,13 @@ check_app_health() {
 # Main check
 main() {
     log "INFO" "Starting comprehensive health check..."
-    
+
     local errors=0
-    
+
     check_pm2 || ((errors++))
     check_docker || ((errors++))
     check_app_health || ((errors++))
-    
+
     if [ $errors -eq 0 ]; then
         log "INFO" "All systems healthy"
         exit 0

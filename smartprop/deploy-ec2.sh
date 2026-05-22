@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-EC2_IP="52.76.114.103"
+EC2_IP="${EC2_IP:?Set EC2_IP to the current VPS IP or hostname}"
 EC2_USER="ec2-user"
 PEM_KEY="/Users/vincent/propertydemo/smartprop-new-key.pem"
 # Git repository URL
@@ -282,4 +282,4 @@ echo -e "${BLUE}📝 Next steps:${NC}"
 echo -e "  - View logs: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 logs smartprop'"
 echo -e "  - Check status: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 status'"
 echo -e "  - Restart app: ssh -i ${PEM_KEY} ${EC2_USER}@${EC2_IP} 'pm2 restart smartprop'"
-echo -e "  - Access app: http://${EC2_IP}:3000"
+echo -e "  - Access app: http://<NEW_VPS_HOST>:3000"

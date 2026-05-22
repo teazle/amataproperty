@@ -150,7 +150,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
     child.on('exit', async (code, signal) => {
       closeIfOpen(logFd);
       fs.rmSync(runtimeCacheDir, { recursive: true, force: true });
-      
+
       // CRITICAL: Clean up orphaned browser processes when child exits
       // This is especially important for OOM kills or crashes where finally blocks don't execute
       if (code !== 0 || signal) {
@@ -164,7 +164,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
           console.error(`[ScraperWorker] Browser cleanup failed:`, cleanupError);
         }
       }
-      
+
       if (code === 0) {
         console.log(`[ScraperWorker] Scraper process exited successfully`);
         resolve();
@@ -196,12 +196,12 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
     // Process first job in array
     job = job[0];
   }
-  
+
   if (!job) {
     console.log('[ScraperWorker] Received null job, skipping');
     return;
   }
-  
+
   const payload = job.data;
 
   // Validate payload structure
@@ -209,12 +209,12 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
     console.error('[ScraperWorker] Job has no data payload:', JSON.stringify(job, null, 2));
     throw new Error('Job payload is missing');
   }
-  
+
   if (!payload.jobId) {
     console.error('[ScraperWorker] Job payload missing jobId:', JSON.stringify(payload, null, 2));
     throw new Error('Job payload missing jobId');
   }
-  
+
   console.log(`[ScraperWorker] Processing job ${payload.jobId} for ${payload.platform}`);
 
   try {
@@ -283,7 +283,7 @@ export async function startScraperWorker(): Promise<void> {
   while (retries < maxRetries) {
     try {
       console.log(`[ScraperWorker] Attempting to start worker (attempt ${retries + 1}/${maxRetries})...`);
-      
+
   const boss: PgBoss = await getBoss();
   await ensureScraperQueues(boss);
 
@@ -298,14 +298,15 @@ export async function startScraperWorker(): Promise<void> {
   await boss.work<ScraperJobPayload>(
     SCRAPER_DLQ_NAME,
     async (job) => {
-      if (!job) return;
-      const payload = job.data;
+      const failedJob = Array.isArray(job) ? job[0] : job;
+      if (!failedJob) return;
+      const payload = failedJob.data;
       await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
     }
   );
 
   let cleanupInterval: NodeJS.Timeout | null = null;
-  
+
   const shutdown = async () => {
     try {
       // Clear cleanup interval if it exists
@@ -325,11 +326,11 @@ export async function startScraperWorker(): Promise<void> {
   process.once('SIGINT', shutdown);
 
       console.log('[ScraperWorker] ✅ Started scraper worker successfully');
-      
+
       // Start periodic cleanup of orphaned browser processes (every 5 minutes)
       // This prevents memory leaks from processes that were OOM-killed or crashed
       cleanupInterval = startPeriodicCleanup(5 * 60 * 1000);
-      
+
       // Set up error handlers for the boss instance
       boss.on('error', (error) => {
         console.error('[ScraperWorker] pg-boss error:', error);
@@ -346,12 +347,12 @@ export async function startScraperWorker(): Promise<void> {
       retries++;
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[ScraperWorker] ❌ Failed to start worker (attempt ${retries}/${maxRetries}):`, errorMessage);
-      
+
       if (retries >= maxRetries) {
         console.error('[ScraperWorker] ❌ Max retries reached. Exiting...');
         throw new Error(`Failed to start scraper worker after ${maxRetries} attempts: ${errorMessage}`);
       }
-      
+
       console.log(`[ScraperWorker] ⏳ Retrying in ${retryDelay / 1000} seconds...`);
       await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
@@ -376,7 +377,7 @@ if (import.meta.url === `file://${path.join(process.cwd(), 'src/lib/queue/scrape
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[ScraperWorker] ❌ Failed to start worker:', errorMessage);
     console.error('[ScraperWorker] Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
-    
+
     // Wait a bit before exiting to allow logs to flush
     setTimeout(() => {
     process.exit(1);

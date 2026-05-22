@@ -12,13 +12,22 @@ export async function POST(request: NextRequest) {
   try {
     console.log('Received request to run matching job');
 
-    // Parse optional limit from request body
+    // Parse optional limit and dry-run mode from request body
     let outreachLimit: number | undefined;
+    let dryRun = false;
+    let preview = true;
     try {
       const body = await request.json().catch(() => ({}));
-      if (body.limit && typeof body.limit === 'number') {
+      if (typeof body.limit === 'number') {
         outreachLimit = body.limit;
         console.log(`Using custom outreach limit: ${outreachLimit}`);
+      }
+      if (body.dryRun === true) {
+        dryRun = true;
+        console.log('Running matching job in dry-run mode');
+      }
+      if (body.preview === false) {
+        preview = false;
       }
     } catch {
       // Body parsing failed or no body, use defaults
@@ -26,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     // Run the matching job with advisory lock (key 10101)
     const result = await withAdvisoryLock(10101, async () => {
-      return await runMatchingJob(outreachLimit);
+      return await runMatchingJob(outreachLimit, { dryRun, preview });
     });
 
     if (result === null) {

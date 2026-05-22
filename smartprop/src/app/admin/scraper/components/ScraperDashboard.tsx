@@ -12,6 +12,7 @@ import { ChromiumProcessManager } from './ChromiumProcessManager';
 import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob, syncCompletedJobs } from '../actions';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import type { AuthStatus } from '../types';
 
 interface Job {
   id?: string;
@@ -38,11 +39,6 @@ interface District {
   total_listings: number;
   last_phone_success_rate: number | null;
   is_favorite: boolean;
-}
-
-interface AuthStatus {
-  propertyguru: { isAuthenticated: boolean; lastAuth: string | null };
-  edgeprop: { isAuthenticated: boolean; lastAuth: string | null };
 }
 
 interface QualityMetrics {
@@ -89,7 +85,7 @@ export function ScraperDashboard({
   const [completedJob, setCompletedJob] = useState<Job | null>(null); // Keep completed job for log review
   const [authStatus, setAuthStatus] = useState(initialAuthStatus);
   const [qualityMetrics, setQualityMetrics] = useState(initialQualityMetrics);
-  const [districts, setDistricts] = useState(initialDistricts);
+  const [districts, setDistricts] = useState(initialDistricts || []);
   const [lastJobId, setLastJobId] = useState<string | null | undefined>(initialActiveJob?.id);
   const [isResetting, setIsResetting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -99,7 +95,7 @@ export function ScraperDashboard({
     if (!confirm('Are you sure you want to force reset all stuck jobs? This will mark all active jobs as failed and clear lock files. Use this if you cannot start a new scrape.')) {
       return;
     }
-    
+
     setIsResetting(true);
     try {
       const result = await forceResetStuckJobs();
@@ -121,7 +117,7 @@ export function ScraperDashboard({
           description: result.stuckJobs ? `Stuck job IDs: ${result.stuckJobs.map((j: any) => j.id).join(', ')}` : undefined
         });
         console.error('Force reset failed:', result);
-        
+
         // If there are stuck jobs, fetch diagnostic info
         if (result.stuckJobs && result.stuckJobs.length > 0) {
           const diagnostic = await diagnoseStuckJobs();
@@ -129,7 +125,7 @@ export function ScraperDashboard({
             setStuckJobInfo(diagnostic.stuckJobs);
           }
         }
-        
+
         setIsResetting(false);
       }
     } catch (error) {
@@ -195,12 +191,12 @@ export function ScraperDashboard({
   // Use refs to avoid stale closures and prevent unnecessary reconnections
   const activeJobRef = useRef(activeJob);
   const lastJobIdRef = useRef(lastJobId);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     activeJobRef.current = activeJob;
   }, [activeJob]);
-  
+
   useEffect(() => {
     lastJobIdRef.current = lastJobId;
   }, [lastJobId]);
@@ -220,7 +216,7 @@ export function ScraperDashboard({
         eventSource.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            
+
             if (data.status === 'active' && data.job) {
               // Always update active job with latest data from SSE
               setActiveJob(data.job);
@@ -234,7 +230,7 @@ export function ScraperDashboard({
               // Job just completed! Refresh district metadata
               const currentActiveJob = activeJobRef.current;
               const currentLastJobId = lastJobIdRef.current;
-              
+
               // Only refresh if we had a job running
               if (currentLastJobId && currentActiveJob) {
                 const refreshDistricts = async () => {
@@ -244,15 +240,15 @@ export function ScraperDashboard({
                     toast.success('✅ Scrape complete! District data refreshed');
                   }
                 };
-                
+
                 refreshDistricts();
                 // Keep the completed job visible for log review
                 setCompletedJob(currentActiveJob);
               }
-              
+
               setActiveJob(null);
               setLastJobId(null);
-              
+
               // Note: Completed job will be cleared when a new job starts (handled above)
               // Or user can manually close it via the UI
             }
@@ -266,12 +262,12 @@ export function ScraperDashboard({
           console.error('SSE error:', error);
           console.error('EventSource readyState:', eventSource?.readyState);
           console.error('EventSource url:', eventSource?.url);
-          
+
           // Close current connection
           if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
             eventSource.close();
           }
-          
+
           // Reconnect after 3 seconds if not manually closed
           reconnectTimeout = setTimeout(() => {
             console.log('Reconnecting to SSE...');
@@ -320,7 +316,7 @@ export function ScraperDashboard({
               {isResetting ? 'Resetting...' : 'Force Reset Stuck Jobs'}
             </Button>
           </div>
-          
+
           {/* Show stuck job details if any */}
           {stuckJobInfo && stuckJobInfo.length > 0 && (
             <div className="border border-red-300 bg-red-50 rounded-lg p-4">
@@ -364,7 +360,7 @@ export function ScraperDashboard({
       <ChromiumProcessManager />
 
       {/* Authentication Status */}
-      <AuthStatusCard 
+      <AuthStatusCard
         authStatus={authStatus}
         onAuthStatusChange={setAuthStatus}
       />
@@ -374,9 +370,9 @@ export function ScraperDashboard({
 
       {/* Live Progress (show if active job or completed job) */}
       {(activeJob || completedJob) && (
-        <LiveProgressPanel 
+        <LiveProgressPanel
           key={(activeJob || completedJob)?.id || 'progress'} // Force re-render when job changes
-          job={activeJob || completedJob!} 
+          job={activeJob || completedJob!}
           isCompleted={!!completedJob && !activeJob}
           onJobStopped={() => {
             setActiveJob(null);
@@ -403,8 +399,8 @@ export function ScraperDashboard({
       <RecentListingsPreview />
 
       {/* History Table */}
-      <HistoryTable 
-        initialHistory={initialJobHistory} 
+      <HistoryTable
+        initialHistory={initialJobHistory}
         onHistoryChanged={() => {
           // No need to refresh - the table updates its own state
           console.log('History updated');
@@ -413,4 +409,3 @@ export function ScraperDashboard({
     </div>
   );
 }
-

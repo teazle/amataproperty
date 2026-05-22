@@ -7,7 +7,7 @@ version: '3.8'
 services:
   # WhatsApp Business API (WAHA)
   waha:
-    image: devlikeapro/waha:arm-2025.9.8
+    image: devlikeapro/waha:latest-2025.9.8
     container_name: smartprop-waha
     restart: unless-stopped
     environment:
@@ -21,7 +21,7 @@ services:
       - WAHA_LOG_LEVEL=info
       - WAHA_PRINT_QR=true
     ports:
-      - "3030:3000"
+      - "127.0.0.1:3030:3000"
     volumes:
       - waha-sessions:/app/sessions
       - waha-files:/app/files
@@ -45,7 +45,7 @@ services:
     container_name: flaresolverr
     restart: unless-stopped
     ports:
-      - "8191:8191"
+      - "127.0.0.1:8191:8191"
     environment:
       - LOG_LEVEL=info
       - LOG_HTML=false
@@ -64,8 +64,8 @@ services:
     mem_limit: 2g         # Real memory cap (was effectively ~1G without this)
     cpus: "1.5"           # Allow more CPU when solving challenges
     healthcheck:
-      # Flaresolverr requires POST; use a lightweight request to /v1
-      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"request.get\",\"url\":\"https://www.google.com\",\"maxTimeout\":5000}", "http://localhost:8191/v1"]
+      # Check local API liveness; scraper smoke tests cover real challenge solves.
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"sessions.list\"}", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 15s
       retries: 3

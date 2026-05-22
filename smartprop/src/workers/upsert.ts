@@ -42,8 +42,16 @@ export async function upsertAgentAndListing(data: UpsertData): Promise<{
   agent_id: string
   listing_id: string
 }> {
+  if (process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true') {
+    console.log(`[DryRun] Skipping agent/listing upsert for ${data.listing.portal}: ${data.listing.url}`)
+    return {
+      agent_id: `dry-run-agent-${Date.now()}`,
+      listing_id: `dry-run-listing-${Date.now()}`,
+    }
+  }
+
   const supabase = getSupabaseClient()
-  
+
   try {
     // First, upsert the agent (de-duplicated by source + phone)
     const { data: agent, error: agentError } = await supabase
@@ -100,8 +108,13 @@ export async function upsertAgentAndListing(data: UpsertData): Promise<{
  * Upserts only agent data (when listing data is not available)
  */
 export async function upsertAgent(agentData: AgentData): Promise<string> {
+  if (process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true') {
+    console.log(`[DryRun] Skipping agent upsert for ${agentData.source}: ${agentData.phone}`)
+    return `dry-run-agent-${Date.now()}`
+  }
+
   const supabase = getSupabaseClient()
-  
+
   try {
     const { data: agent, error: agentError } = await supabase
       .from('agents')
@@ -133,8 +146,13 @@ export async function upsertAgent(agentData: AgentData): Promise<string> {
  * Upserts only listing data (when agent data is not available)
  */
 export async function upsertListing(listingData: ListingData): Promise<string> {
+  if (process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true') {
+    console.log(`[DryRun] Skipping listing upsert for ${listingData.portal}: ${listingData.url}`)
+    return `dry-run-listing-${Date.now()}`
+  }
+
   const supabase = getSupabaseClient()
-  
+
   try {
     const { data: listing, error: listingError } = await supabase
       .from('listings')

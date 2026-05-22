@@ -66,8 +66,10 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
     const result = await startScrapeJob(config);
 
     if (result.success) {
-      toast.success(result.message);
-      onJobStarted?.(result.jobId);
+      toast.success('message' in result ? result.message : 'Scraper job started');
+      if ('jobId' in result) {
+        onJobStarted?.(result.jobId);
+      }
       // Refresh page to show active job
       window.location.reload();
     } else {
@@ -206,7 +208,7 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
           >
             {isStarting ? '🔄 Starting Scraper...' : '🚀 Start Scraping'}
           </Button>
-          
+
           {platform === 'propertyguru' && !selectedDistrict && (
             <p className="text-sm text-amber-600 mt-2 text-center">
               Please select a district to continue
@@ -217,4 +219,3 @@ export function ScraperConfigForm({ districts, disabled = false, onJobStarted }:
     </Card>
   );
 }
-

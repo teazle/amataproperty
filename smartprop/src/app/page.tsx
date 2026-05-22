@@ -86,22 +86,24 @@ export default function Home() {
   // No dynamic overlay positioning needed when using a centered, max-width media frame
 
   return (
-    <div className="min-h-screen bg-background font-sans antialiased">
+    <div className="landing-page min-h-screen bg-background font-sans antialiased">
       {/* Navigation */}
       <header className="fixed left-0 top-0 z-50 w-full px-4 animate-fade-in border-b opacity-0 backdrop-blur-[12px] [--animation-delay:600ms]">
         <div className="container mx-auto flex h-[var(--navigation-height)] w-full items-center justify-between">
           <Link className="text-md flex items-center justify-center hero-header-link" href="/">
-            Amata
+            ViewProperty.ai
           </Link>
           <div className="ml-auto flex h-full items-center">
             <Link href="/admin">
               <Button variant="ghost" size="sm" className="text-sm text-white">
-                Log in
+                Admin
               </Button>
             </Link>
-            <Button size="sm" className="ml-4 text-sm">
-              Sign up
-            </Button>
+            <Link href="/admin">
+              <Button size="sm" className="ml-4 text-sm">
+                Open System
+              </Button>
+            </Link>
           </div>
         </div>
       </header>
@@ -152,7 +154,10 @@ export default function Home() {
           
           {/* Title + CTA positioned relative to viewport, not media frame */}
           <div className="absolute z-20 top-[20%] left-0 w-full px-8 pointer-events-auto">
-            <h1 className="hero-title text-white text-5xl md:text-6xl lg:text-7xl xl:text-[72px] font-semibold tracking-tight leading-[0.9]">Amata</h1>
+            <h1 className="hero-title text-white text-5xl md:text-6xl lg:text-7xl xl:text-[72px] font-semibold tracking-tight leading-[0.9]">ViewProperty.ai</h1>
+            <p className="mt-5 max-w-xl text-base md:text-lg text-white/80">
+              Property intelligence, lead matching, and outreach automation for Singapore agents.
+            </p>
             <div style={{ marginTop: '30px' }}>
               <Link 
                 href="/admin"
@@ -163,7 +168,7 @@ export default function Home() {
                   <div className="glow-layer-1"></div>
                   <div className="glow-layer-2"></div>
                 </div>
-                <span className="label">Admin Dashboard</span>
+                <span className="label">Admin Login</span>
               </Link>
             </div>
           </div>
@@ -179,7 +184,7 @@ export default function Home() {
       <footer className="bg-black text-white py-8">
         <div className="container mx-auto px-4">
           <div className="text-center text-sm">
-            <p>Copyright © 2025 Amata. All Rights Reserved.</p>
+            <p>Copyright © 2026 ViewProperty.ai. All Rights Reserved.</p>
           </div>
         </div>
       </footer>

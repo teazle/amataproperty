@@ -12,22 +12,22 @@ services:
       - WAHA_DASHBOARD_ENABLED=true
       - WAHA_DASHBOARD_USERNAME=admin
       - WAHA_DASHBOARD_PASSWORD=admin123
-      
+
       # Webhook Configuration (Docker needs host.docker.internal to reach host machine)
       - WHATSAPP_HOOK_URL=http://host.docker.internal:3000/api/wa/webhook
       - WHATSAPP_HOOK_EVENTS=message,message.ack,session.status
-      
+
       # Session Configuration
       - WAHA_DEFAULT_ENGINE=WEBJS
-      
+
       # Log Level (debug, info, warn, error)
       - WAHA_LOG_LEVEL=info
-      
+
     volumes:
       # Persist WhatsApp session data
       - waha-sessions:/app/.wwebjs_auth
       - waha-files:/app/.wwebjs_cache
-    
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/sessions"]
       interval: 30s
@@ -52,7 +52,7 @@ services:
         reservations:
           memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191/v1"]
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"cmd\":\"sessions.list\"}", "http://localhost:8191/v1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -65,24 +65,24 @@ volumes:
     name: smartprop-waha-files
 
 # Usage Instructions:
-# 
+#
 # 1. Start WAHA:
 #    docker compose up -d
-# 
+#
 # 2. View logs:
 #    docker compose logs -f waha
-# 
+#
 # 3. Stop WAHA:
 #    docker compose down
-# 
+#
 # 4. Check status:
 #    docker compose ps
-# 
+#
 # 5. Scan QR Code:
 #    - Visit http://localhost:3030
 #    - Create a session named "default"
 #    - Scan QR code with WhatsApp on your phone
-# 
+#
 # 6. Set webhook URL in production:
 #    Update PUBLIC_BASE_URL in .env.local to your domain:
 #    PUBLIC_BASE_URL=https://yourdomain.com

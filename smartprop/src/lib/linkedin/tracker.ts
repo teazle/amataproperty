@@ -5,6 +5,41 @@
 
 import { getSupabaseClient } from '@/workers/supa';
 
+function getLinkedInDbTimeoutMs(): number {
+  const configured = Number(process.env.LINKEDIN_DB_TIMEOUT_MS || 15000);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15000;
+}
+
+async function withLinkedInDbTimeout<T>(
+  label: string,
+  run: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const timeoutMs = getLinkedInDbTimeoutMs();
+  const controller = new AbortController();
+  let timeout: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      run(controller.signal),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error: any) {
+    if (error?.name === 'AbortError' || controller.signal.aborted) {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export interface LinkedInSettings {
   id: string;
   profile_url: string | null;
@@ -35,6 +70,15 @@ export interface LinkedInMessage {
   linkedin_job_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ExistingLinkedInMessageRecord {
+  id: string;
+  status: LinkedInMessage['status'];
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
 }
 
 /**
@@ -68,7 +112,7 @@ export async function updateLinkedInSettings(
   updates: Partial<LinkedInSettings>
 ): Promise<LinkedInSettings | null> {
   const supabase = getSupabaseClient();
-  
+
   // Get existing settings
   const existing = await getLinkedInSettings();
   if (!existing) {
@@ -146,6 +190,37 @@ export async function wasContactMessaged(
 }
 
 /**
+ * Get the latest known message record for a contact.
+ * Used to prevent accidental duplicate sends across runs.
+ */
+export async function getLinkedInMessageRecord(
+  contactProfileUrl: string
+): Promise<ExistingLinkedInMessageRecord | null> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await withLinkedInDbTimeout<{
+    data: ExistingLinkedInMessageRecord | null;
+    error: { message: string } | null;
+  }>(
+    'LinkedIn duplicate-check query',
+    async (signal) => await supabase
+        .from('linkedin_messages')
+        .select('id, status, sent_at, created_at, updated_at, error_message')
+        .eq('contact_profile_url', contactProfileUrl)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .abortSignal(signal)
+        .maybeSingle()
+  );
+
+  if (error) {
+    console.error('Error fetching LinkedIn message record:', error);
+    throw new Error(`LinkedIn duplicate-check query failed: ${error.message}`);
+  }
+
+  return data;
+}
+
+/**
  * Create LinkedIn message record
  */
 export async function createLinkedInMessage(
@@ -198,15 +273,22 @@ export async function getTodayMessageCount(): Promise<number> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const { count, error } = await supabase
-    .from('linkedin_messages')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'sent')
-    .gte('sent_at', today.toISOString());
+  const { count, error } = await withLinkedInDbTimeout<{
+    count: number | null;
+    error: { message: string } | null;
+  }>(
+    'LinkedIn daily-count query',
+    async (signal) => await supabase
+      .from('linkedin_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'sent')
+      .gte('sent_at', today.toISOString())
+      .abortSignal(signal)
+  );
 
   if (error) {
     console.error('Error getting today message count:', error);
-    return 0;
+    throw new Error(`LinkedIn daily-count query failed: ${error.message}`);
   }
 
   return count ?? 0;
@@ -224,14 +306,26 @@ export async function updateDailyStats(
   const supabase = getSupabaseClient();
   const today = new Date().toISOString().split('T')[0];
 
+  const { data: existing } = await supabase
+    .from('linkedin_daily_stats')
+    .select('messages_sent, messages_failed, contacts_processed, by_type')
+    .eq('date', today)
+    .maybeSingle();
+
+  const existingByType = (existing?.by_type || {}) as Partial<typeof byType>;
+
   const { error } = await supabase
     .from('linkedin_daily_stats')
     .upsert([{
       date: today,
-      messages_sent: messagesSent,
-      messages_failed: messagesFailed,
-      contacts_processed: contactsProcessed,
-      by_type: byType,
+      messages_sent: (existing?.messages_sent || 0) + messagesSent,
+      messages_failed: (existing?.messages_failed || 0) + messagesFailed,
+      contacts_processed: (existing?.contacts_processed || 0) + contactsProcessed,
+      by_type: {
+        birthday: (existingByType.birthday || 0) + byType.birthday,
+        work_anniversary: (existingByType.work_anniversary || 0) + byType.work_anniversary,
+        job_change: (existingByType.job_change || 0) + byType.job_change
+      },
       updated_at: new Date().toISOString()
     }], {
       onConflict: 'date'
@@ -241,4 +335,3 @@ export async function updateDailyStats(
     console.error('Error updating daily stats:', error);
   }
 }
-

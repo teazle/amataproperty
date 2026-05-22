@@ -42,6 +42,13 @@ export interface ScraperArticle extends Article {
   scrape_count?: number;
 }
 
+type ExistingArticleRow = {
+  id: string;
+  nid: string;
+  path: string;
+  scrape_count: number;
+};
+
 export interface ScrapeSession {
   id: string;
   source: string;
@@ -105,23 +112,121 @@ export async function completeScrapeSession(
   if (error) throw error;
 }
 
+function normalizeArticlePath(pathValue?: string): string | null {
+  if (!pathValue) {
+    return null;
+  }
+
+  const trimmed = pathValue.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalizeDecoded = (path: string) => {
+    const withoutTrailingSlash = path.replace(/\/+$/, '');
+    try {
+      return decodeURIComponent(withoutTrailingSlash);
+    } catch {
+      return withoutTrailingSlash;
+    }
+  };
+
+  try {
+    const parsed = new URL(trimmed);
+    return normalizeDecoded(parsed.pathname);
+  } catch {
+    const withoutHost = trimmed.replace(/^https?:\/\/(?:www\.)?edgeprop\.sg/i, '');
+    const normalized = withoutHost.startsWith('/')
+      ? withoutHost.replace(/\/+$/, '')
+      : `/${withoutHost}`.replace(/\/+$/, '');
+    return normalizeDecoded(normalized);
+  }
+}
+
+function getArticleDedupeKey(article: Article): string {
+  const normalizedPath = normalizeArticlePath(article.path);
+  if (normalizedPath) {
+    return `path:${normalizedPath.toLowerCase()}`;
+  }
+
+  return `nid:${article.nid}`;
+}
+
+function preferCanonicalArticle(rows: ExistingArticleRow[]): ExistingArticleRow | null {
+  if (!rows.length) {
+    return null;
+  }
+
+  return [...rows].sort((a, b) => {
+    const aGenerated = a.nid.startsWith('mcp-') ? 1 : 0;
+    const bGenerated = b.nid.startsWith('mcp-') ? 1 : 0;
+    if (aGenerated !== bGenerated) {
+      return aGenerated - bGenerated;
+    }
+    return a.nid.localeCompare(b.nid);
+  })[0];
+}
+
+async function findExistingArticle(article: Article): Promise<ExistingArticleRow | null> {
+  const normalizedPath = normalizeArticlePath(article.path);
+  if (normalizedPath) {
+    const { data, error } = await supabase
+      .from('scraped_articles')
+      .select('id, nid, path, scrape_count')
+      .eq('path', normalizedPath);
+
+    if (error) {
+      throw error;
+    }
+
+    const existingByPath = preferCanonicalArticle((data || []) as ExistingArticleRow[]);
+    if (existingByPath) {
+      return existingByPath;
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('scraped_articles')
+    .select('id, nid, path, scrape_count')
+    .eq('nid', article.nid)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as ExistingArticleRow | null) || null;
+}
+
 // Upsert articles (insert new, update existing)
-// NOTE: We only store each article ONCE in the database (by nid)
-// Duplicates are tracked via scrape_count and session links
+// NOTE: We only store each article once using stable path first, then nid.
+// Generated MCP nids are not stable, so relying on nid alone creates duplicates.
+// Duplicates are tracked via scrape_count and session links.
 export async function upsertArticles(
   articles: Article[],
   sessionId: string
-): Promise<{ newArticles: number; duplicates: number }> {
+): Promise<{ newArticles: number; duplicates: number; processedArticles: number; inputDuplicates: number }> {
   let newArticles = 0;
   let duplicates = 0;
+  let inputDuplicates = 0;
 
+  const uniqueArticles = new Map<string, Article>();
   for (const article of articles) {
-    // Check if article exists (efficient query)
-    const { data: existing } = await supabase
-      .from('scraped_articles')
-      .select('id, scrape_count')
-      .eq('nid', article.nid)
-      .maybeSingle(); // Use maybeSingle to avoid error if not found
+    const normalizedPath = normalizeArticlePath(article.path);
+    const normalizedArticle = {
+      ...article,
+      path: normalizedPath || article.path
+    };
+    const key = getArticleDedupeKey(normalizedArticle);
+    if (uniqueArticles.has(key)) {
+      inputDuplicates++;
+      continue;
+    }
+    uniqueArticles.set(key, normalizedArticle);
+  }
+
+  for (const article of uniqueArticles.values()) {
+    const existing = await findExistingArticle(article);
 
     if (existing) {
       // Article already exists - this is a duplicate
@@ -204,7 +309,12 @@ export async function upsertArticles(
     }
   }
 
-  return { newArticles, duplicates };
+  return {
+    newArticles,
+    duplicates: duplicates + inputDuplicates,
+    processedArticles: uniqueArticles.size,
+    inputDuplicates
+  };
 }
 
 // Get all articles with pagination
@@ -294,4 +404,3 @@ export async function getArticleStats() {
     totalSessions: sessionCount || 0
   };
 }
-

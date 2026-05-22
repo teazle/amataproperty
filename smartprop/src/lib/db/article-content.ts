@@ -26,21 +26,52 @@ const supabase = createClient(
  * Upsert full article content
  */
 export async function upsertArticleContent(content: ArticleContent): Promise<void> {
-  // Get article_id from nid
-  const { data: article } = await supabase
-    .from('scraped_articles')
-    .select('id')
-    .eq('nid', content.nid)
-    .single();
+  let articleId: string | null = null;
+
+  // Prefer stable article path because MCP-generated nids are not stable.
+  if (content.path) {
+    const rawPath = content.path.trim().replace(/^https?:\/\/(?:www\.)?edgeprop\.sg/i, '').replace(/\/+$/, '');
+    const withSlash = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+    let normalizedPath = withSlash;
+    try {
+      normalizedPath = decodeURIComponent(withSlash);
+    } catch {
+      normalizedPath = withSlash;
+    }
+    const { data: articleByPath, error: pathError } = await supabase
+      .from('scraped_articles')
+      .select('id')
+      .eq('path', normalizedPath)
+      .limit(1)
+      .maybeSingle();
+
+    if (pathError) {
+      throw pathError;
+    }
+    articleId = articleByPath?.id || null;
+  }
+
+  if (!articleId) {
+    const { data: article, error: nidError } = await supabase
+      .from('scraped_articles')
+      .select('id')
+      .eq('nid', content.nid)
+      .maybeSingle();
+
+    if (nidError) {
+      throw nidError;
+    }
+    articleId = article?.id || null;
+  }
   
-  if (!article) {
-    throw new Error(`Article with nid ${content.nid} not found`);
+  if (!articleId) {
+    throw new Error(`Article with nid ${content.nid} or path ${content.path} not found`);
   }
   
   const { error } = await supabase
     .from('article_full_content')
     .upsert({
-      article_id: article.id,
+      article_id: articleId,
       text_content: content.text_content,
       paragraphs: content.paragraphs,
       links: content.links,
@@ -133,4 +164,3 @@ export async function deleteArticleContent(articleId: string) {
   
   if (error) throw error;
 }
-

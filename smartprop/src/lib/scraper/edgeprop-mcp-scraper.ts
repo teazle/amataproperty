@@ -21,7 +21,7 @@ export interface MCPArticle {
   description: string;
   created_on: string;
   keywords?: string[];
-  
+
   // Full content fields
   html_content?: string;
   text_content: string;
@@ -33,7 +33,7 @@ export interface MCPArticle {
   tags?: string[];
   word_count: number;
   reading_time_minutes: number;
-  
+
   scraped_at: Date;
 }
 
@@ -62,12 +62,12 @@ export async function scrapeEdgePropMCP(
   maxArticles?: number // Optional: limit number of articles to scrape
 ): Promise<MCPArticle[]> {
   console.log('Starting EdgeProp scraper using MCP approach...');
-  
+
   // Use regular playwright (Flaresolverr handles Cloudflare bypass)
   const { chromium } = await import('playwright');
-  
+
   // Use headless mode with additional args for EC2 stability
-  const launchOptions = { 
+  const launchOptions = {
     headless: true, // Use headless mode for better reliability on EC2
     args: [
       '--disable-blink-features=AutomationControlled',
@@ -80,9 +80,9 @@ export async function scrapeEdgePropMCP(
       '--max-old-space-size=512', // Limit memory per process
     ]
   };
-  
+
   const browser = await chromium.launch(launchOptions);
-  
+
   // Ensure browser is closed on process exit (prevents memory leaks)
   let browserClosed = false;
   let context: Awaited<ReturnType<typeof browser.newContext>> | null = null;
@@ -106,7 +106,7 @@ export async function scrapeEdgePropMCP(
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
   process.on('uncaughtException', cleanup);
-  
+
   try {
     // Create context with stealth configuration (same as EP live scraper)
     context = await browser.newContext({
@@ -133,7 +133,7 @@ export async function scrapeEdgePropMCP(
       'Cache-Control': 'max-age=0'
     }
   });
-  
+
   // Remove automation indicators (crucial for bypassing Cloudflare)
   await context.addInitScript(() => {
     // Override the navigator.webdriver property (configurable so it can be redefined)
@@ -154,12 +154,12 @@ export async function scrapeEdgePropMCP(
         // Ignore if we can't redefine
       }
     }
-    
+
     // Mock chrome object
     (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
       runtime: {},
     };
-    
+
     // Mock permissions
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
@@ -167,65 +167,65 @@ export async function scrapeEdgePropMCP(
         Promise.resolve({ state: Notification.permission } as PermissionStatus) :
         originalQuery(parameters)
     );
-    
+
     // Override navigator properties
     Object.defineProperty(navigator, 'languages', {
       get: () => ['en-SG', 'en', 'en-US'],
     });
-    
+
     Object.defineProperty(navigator, 'platform', {
       get: () => 'MacIntel',
     });
-    
+
     Object.defineProperty(navigator, 'hardwareConcurrency', {
       get: () => 8,
     });
-    
+
     Object.defineProperty(navigator, 'deviceMemory', {
       get: () => 8,
     });
-    
+
     // Mock screen properties
     Object.defineProperty(screen, 'width', {
       get: () => 1920,
     });
-    
+
     Object.defineProperty(screen, 'height', {
       get: () => 1080,
     });
-    
+
     Object.defineProperty(screen, 'availWidth', {
       get: () => 1920,
     });
-    
+
     Object.defineProperty(screen, 'availHeight', {
       get: () => 1040,
     });
-    
+
     // Mock timezone
     Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
       value: function() {
         return { timeZone: 'Asia/Singapore' };
       },
     });
-    
+
     // Remove automation indicators
     delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
     delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
     delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-    
+
     // webdriver is already defined above, skip duplicate definition
-    
+
     // Mock plugins
     Object.defineProperty(navigator, 'plugins', {
       get: () => [1, 2, 3, 4, 5], // Fake plugins array
     });
-    
+
     // Mock mimeTypes
     Object.defineProperty(navigator, 'mimeTypes', {
       get: () => [1, 2, 3, 4, 5], // Fake mimeTypes array
     });
-    
+
     // Override getBattery if it exists (TypeScript-safe check)
     if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
       (navigator as any).getBattery = () => Promise.resolve({
@@ -235,23 +235,23 @@ export async function scrapeEdgePropMCP(
         level: 1
       });
     }
-    
+
     // Fix __name error that EdgeProp's JavaScript expects
     if (typeof (window as any).__name === 'undefined') {
       (window as any).__name = function() { return ''; };
     }
   });
-  
+
   const page = await context.newPage();
-  
+
   // Listen to console events to capture logs from page.evaluate()
   page.on('console', (msg: any) => {
     const logType = msg.type();
     const args = msg.args();
     const text = msg.text();
-    
+
     // Log all important messages including debug info - be more permissive for debugging
-    if (text.includes('🔍') || text.includes('⚠️') || text.includes('✅') || text.includes('❌') || 
+    if (text.includes('🔍') || text.includes('⚠️') || text.includes('✅') || text.includes('❌') ||
         text.includes('📷') || text.includes('📊') ||
         text.includes('Starting article') || text.includes('Cloudflare') || text.includes('Navigation') ||
         text.includes('Page title') || text.includes('Selector') || text.includes('Found') ||
@@ -263,16 +263,16 @@ export async function scrapeEdgePropMCP(
       console.log(`[Browser] ${text}`);
     }
   });
-  
+
   // Listen to page errors
   page.on('pageerror', (error: any) => {
     console.error(`[Page Error] ${error.message}`);
   });
-  
+
   const allArticles: MCPArticle[] = [];
   const seenIds = new Set<string>();
   let articlesFailed = 0;
-  
+
   try {
     onProgress({
       currentPage: 0,
@@ -284,7 +284,7 @@ export async function scrapeEdgePropMCP(
       status: 'running',
       message: 'Starting EdgeProp scraper...'
     });
-    
+
     // CRITICAL: Create a Flaresolverr session at the start to maintain cookies across all requests
     // Sessions retain cookies until destroyed, which is essential for Cloudflare bypass across multiple pages
     console.log('\n🔧 Creating Flaresolverr session for persistent cookie management...');
@@ -295,14 +295,14 @@ export async function scrapeEdgePropMCP(
     } else {
       console.log('⚠️  Failed to create Flaresolverr session - will use temporary sessions (may cause cookie issues)');
     }
-    
+
     // Track cookie saves to avoid excessive disk writes
     let articlesSinceLastCookieSave = 0;
     const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 articles
-    
+
     for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
       console.log(`Starting page ${pageNum} of ${maxPages}`);
-      
+
       onProgress({
         currentPage: pageNum,
         totalPages: maxPages,
@@ -313,28 +313,28 @@ export async function scrapeEdgePropMCP(
         status: 'running',
         message: `Scraping page ${pageNum} of ${maxPages}...`
       });
-      
+
       // Navigate to the page with human-like behavior
       // Use /property-news/latest for page 1 (shows latest articles), then use search URL for pagination
-      const url = pageNum === 1 
+      const url = pageNum === 1
         ? `https://www.edgeprop.sg/property-news/latest`
         : `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum}&page_size=20&sort_by=posted_desc&category=`;
       console.log(`Navigating to: ${url}`);
-      
+
       // Navigate to search page with Flaresolverr session
       let navigationSuccess = false;
       let navRetryCount = 0;
       const maxNavRetries = 2;
-      
+
       while (!navigationSuccess && navRetryCount < maxNavRetries) {
         try {
           // Use the persistent session for search page (first attempt only)
           if (navRetryCount === 0) {
             const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true, flaresolverrSessionId || undefined);
-            
+
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-              
+
               // Save fresh Cloudflare cookies to storage state
               const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
               try {
@@ -344,25 +344,25 @@ export async function scrapeEdgePropMCP(
               } catch (saveError) {
                 console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
               }
-              
+
               await page.waitForTimeout(1500);
             }
-            
-            await page.goto(url, { 
-              waitUntil: 'domcontentloaded', 
-              timeout: 60000 
+
+            await page.goto(url, {
+              waitUntil: 'domcontentloaded',
+              timeout: 60000
             });
           } else {
             // Retry: use Flaresolverr with session
             console.log(`   🔧 Retry ${navRetryCount}: Using Flaresolverr to solve Cloudflare...`);
-            
+
             if (page.isClosed()) {
               throw new Error('Page was closed before Flaresolverr retry');
             }
-            
+
             try {
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(url, true, flaresolverrSessionId || undefined);
-              
+
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
                 await page.waitForTimeout(1500);
@@ -370,27 +370,27 @@ export async function scrapeEdgePropMCP(
             } catch (flareError) {
               console.log(`   ⚠️ Flaresolverr failed, continuing anyway...`);
             }
-            
+
             if (page.isClosed()) {
               throw new Error('Page was closed after Flaresolverr attempt');
             }
-            
-            await page.goto(url, { 
-              waitUntil: 'domcontentloaded', 
-              timeout: 60000 
+
+            await page.goto(url, {
+              waitUntil: 'domcontentloaded',
+              timeout: 60000
             });
           }
-          
+
           // Brief wait for content to load
           await page.waitForTimeout(2000);
-          
+
           // Verify content loaded
           const pageText = await page.textContent('body').catch(() => '') || '';
-          const hasCloudflareText = pageText.includes('Verifying you are human') || 
+          const hasCloudflareText = pageText.includes('Verifying you are human') ||
                                    pageText.includes('challenge-platform') ||
                                    pageText.includes('Just a moment');
           const hasContent = pageText.length > 1000 && !hasCloudflareText;
-          
+
           if (hasContent) {
             navigationSuccess = true;
             console.log(`✅ Navigation completed for page ${pageNum}`);
@@ -417,17 +417,18 @@ export async function scrapeEdgePropMCP(
           }
         }
       }
-      
+
       if (!navigationSuccess) {
         throw new Error(`Navigation failed for page ${pageNum} after ${maxNavRetries} attempts`);
       }
-      
+
       // Simple content verification
       await page.waitForTimeout(2000); // Brief wait for content to load
-      
+
       const hasContent = await page.evaluate(() => {
-        const contentIndicators = [
-          document.querySelector('.jsx-4217446631.article-detail.left-section'),
+	        const contentIndicators = [
+	          document.querySelector('#detail-content'),
+	          document.querySelector('.jsx-4217446631.article-detail.left-section'),
           document.querySelector('.jsx-2128998887.detail-content'),
           document.querySelector('main article'),
           document.querySelector('[class*="article"]'),
@@ -435,23 +436,23 @@ export async function scrapeEdgePropMCP(
           document.querySelector('h1'),
           document.querySelector('p')
         ];
-        
+
         const hasValidContent = contentIndicators.some(el => el && el.textContent && el.textContent.trim().length > 50);
         const bodyText = document.body?.textContent || '';
         const hasSubstantialText = bodyText.length > 500;
-        
+
         return hasValidContent && hasSubstantialText;
       }).catch(() => false);
-      
+
       if (!hasContent) {
         console.log('⚠️ Content not loaded on search page, but continuing...');
       } else {
         console.log(`✅ Content loaded successfully`);
       }
-      
+
       // Wait for content to load properly
       await page.waitForTimeout(2000);
-      
+
       try {
         // Human-like scrolling behavior to trigger lazy loading
         const scrollSteps = [0, 300, 600, 900, 1200];
@@ -461,45 +462,45 @@ export async function scrapeEdgePropMCP(
           }, scrollPos);
           await page.waitForTimeout(800 + Math.random() * 400); // Random delays between scrolls
         }
-        
+
         // Scroll back to top
         await page.evaluate(() => {
           window.scrollTo({ top: 0, behavior: 'smooth' });
         });
         await page.waitForTimeout(1000);
-        
+
         console.log(`Fast loading completed for page ${pageNum}`);
       } catch (error: unknown) {
         console.error(`Scrolling failed for page ${pageNum}:`, error);
         // Continue anyway - scrolling is not critical
       }
-      
+
       // Extract articles from the page
       console.log('🔍 Starting article extraction...');
       const articles = await page.evaluate(() => {
         console.log('📄 Page title:', document.title);
         console.log('📄 Page URL:', window.location.href);
-        
+
         // Check if Cloudflare challenge is blocking
         const cloudflareText = document.body?.textContent || '';
         if (cloudflareText.includes('Just a moment') || cloudflareText.includes('Checking your browser')) {
           console.log('⚠️ Cloudflare challenge detected!');
           return [];
         }
-        
+
         console.log('🔍 Trying multiple selectors to find article links...');
-        
+
         // Try multiple strategies to find article containers
         let articleContainers: Element[] = [];
-        
+
         // Strategy 1: Look for any class containing "article"
         const articleClassContainers = Array.from(document.querySelectorAll('[class*="article"]'));
         console.log(`✅ Found ${articleClassContainers.length} containers with "article" in class`);
-        
+
         // Strategy 2: Look for JSX containers (EdgeProp uses Next.js with JSX classes)
         const jsxContainers = Array.from(document.querySelectorAll('div[class*="jsx-"]'));
         console.log(`✅ Found ${jsxContainers.length} JSX containers`);
-        
+
         // Strategy 3: Look for divs that contain article links and images
         const linkContainers = Array.from(document.querySelectorAll('div')).filter(div => {
           // Look for divs that contain an article link and an image, likely article cards
@@ -517,7 +518,7 @@ export async function scrapeEdgePropMCP(
           return false;
         });
         console.log(`✅ Found ${linkContainers.length} containers with article links and images`);
-        
+
         // Use the strategy that found the most containers
         if (linkContainers.length > 0) {
           articleContainers = linkContainers;
@@ -529,14 +530,14 @@ export async function scrapeEdgePropMCP(
           articleContainers = jsxContainers;
           console.log(`Using JSX containers strategy: ${jsxContainers.length} containers`);
         }
-        
+
         // Extract unique article hrefs from the containers (limit to 20 per page)
         const uniqueHrefs = new Map<string, any>();
-        
+
         // Process all containers but only take first 20
         for (let index = 0; index < articleContainers.length && uniqueHrefs.size < 20; index++) {
           const container = articleContainers[index];
-          
+
           // Find all article links in this container
           const allLinks = Array.from(container.querySelectorAll('a[href*="/property-news/"]'));
           const articleLinks = allLinks.filter(link => {
@@ -546,7 +547,7 @@ export async function scrapeEdgePropMCP(
             const isRelativeUrl = href.startsWith('/property-news/');
             const isAbsoluteUrl = href.includes('edgeprop.sg/property-news/');
             const pathSegments = href.split('/').length;
-            
+
             // Exclude category pages and non-article links
             const isCategoryPage = href.includes('/property-news-search') ||
                                    href.includes('/property-news/latest') ||
@@ -560,39 +561,39 @@ export async function scrapeEdgePropMCP(
                                    href.includes('/property-news/special-feature') ||
                                    href === '/property-news' ||
                                    href.endsWith('/property-news');
-            
+
             // Category pages typically have only 2 path segments (e.g., /property-news/special-feature)
             // Real articles have 3+ segments (e.g., /property-news/article-title-here)
             const isArticlePath = (isRelativeUrl && pathSegments >= 3) || (isAbsoluteUrl && pathSegments >= 5);
-            
-            return (isRelativeUrl || isAbsoluteUrl) && 
+
+            return (isRelativeUrl || isAbsoluteUrl) &&
                    !isCategoryPage &&
                    isArticlePath;
           });
-          
+
           // Find the article href (prefer links with longer text content - those are usually the title links)
           let articleHref = '';
           let title = '';
           let category = '';
           let imgSrc = '';
-          
+
           // Sort links by text length to prefer title links over category links
           const sortedLinks = articleLinks.sort((a, b) => (b.textContent?.trim().length || 0) - (a.textContent?.trim().length || 0));
-          
+
           sortedLinks.forEach(link => {
             const href = link.getAttribute('href') || '';
             const text = link.textContent?.trim() || '';
-            
+
             // Get the article href (first valid article link)
             if (href && !articleHref) {
               articleHref = href;
             }
-            
+
             // Get category (short uppercase text like "PROPERTY NEWS", "PERSONALITY", etc.)
             if (['PROPERTY NEWS', 'DEAL WATCH', 'PERSONALITY', 'SPECIAL FEATURE', 'NEWS / IN DEPTH', 'NEWS / INTERNATIONAL'].includes(text)) {
               category = text;
             }
-            
+
             // Get title (prefer longer text, but be flexible about length)
             if (text && text.length > 10 && !text.includes('EDGEPROP SINGAPORE') && !text.includes('PROPERTY NEWS') && !text.includes('PERSONALITY') && !text.includes('SPECIAL FEATURE')) {
               if (!title || text.length > title.length) {
@@ -600,7 +601,7 @@ export async function scrapeEdgePropMCP(
               }
             }
           });
-          
+
           // Fallback: if no title found from links, try to get it from h2, h3, or heading tags
           if (!title || title.length < 10) {
             const heading = container.querySelector('h2, h3, h4, [class*="title"], [class*="heading"], [class*="headline"]');
@@ -611,7 +612,7 @@ export async function scrapeEdgePropMCP(
               }
             }
           }
-          
+
           // Get image - try multiple sources
           const img = container.querySelector('img');
           if (img) {
@@ -621,10 +622,10 @@ export async function scrapeEdgePropMCP(
               imgSrc = '';
             }
           }
-          
+
           // Normalize href (remove domain if present, ensure leading slash)
           const normalizedHref = articleHref.replace(/^https?:\/\/www\.edgeprop\.sg/, '').replace(/^([^/])/, '/$1');
-          
+
           // Additional fallback: try to extract title from the URL slug
           if (!title || title.length < 10) {
             const urlParts = normalizedHref.split('/');
@@ -634,7 +635,7 @@ export async function scrapeEdgePropMCP(
               title = slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
             }
           }
-          
+
           // Final validation: exclude category pages and invalid articles
           const isCategoryPage = normalizedHref.includes('/property-news/special-feature') ||
                                  normalizedHref.includes('/property-news/latest') ||
@@ -644,9 +645,9 @@ export async function scrapeEdgePropMCP(
                                  normalizedHref.includes('/property-news/personality') ||
                                  normalizedHref === '/property-news' ||
                                  normalizedHref.endsWith('/property-news');
-          
+
           // Skip if title is a category name (not a real article title)
-          const isCategoryTitle = !title || 
+          const isCategoryTitle = !title ||
                                   title.length < 10 ||
                                   title === 'Special Feature' ||
                                   title === 'SPECIAL FEATURE' ||
@@ -655,9 +656,9 @@ export async function scrapeEdgePropMCP(
                                   title === 'PERSONALITY' ||
                                   title === 'NEWS / IN DEPTH' ||
                                   title === 'NEWS / INTERNATIONAL';
-          
-          if (normalizedHref && 
-              normalizedHref.includes('/property-news/') && 
+
+          if (normalizedHref &&
+              normalizedHref.includes('/property-news/') &&
               !isCategoryPage &&
               !isCategoryTitle &&
               !uniqueHrefs.has(normalizedHref)) {
@@ -670,7 +671,7 @@ export async function scrapeEdgePropMCP(
             });
           }
         }
-        
+
         const articleLinks = Array.from(uniqueHrefs.values());
         console.log(`📊 Found ${articleLinks.length} unique articles on page`);
         if (articleLinks.length === 0) {
@@ -678,21 +679,21 @@ export async function scrapeEdgePropMCP(
           console.log('   Body HTML length:', document.body.innerHTML.length);
           console.log('   All links on page:', document.querySelectorAll('a').length);
         }
-        
+
         const extracted: any[] = [];
-        
+
         articleLinks.forEach((articleData, index) => {
           const { href, title, category, imgSrc } = articleData;
-          
+
           console.log(`Article ${index}: "${title?.substring(0, 60)}..." -> ${href}`);
-          
+
           if (href && title && title.length > 10) {
             // Get thumbnail URL
             let thumbnail = 'https://via.placeholder.com/300x200/4F46E5/FFFFFF?text=EdgeProp+News';
             if (imgSrc && !imgSrc.includes('placeholder') && !imgSrc.includes('logo')) {
               thumbnail = imgSrc.startsWith('http') ? imgSrc : `https://www.edgeprop.sg${imgSrc}`;
             }
-            
+
               extracted.push({
                 nid: `mcp-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
                 title: title,
@@ -706,16 +707,16 @@ export async function scrapeEdgePropMCP(
             console.log(`✅ Added article: ${title.substring(0, 60)}...`);
           }
         });
-        
+
         console.log(`Total articles extracted: ${extracted.length}`);
         // Ensure exactly 20 articles per page (no more, no less)
         const limitedExtracted = extracted.slice(0, 20);
         console.log(`Limited to exactly 20 articles: ${limitedExtracted.length}`);
         return limitedExtracted;
       });
-      
+
       console.log(`Server: Found ${articles.length} articles on page ${pageNum}`);
-      
+
       onProgress({
         currentPage: pageNum,
         totalPages: maxPages,
@@ -726,16 +727,16 @@ export async function scrapeEdgePropMCP(
         status: 'running',
         message: `Found ${articles.length} articles on page ${pageNum}, now scraping content...`
       });
-      
+
           // Scrape articles found on the page (with optional limit)
           const articlesToScrape = maxArticles ? articles.slice(0, maxArticles) : articles;
-        
+
         for (let i = 0; i < articlesToScrape.length; i++) {
           const article = articlesToScrape[i];
-          
+
           if (seenIds.has(article.nid)) continue;
           seenIds.add(article.nid);
-          
+
           onProgress({
             currentPage: pageNum,
             totalPages: maxPages,
@@ -746,16 +747,16 @@ export async function scrapeEdgePropMCP(
             status: 'running',
             message: `Scraping article ${i + 1}/${articlesToScrape.length}: ${article.title.substring(0, 50)}...`
           });
-          
+
           // Create a new page for each article (like PropertyGuru does) to avoid page closure issues
           // Check if context is still open before creating new page
           if (context.browser()?.isConnected() === false) {
             console.log(`⚠️ Browser context closed, stopping scraper`);
             break;
           }
-          
+
           const articlePage = await context.newPage();
-          
+
           // Add timeout wrapper for entire article processing (90 seconds max - should be fast with cookie reuse)
           let articleTimedOut = false;
           const articleTimeout = setTimeout(() => {
@@ -763,26 +764,27 @@ export async function scrapeEdgePropMCP(
             articleTimedOut = true;
             articlePage.close().catch(() => {});
           }, 90000); // 90 seconds - should be enough since we try cookies first
-          
+
           try {
             // Navigate to article page with enhanced Cloudflare handling
             // Fix URL construction - ensure no double slashes
             const cleanPath = article.path.startsWith('/') ? article.path : `/${article.path}`;
             const articleUrl = `https://www.edgeprop.sg${cleanPath}`;
             console.log(`🌐 Navigating to: ${articleUrl}`);
-            
+
             // CRITICAL: Use Flaresolverr on EACH article URL to get URL-specific cookies
             // Cloudflare cookies are URL-path specific - cookies from one article URL don't work for another
             // Using the same Flaresolverr session ensures cookies persist across requests
             console.log(`   🔄 Solving Cloudflare for this article URL...`);
-            
+
             // Use Flaresolverr on the ACTUAL article URL with the same session to maintain cookies
             const flaresolverrResult = await solveCloudflareWithFlaresolverr(articleUrl, true, flaresolverrSessionId || undefined);
-            
+            const flaresolverrHtml = flaresolverrResult?.response || '';
+
             if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
               // Apply cookies to context BEFORE creating new page
               await applyFlaresolverrToContext(context, flaresolverrResult, '.edgeprop.sg');
-              
+
               // Save fresh cookies periodically (every 5 articles to avoid too many writes)
               if (articlesSinceLastCookieSave >= COOKIE_SAVE_INTERVAL) {
                 const stateFilePath = path.join(process.cwd(), 'storage', 'ep.state.json');
@@ -796,41 +798,56 @@ export async function scrapeEdgePropMCP(
               } else {
                 articlesSinceLastCookieSave++;
               }
-              
+
               // Wait for cookies to be fully applied to context
               await articlePage.waitForTimeout(2000);
             } else {
               console.log(`   ⚠️  Flaresolverr returned no cookies, continuing with existing cookies...`);
             }
-            
+
             // Navigate to article page - cookies are already in context and will be sent automatically
             let navigationSuccess = false;
             let navRetryCount = 0;
             const maxNavRetries = 2;
-            
+
             while (!navigationSuccess && navRetryCount < maxNavRetries && !articleTimedOut) {
               try {
-                await articlePage.goto(articleUrl, { 
+                await articlePage.goto(articleUrl, {
                   waitUntil: 'domcontentloaded',
                   timeout: 60000,
                   referer: 'https://www.edgeprop.sg/' // Add referer to make navigation look natural
                 });
-                
+
                 // Check if timed out during navigation
                 if (articleTimedOut) {
                   throw new Error('Article navigation timed out');
                 }
-                
+
                 // Brief wait for content to load
                 await articlePage.waitForTimeout(2000);
-                
+
                 // Verify content loaded
                 const pageText = await articlePage.textContent('body').catch(() => '') || '';
-                const hasCloudflareText = pageText.includes('Verifying you are human') || 
+                const hasCloudflareText = pageText.includes('Verifying you are human') ||
                                          pageText.includes('challenge-platform') ||
                                          pageText.includes('Just a moment');
-                const hasArticleContent = pageText.length > 1000 && !hasCloudflareText;
-                
+                let hasArticleContent = pageText.length > 1000 && !hasCloudflareText;
+
+                if (!hasArticleContent && flaresolverrHtml.length > 1000) {
+                  console.log(`   ↩️  Playwright page had no usable article body; using Flaresolverr-rendered HTML fallback`);
+                  await articlePage.setContent(flaresolverrHtml, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 30000,
+                  });
+                  await articlePage.waitForTimeout(1000);
+
+                  const fallbackText = await articlePage.textContent('body').catch(() => '') || '';
+                  const fallbackHasCloudflareText = fallbackText.includes('Verifying you are human') ||
+                                                   fallbackText.includes('challenge-platform') ||
+                                                   fallbackText.includes('Just a moment');
+                  hasArticleContent = fallbackText.length > 1000 && !fallbackHasCloudflareText;
+                }
+
                 if (hasArticleContent) {
                   navigationSuccess = true;
                   console.log(`✅ Successfully navigated to: ${article.title}`);
@@ -851,26 +868,26 @@ export async function scrapeEdgePropMCP(
                 }
               }
             }
-            
+
             // Check if timed out after navigation
             if (articleTimedOut) {
               throw new Error('Article processing timed out');
             }
-            
+
             if (!navigationSuccess) {
               throw new Error('Navigation failed after retries');
             }
-            
+
             // Check if page is still open before proceeding
             if (articlePage.isClosed()) {
               throw new Error('Page was closed unexpectedly');
             }
-            
+
             // Check for Cloudflare blocks - but be less aggressive (only actual challenge pages)
             const cloudflareCheck = await articlePage.evaluate(() => {
               const bodyText = (document.body?.textContent || '').toLowerCase();
               const pageTitle = (document.title || '').toLowerCase();
-              
+
               // Only check for actual Cloudflare challenge pages (not just mentions)
               // These are strong indicators of a challenge page
               const strongIndicators = [
@@ -881,7 +898,7 @@ export async function scrapeEdgePropMCP(
                 'cf-ray',
                 'ray id'
               ];
-              
+
               // Check if it's a challenge page (has challenge indicators AND no article content)
               let hasChallengeIndicator = false;
               for (const indicator of strongIndicators) {
@@ -890,22 +907,22 @@ export async function scrapeEdgePropMCP(
                   break;
                 }
               }
-              
+
               // Only flag as Cloudflare if we have challenge indicators AND no article content
               if (hasChallengeIndicator) {
                 // Check if there's actual article content
-                const hasArticleContent = document.querySelector('article') || 
+                const hasArticleContent = document.querySelector('article') ||
                                          document.querySelector('[class*="article"]') ||
                                          document.querySelector('[class*="content"]') ||
                                          bodyText.length > 3000; // Real articles have substantial content
-                
+
                 // If we have challenge indicators but no article content, it's a Cloudflare block
                 return !hasArticleContent;
               }
-              
+
               return false;
             }).catch(() => false);
-            
+
             // If Cloudflare is detected despite proactive Flaresolverr call, skip this article
             // Note: We already use Flaresolverr proactively on each article URL, so this should rarely happen
             if (cloudflareCheck) {
@@ -915,12 +932,12 @@ export async function scrapeEdgePropMCP(
               await articlePage.close();
               continue;
             }
-            
+
             // Now check for actual article content
             const hasArticle = await articlePage.evaluate(() => {
               const selectors = [
                 'article .content',
-                '.article-content', 
+                '.article-content',
                 '.post-content',
                 '.entry-content',
                 'article',
@@ -928,19 +945,19 @@ export async function scrapeEdgePropMCP(
                 '.content-body',
                 '.article-body'
               ];
-              
+
               for (const selector of selectors) {
                 const el = document.querySelector(selector);
                 if (el && (el.textContent?.length || 0) > 500) {
                   return true;
                 }
               }
-              
+
               const bodyText = document.body?.textContent || '';
               // Require more content to ensure it's not just navigation/header
               return bodyText.length > 2000;
             }).catch(() => false);
-            
+
             if (!hasArticle) {
               console.log(`⚠️ Content not loaded, skipping article`);
                 articlesFailed++;
@@ -958,14 +975,14 @@ export async function scrapeEdgePropMCP(
               await articlePage.close();
               continue;
             }
-            
+
             console.log(`✅ Content loaded successfully`);
-            
+
             // Reduced wait time - content is already loaded
             await articlePage.waitForTimeout(500).catch(() => {
               console.log(`⚠️ Page closed during wait, skipping article`);
             });
-            
+
             // Check if page is still open before extraction
             if (articlePage.isClosed() || articleTimedOut) {
               console.log(`⚠️ Page closed before extraction, skipping article`);
@@ -984,19 +1001,19 @@ export async function scrapeEdgePropMCP(
               await articlePage.close().catch(() => {});
               continue;
             }
-            
+
             // Extract metadata AND content together
             console.log(`📊 Extracting content from: ${article.title}`);
             console.log(`🔍 About to run page.evaluate() for extraction...`);
-            
+
             // Wait for content container to exist before extracting (reduced timeout)
             try {
-              await articlePage.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 3000 });
+	              await articlePage.waitForSelector('#detail-content, .jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 3000 });
               console.log(`✅ Content container found`);
-              
+
               // Minimal wait for lazy-loaded images (reduced from 2000ms)
               await articlePage.waitForTimeout(500);
-              
+
               // Quick scroll to trigger lazy-loaded images (reduced delays)
               await articlePage.evaluate(() => {
                 window.scrollTo({ top: 500, behavior: 'auto' });
@@ -1005,12 +1022,12 @@ export async function scrapeEdgePropMCP(
             } catch (e: unknown) {
               console.log(`⚠️ Content container not found, proceeding anyway...`);
             }
-            
+
             // Check if timed out before extraction
             if (articleTimedOut || articlePage.isClosed()) {
               throw new Error('Page closed or timed out before extraction');
             }
-            
+
             const articleData = await articlePage.evaluate((articleTitle: string) => {
               // FIRST: EdgeProp's JavaScript tries to call __name() as a function, so provide a no-op function
               try {
@@ -1020,7 +1037,7 @@ export async function scrapeEdgePropMCP(
               } catch (e: any) {
                 // Ignore if we can't set it
               }
-              
+
 
 
               // Isolate from page's JavaScript by using IIFE and catch errors
@@ -1029,27 +1046,47 @@ export async function scrapeEdgePropMCP(
               } catch (e: any) {
                 // Ignore if we can't set it
               }
-              
+
               return (function(articleTitle) {
                 // Helper function to clean paragraphs (inline, browser-safe) - defined at IIFE scope
-                const cleanParagraphs = (rawParagraphs: string[]): string[] => {
-                  return rawParagraphs
+	        const cleanParagraphs = (rawParagraphs: string[]): string[] => {
+	          return rawParagraphs
                     .map(p => p.trim())
                     .filter(text => {
                       // Basic validation
                       if (!text || typeof text !== 'string') return false;
-                      
+
                       // Basic length check - reduced threshold for better content capture
                       if (text.length < 15) return false;
-                      
+
                       // Skip very short paragraphs (less than 3 words)
                       const wordCount = text.split(/\s+/).length;
                       if (wordCount < 3) {
                         return false;
                       }
-                      
+
                       const lower = text.toLowerCase();
-                      
+                      const compactLower = lower.replace(/\s+/g, '');
+                      const footerTerms = [
+                        'about us',
+                        'terms & conditions',
+                        'privacy policy',
+                        'contact us',
+                        'advertise with us',
+                        'user guide',
+                        "we're hiring",
+                        'faqs'
+                      ];
+                      const footerTermMatches = footerTerms.filter(term => lower.includes(term)).length;
+
+                      if (footerTermMatches >= 3 ||
+	                          compactLower.includes('aboutusterms&conditionsprivacypolicycontactus') ||
+	                          compactLower.includes('followourchannelstoreceivepropertynewsupdates') ||
+	                          compactLower.includes('whatdoyouthinkofthisarticle?askbuddy') ||
+	                          lower.includes('for more news and analysis, read our weekly e-paper')) {
+                        return false;
+                      }
+
                       // Skip obvious non-content (but be less aggressive)
                       const skipPatterns = [
                         /^(subscribe|login|register|sign up|sign in)$/i,
@@ -1067,7 +1104,8 @@ export async function scrapeEdgePropMCP(
                         /^(javascript|enable javascript)$/i,
                         /^(cookies|accept cookies)$/i,
                         /^(newsletter|subscribe to)$/i,
-                        /^(related articles|you may also like)$/i,
+                        /^(related articles|related news|you may also like)$/i,
+                        /^read also:/i,
                         /^(tags?:|categories?:|filed under)$/i,
                         /^(posted by|written by|author:)$/i,
                         /^(published on|updated on|last modified)$/i,
@@ -1080,19 +1118,19 @@ export async function scrapeEdgePropMCP(
                         /^(trending|popular|most read)$/i,
                         /^(advertisement|ad|sponsored content)$/i
                       ];
-                      
+
                       for (const pattern of skipPatterns) {
                         if (pattern.test(text)) {
                           return false;
                         }
                       }
-                      
+
                       // Skip if it's mostly numbers or symbols
                       const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
                       if (alphaCount < text.length * 0.5) {
                         return false;
                       }
-                      
+
                       // Skip if it's too similar to the article title (avoid duplication)
                       if (articleTitle && text.length > 10) {
                         const titleWords = articleTitle.toLowerCase().split(/\s+/);
@@ -1102,32 +1140,66 @@ export async function scrapeEdgePropMCP(
                           return false;
                         }
                       }
-                      
+
                       // Skip if it looks like JavaScript code
-                      if (text.includes('function(') || text.includes('var ') || text.includes('const ') || 
+                      if (text.includes('function(') || text.includes('var ') || text.includes('const ') ||
                           text.includes('let ') || text.includes('return ') || text.includes('console.')) {
                         return false;
                       }
-                      
+
                       // Skip common footer/sidebar content
                       if (lower.includes('edgeprop') && (lower.includes('subscribe') || lower.includes('follow') || lower.includes('newsletter'))) {
                         return false;
                       }
-                      
+
                       // Skip EdgeProp specific patterns
-                      if (lower.includes('edgeprop singapore') || 
+                      if (lower.includes('edgeprop singapore') ||
                           lower.includes('edgeprop.sg') ||
                           lower.includes('contact agents') ||
                           lower.includes('clear all')) {
                         return false;
                       }
-                      
-                      return true;
-                    });
-                    // Removed .slice(0, 50) limit to get ALL paragraphs
-                };
 
-                // Declare ALL variables at function scope so they're accessible in catch block
+                      return true;
+	                    });
+	                    // Removed .slice(0, 50) limit to get ALL paragraphs
+	                };
+	                const isTrailingNavigationParagraph = (text: string): boolean => {
+	                  const lower = text.toLowerCase();
+	                  const compactLower = lower.replace(/\s+/g, '');
+	                  const concatenatedWords = (text.match(/[a-z][A-Z]/g) || []).length;
+	                  const navigationSignals = [
+	                    'browse listings',
+	                    'popular for sale',
+	                    'popular for rent',
+	                    'by amenities',
+	                    'near mrts',
+	                    'near schools',
+	                    'by hdb estate',
+	                    'top articles',
+	                    'buyer demand for prime london homes resilientprime london',
+	                    'right condo upgrade starts years before the move',
+	                  ];
+
+	                  return navigationSignals.some(signal => lower.includes(signal)) ||
+	                    compactLower.includes('angmokiobedokbishanbukitbatok') ||
+	                    compactLower.includes('freeholdcondos999-yearcondos') ||
+	                    compactLower.includes('sentosacovenormanton') ||
+	                    compactLower.includes('onesophiaartisan') ||
+	                    compactLower.includes('ubitechparkenterprise') ||
+	                    compactLower.includes('commercialonesophiaartisan') ||
+	                    compactLower.includes('industrialubitechparkenterprise') ||
+	                    (text.length > 90 && concatenatedWords >= 1 && !/[.!?]["')\]]?$/.test(text));
+	                };
+	                const trimTrailingNavigationParagraphs = (items: string[]): string[] => {
+	                  const cleaned = [...items];
+	                  while (cleaned.length > 0 && isTrailingNavigationParagraph(cleaned[cleaned.length - 1])) {
+	                    cleaned.pop();
+	                  }
+	                  return cleaned;
+	                };
+
+	                // Declare ALL variables at function scope so they're accessible in catch block
                 let extractionSuccess = false;
                 let paragraphs: string[] = [];
                 let textContent = '';
@@ -1145,12 +1217,12 @@ export async function scrapeEdgePropMCP(
                 let wordCount = 0;
                 let readingTime = 0;
                 let description = '';
-                
+
                 // Additional isolation: wrap in try-catch to handle any remaining errors
                 try {
               console.log(`   - Using title: ${articleTitle}`); // For debugging
               console.log('🔍 Starting article data extraction...');
-              
+
               // Mark as success as soon as we have paragraphs
               const checkSuccess = () => {
                 if (paragraphs.length > 0 && textContent.length > 100) {
@@ -1159,9 +1231,10 @@ export async function scrapeEdgePropMCP(
               };
 
               // Find the main article content area - use EdgeProp specific selectors
-              const articleSelectors = [
-                '.jsx-4217446631.article-detail.left-section', // Main article container
-                '.jsx-2128998887.detail-content', // Article content area
+	              const articleSelectors = [
+	                '#detail-content',
+	                '.jsx-4217446631.article-detail.left-section', // Main article container
+	                '.jsx-2128998887.detail-content', // Article content area
                 '.jsx-4217446631', // Article container
                 '.jsx-2128998887', // Content wrapper
                 'main article', // Semantic article in main
@@ -1186,7 +1259,7 @@ export async function scrapeEdgePropMCP(
                   console.log(`❌ Selector failed: ${selector}`);
                 }
               }
-              
+
               // Fallback to body but be more selective
               if (!contentContainer) {
                 contentContainer = document.body;
@@ -1196,11 +1269,11 @@ export async function scrapeEdgePropMCP(
               } else {
                 console.log(`✅ Using targeted content container: ${contentContainer.tagName} (${usedSelector})`);
               }
-              
+
               // Extract metadata from article page (variables already declared at function scope)
-              
+
               // Try to find author using multiple approaches
-              
+
               // First: Check if we're on a Cloudflare protection page
               const isCloudflareProtection = document.body.textContent?.includes('Verify you are human') ||
                                            document.body.textContent?.includes('Cloudflare') ||
@@ -1208,7 +1281,7 @@ export async function scrapeEdgePropMCP(
                                            document.querySelector('.cf-browser-verification') ||
                                            document.title?.toLowerCase().includes('cloudflare') ||
                                            document.body.textContent?.includes('Just a moment');
-              
+
               if (isCloudflareProtection) {
                 console.log('⚠️ Detected Cloudflare protection page - skipping author extraction');
                 author = 'EdgeProp Staff'; // Safe fallback for Cloudflare pages
@@ -1222,7 +1295,7 @@ export async function scrapeEdgePropMCP(
                     console.log(`Found author from meta tag: ${author}`);
                   }
                 }
-                
+
                 // Method 1.5: Try additional meta tags
                 if (author === 'EdgeProp Staff') {
                   const additionalMetaTags = document.querySelectorAll('meta[property="author"], meta[name="article:author"], meta[property="article:author"]');
@@ -1235,7 +1308,7 @@ export async function scrapeEdgePropMCP(
                     }
                   }
                 }
-                
+
                 // Method 1.6: Look for JSON-LD structured data
                 if (author === 'EdgeProp Staff') {
                   const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -1243,7 +1316,7 @@ export async function scrapeEdgePropMCP(
                     try {
                       const data = JSON.parse(script.textContent || '');
                       if (data.author) {
-                        const authorName = typeof data.author === 'string' ? data.author : 
+                        const authorName = typeof data.author === 'string' ? data.author :
                                          data.author.name || data.author['@name'] || '';
                         if (authorName && authorName.trim() && !authorName.toLowerCase().includes('edgeprop')) {
                           author = authorName.trim();
@@ -1257,11 +1330,11 @@ export async function scrapeEdgePropMCP(
                   }
                 }
               }
-              
+
               // Method 2: Look for specific EdgeProp author patterns in different sections
               if (author === 'EdgeProp Staff') {
                 const pageText = document.body.textContent || '';
-                
+
                 // Try different patterns in order of preference
                 const patterns = [
                   // Pattern 1: "By Author Name / EdgeProp Singapore" (most reliable)
@@ -1273,15 +1346,15 @@ export async function scrapeEdgePropMCP(
                   // Pattern 4: "By Author Name" (simple fallback)
                   /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)(?:\s|$)/i
                 ];
-                
+
                 // Search in different sections of the page
                 const searchSections = [
                   pageText.substring(0, 5000),      // First 5000 chars
-                  pageText.substring(5000, 10000),  // Next 5000 chars  
+                  pageText.substring(5000, 10000),  // Next 5000 chars
                   pageText.substring(10000, 20000), // Next 10000 chars
                   pageText                          // Full text as last resort
                 ];
-                
+
                 for (const pattern of patterns) {
                   for (const section of searchSections) {
                     const match = section.match(pattern);
@@ -1292,11 +1365,11 @@ export async function scrapeEdgePropMCP(
                         console.log(`Found EdgeProp staff writer: ${author}`);
                         break;
                       }
-                      
+
                       // Handle individual author case
                       if (match[1]) {
                         const candidateAuthor = match[1].trim();
-                        
+
                         // Enhanced validation for author names
                         if (candidateAuthor &&
                             candidateAuthor.length > 3 &&
@@ -1333,28 +1406,28 @@ export async function scrapeEdgePropMCP(
                   if (author !== 'EdgeProp Staff') break;
                 }
               }
-              
+
               // Method 3: Look in main content area specifically
               if (author === 'EdgeProp Staff') {
-                const mainContent = document.querySelector('.main-content') || 
+                const mainContent = document.querySelector('.main-content') ||
                                    document.querySelector('[class*="news"]') ||
                                    document.querySelector('main');
-                
+
                 if (mainContent) {
                   const contentText = mainContent.textContent || '';
-                  
+
                   // Look for author patterns in main content only
                   const contentPatterns = [
                     /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:and|&)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)?)\s*\/\s*EdgeProp Singapore/i,
                     /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*\/\s*EdgeProp Singapore/i,
                     /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i
                   ];
-                  
+
                   for (const pattern of contentPatterns) {
                     const match = contentText.match(pattern);
                     if (match && match[1]) {
                       const candidateAuthor = match[1].trim();
-                      
+
                       if (candidateAuthor &&
                           candidateAuthor.length > 3 &&
                           candidateAuthor.length < 50 &&
@@ -1370,7 +1443,7 @@ export async function scrapeEdgePropMCP(
                   }
                 }
               }
-              
+
               // Method 4: Try JSON-LD structured data
               if (author === 'EdgeProp Staff') {
                 const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -1384,9 +1457,9 @@ export async function scrapeEdgePropMCP(
                       } else if (data.author.name) {
                         authorName = data.author.name;
                       }
-                      
-                      if (authorName && 
-                          authorName.length > 3 && 
+
+                      if (authorName &&
+                          authorName.length > 3 &&
                           authorName.length < 50 &&
                           !authorName.toLowerCase().includes('edgeprop') &&
                           !authorName.toLowerCase().includes('staff') &&
@@ -1401,7 +1474,7 @@ export async function scrapeEdgePropMCP(
                   }
                 }
               }
-              
+
               // Method 5: Try byline selectors
               if (author === 'EdgeProp Staff') {
                 const bylineSelectors = [
@@ -1414,13 +1487,13 @@ export async function scrapeEdgePropMCP(
                   '.writer',
                   '.journalist'
                 ];
-                
+
                 for (const selector of bylineSelectors) {
                   const element = document.querySelector(selector);
                   if (element) {
                     const text = element.textContent?.trim();
-                    if (text && 
-                        text.length > 3 && 
+                    if (text &&
+                        text.length > 3 &&
                         text.length < 50 &&
                         /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$/.test(text) &&
                         !text.toLowerCase().includes('edgeprop') &&
@@ -1433,53 +1506,54 @@ export async function scrapeEdgePropMCP(
                   }
                 }
               }
-              
+
               console.log(`Final author determined: ${author}`);
-              
+
               // Try to find published date
               const dateElement = document.querySelector('time, [class*="date"], [class*="published"], meta[property="article:published_time"]');
               if (dateElement) {
-                publishedDate = dateElement.getAttribute('datetime') || 
-                                dateElement.getAttribute('content') || 
+                publishedDate = dateElement.getAttribute('datetime') ||
+                                dateElement.getAttribute('content') ||
                                 dateElement.textContent?.trim() || '';
               }
-              
+
               // Try to find categories/tags - improved extraction
               const categoryElements = document.querySelectorAll('[class*="category"], [class*="tag"], meta[property="article:section"], a[href*="field_tags_tid"]');
-              const rawCategories = Array.from(categoryElements).map(el => 
+              const rawCategories = Array.from(categoryElements).map(el =>
                 el.getAttribute('content') || el.textContent?.trim()
               ).filter(Boolean);
-              
+
               // Clean and deduplicate categories
               categories = [...new Set(rawCategories)]
                 .filter(cat => cat && cat.length > 0 && cat.length < 100)
                 .map(cat => cat.trim())
-                .filter(cat => !cat.toLowerCase().includes('tags:') && 
+                .filter(cat => !cat.toLowerCase().includes('tags:') &&
                                !cat.toLowerCase().includes('property news') ||
                                cat.toLowerCase() === 'property news');
-              
+
               if (categories.length === 0) {
                 categories = ['Property News'];
               }
-              
+
               // Extract text content and paragraphs using improved content parser
               // (paragraphs and textContent already declared above)
-              
+
               // Method 1: Extract from paragraph tags and div elements (EdgeProp uses divs)
               // Focus on the main content area - exclude headers, nav, footers
               // Try to find the actual article body content area first
               let mainContentArea = contentContainer;
-              
+
               // Look for specific EdgeProp content containers
-              const contentAreaSelectors = [
-                '.jsx-2128998887.detail-content',
+	              const contentAreaSelectors = [
+	                '#detail-content',
+	                '.jsx-2128998887.detail-content',
                 '.jsx-4217446631.article-detail',
                 '[class*="detail-content"]',
                 '[class*="article-content"]',
                 'article > div',
                 'main > article > div'
               ];
-              
+
               for (const selector of contentAreaSelectors) {
                 const area = contentContainer.querySelector(selector);
                 if (area && area.textContent && area.textContent.length > 500) {
@@ -1488,24 +1562,24 @@ export async function scrapeEdgePropMCP(
                   break;
                 }
               }
-              
+
               // First try semantic tags from main content area
               let paragraphElements = Array.from(mainContentArea.querySelectorAll('p'));
-              
+
               // Check if we have enough substantial paragraphs
               const substantialParagraphs = paragraphElements.filter(p => {
                 const text = p.textContent?.trim() || '';
                 return text.length > 100 && text.split(/\s+/).length > 10;
               });
-              
+
               console.log(`Found ${paragraphElements.length} total <p> tags, ${substantialParagraphs.length} are substantial`);
-              
+
               // If not enough substantial paragraphs, also try divs that are likely content paragraphs
               if (paragraphElements.length < 5 || substantialParagraphs.length < 3) {
                 const articleDivs = Array.from(mainContentArea.querySelectorAll('div')).filter(el => {
                 const text = el.textContent || '';
                   // More strict: must be substantial content, not navigation/ads
-                  return text.length > 100 && 
+                  return text.length > 100 &&
                          text.split(/\s+/).length > 10 &&
                        !el.querySelector('div div div') && // Not deeply nested containers
                        !el.querySelector('button, input, script, style, iframe') &&
@@ -1519,9 +1593,9 @@ export async function scrapeEdgePropMCP(
               paragraphElements = paragraphElements.concat(articleDivs as any);
               console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
               }
-              
+
               console.log(`Found ${paragraphElements.length} paragraph elements from main content area`);
-              
+
               if (paragraphElements.length > 0) {
                 const rawParagraphs = paragraphElements
                   .map(el => el.textContent?.trim())
@@ -1534,14 +1608,14 @@ export async function scrapeEdgePropMCP(
                            !lower.includes('cookie') &&
                            !lower.startsWith('http');
                   });
-                
+
                 console.log(`Raw paragraphs after filtering non-content: ${rawParagraphs.length}`);
-                
+
                 console.log(`Raw paragraphs after initial filter: ${rawParagraphs.length}`);
                 if (rawParagraphs.length > 0) {
                   console.log(`First raw paragraph: "${rawParagraphs[0]?.substring(0, 150)}..."`);
                 }
-                
+
                 // Try cleanParagraphs first
                 paragraphs = cleanParagraphs(rawParagraphs);
                 console.log(`🔍 After cleanParagraphs: ${paragraphs.length} paragraphs from ${rawParagraphs.length} raw`);
@@ -1549,7 +1623,7 @@ export async function scrapeEdgePropMCP(
                   console.log(`⚠️ DEBUG: cleanParagraphs filtered all ${rawParagraphs.length} paragraphs`);
                   console.log(`   First raw was: "${rawParagraphs[0]?.substring(0, 80)}..."`);
                 }
-                
+
                 // If cleanParagraphs filtered everything, use raw with minimal filter
                 if (paragraphs.length === 0 && rawParagraphs.length > 0) {
                   console.log(`⚠️ All paragraphs filtered by cleanParagraphs, using raw with minimal filter`);
@@ -1557,8 +1631,8 @@ export async function scrapeEdgePropMCP(
                     if (!p || p.length < 20) return false; // At least 20 chars
                     const lower = p.toLowerCase();
                     // Only filter out obvious non-content
-                    return !lower.includes('subscribe') && 
-                           !lower.includes('follow us') && 
+                    return !lower.includes('subscribe') &&
+                           !lower.includes('follow us') &&
                            !lower.includes('cookie policy') &&
                            !lower.includes('read also:') &&
                            !lower.startsWith('http') &&
@@ -1569,7 +1643,7 @@ export async function scrapeEdgePropMCP(
                     console.log(`First minimal filtered paragraph: "${paragraphs[0].substring(0, 150)}..."`);
                   }
                 }
-                
+
                 // If STILL nothing, accept all raw paragraphs (last resort)
                 if (paragraphs.length === 0 && rawParagraphs.length > 0) {
                   console.log(`⚠️ Even minimal filter removed everything, accepting all raw paragraphs`);
@@ -1579,7 +1653,7 @@ export async function scrapeEdgePropMCP(
                     console.log(`First last resort paragraph: "${paragraphs[0].substring(0, 150)}..."`);
                   }
                 }
-                
+
                 // DEBUG: Log why paragraphs might be empty
                 if (paragraphs.length === 0 && rawParagraphs.length > 0) {
                   console.log(`❌ DEBUG: Why paragraphs empty?`);
@@ -1587,7 +1661,7 @@ export async function scrapeEdgePropMCP(
                   console.log(`   Raw[0] length: ${rawParagraphs[0]?.length || 0}`);
                   console.log(`   Raw[0] preview: "${rawParagraphs[0]?.substring(0, 100) || ''}"`);
                 }
-                
+
                 // If still nothing, extract from full text
                 if (paragraphs.length === 0 && contentContainer) {
                   console.log(`⚠️ Still no paragraphs, extracting from full text`);
@@ -1595,11 +1669,11 @@ export async function scrapeEdgePropMCP(
                   if (allText.length > 200) {
                     const sentences = allText.split(/[.!?]\s+/)
                       .map(s => s.trim())
-                      .filter(s => s.length > 30 && 
+                      .filter(s => s.length > 30 &&
                                    !s.toLowerCase().includes('subscribe') &&
                                    !s.toLowerCase().includes('cookie') &&
                                    !s.toLowerCase().includes('edgeprop singapore'));
-                    
+
                     // Group sentences into paragraphs (3-5 sentences each)
                     for (let i = 0; i < sentences.length; i += 4) {
                       const para = sentences.slice(i, i + 4).join('. ');
@@ -1610,13 +1684,13 @@ export async function scrapeEdgePropMCP(
                     console.log(`Extracted ${paragraphs.length} paragraphs from full text`);
                   }
                 }
-                
+
                 // Check if we hit Cloudflare challenge page
                 const firstParaText = rawParagraphs.length > 0 ? rawParagraphs[0].toLowerCase() : '';
                 const isCloudflarePage = firstParaText.includes('verifying you are human') ||
                                         firstParaText.includes('checking your browser') ||
                                         firstParaText.includes('just a moment');
-                
+
                 if (isCloudflarePage) {
                   console.log(`❌ Cloudflare challenge page detected - cannot extract content`);
                   extractionSuccess = false;
@@ -1631,9 +1705,13 @@ export async function scrapeEdgePropMCP(
                     console.log(`Ultimate fallback result: ${paragraphs.length} paragraphs from ${rawParagraphs.length} raw`);
                   }
                 }
-                
-                if (paragraphs.length > 0) {
-                  textContent = paragraphs.join('\n\n');
+
+	                paragraphs = trimTrailingNavigationParagraphs(paragraphs);
+
+	            paragraphs = trimTrailingNavigationParagraphs(paragraphs);
+
+	            if (paragraphs.length > 0) {
+	              textContent = paragraphs.join('\n\n');
                   extractionSuccess = true;
                   console.log(`✅ Generated textContent: ${textContent.length} chars from ${paragraphs.length} paragraphs`);
                   checkSuccess(); // Make sure extractionSuccess is set
@@ -1652,25 +1730,25 @@ export async function scrapeEdgePropMCP(
               } else {
                 console.log(`⚠️ No paragraphElements found (${paragraphElements.length})`);
               }
-              
+
               // Method 2: If we don't have enough paragraphs, also try div elements
               // EdgeProp uses divs instead of p tags, so we need to be more flexible
               if (paragraphs.length < 10) {
                 const contentDivs = Array.from(contentContainer.querySelectorAll('div')).filter(el => {
                   const text = el.textContent || '';
-                  const hasDirectText = el.childNodes.length > 0 && 
-                                       Array.from(el.childNodes).some(node => 
+                  const hasDirectText = el.childNodes.length > 0 &&
+                                       Array.from(el.childNodes).some(node =>
                                          node.nodeType === 3 && (node.textContent?.trim().length ?? 0) > 20
                                        );
-                  
+
                   // Look for divs that:
                   // 1. Have substantial text content (min 50 chars)
                   // 2. Are NOT navigation/ad/sidebar elements
                   // 3. Have text nodes directly (can have children like strong, emphasis, etc.)
                   // 4. Are likely article content (contain substantial words)
-                  return text.length > 50 && 
+                  return text.length > 50 &&
                          text.split(/\s+/).length > 8 && // At least 8 words
-                         !el.querySelector('h1, h2, h3') && 
+                         !el.querySelector('h1, h2, h3') &&
                          !el.querySelector('button') &&
                          !el.querySelector('input') &&
                          !el.querySelector('script') &&
@@ -1689,14 +1767,14 @@ export async function scrapeEdgePropMCP(
                          !el.textContent?.includes('Follow Us') &&
                          (hasDirectText || el.children.length <= 5); // Allow divs with few children (like strong, emphasis)
                 });
-                
+
                 console.log(`Found ${contentDivs.length} content divs`);
-                
+
                 if (contentDivs.length > 0) {
                   const rawParagraphs = contentDivs
                     .map(el => el.textContent?.trim() || '')
                     .filter(text => text && text.length > 20);
-                  
+
                   const additionalParagraphs = cleanParagraphs(rawParagraphs);
                   // Merge with existing, avoiding duplicates
                   const existingTexts = new Set(paragraphs);
@@ -1708,17 +1786,17 @@ export async function scrapeEdgePropMCP(
                   });
                 }
               }
-              
+
               // Method 3: Fallback to text-based extraction if still not enough
               if (paragraphs.length < 5) {
               const allText = contentContainer.textContent || '';
                 console.log(`Fallback: Total text length: ${allText.length}`);
-              
+
                 const rawParagraphs = allText
                   .split(/\n\s*\n|\.\s+(?=[A-Z])/)
                   .map(p => p.trim())
                   .filter(text => text && text.length > 50);
-                
+
                 if (rawParagraphs.length > 0) {
                   const fallbackParagraphs = cleanParagraphs(rawParagraphs);
                   // Merge with existing, avoiding duplicates
@@ -1731,16 +1809,14 @@ export async function scrapeEdgePropMCP(
                   });
                 }
               }
-              
-              console.log(`Found ${paragraphs.length} paragraphs from article content`);
-              
-              // Update textContent if not already set
-              if (!textContent && paragraphs.length > 0) {
-                textContent = paragraphs.join('\n\n');
-              }
-              wordCount = textContent.split(/\s+/).length;
+
+	              paragraphs = trimTrailingNavigationParagraphs(paragraphs);
+	              textContent = paragraphs.length > 0 ? paragraphs.join('\n\n') : '';
+	              console.log(`Found ${paragraphs.length} paragraphs from article content`);
+
+	              wordCount = textContent.split(/\s+/).length;
               readingTime = Math.ceil(wordCount / 200);
-              
+
               // Mark as successful if we have any substantial content (lower threshold)
               if (textContent && textContent.length > 50) {
                 extractionSuccess = true;
@@ -1748,7 +1824,7 @@ export async function scrapeEdgePropMCP(
               } else {
                 console.log(`❌ Extraction failed: textContent length is ${textContent?.length || 0}, need > 50`);
               }
-              
+
               // Extract links
               links = Array.from(contentContainer.querySelectorAll('a'))
                 .map(link => {
@@ -1760,16 +1836,16 @@ export async function scrapeEdgePropMCP(
                   };
                 })
                 .filter(link => link.url);
-              
+
               // Extract images from article content
               // Search in contentContainer first, but also check the article/main area for images
               console.log(`🔍 Looking for images in contentContainer (${contentContainer.tagName})...`);
               const imageElements = Array.from(contentContainer.querySelectorAll('img'));
               console.log(`📷 Found ${imageElements.length} total img elements in contentContainer`);
-              
+
               // Also search in the parent article/main area if contentContainer doesn't have many images
               if (imageElements.length < 3) {
-                const articleElement = contentContainer.closest('article') || 
+                const articleElement = contentContainer.closest('article') ||
                                       contentContainer.closest('main') ||
                                       document.querySelector('article') ||
                                       document.querySelector('main');
@@ -1788,18 +1864,18 @@ export async function scrapeEdgePropMCP(
                   console.log(`📷 Total unique images found: ${imageElements.length}`);
                 }
               }
-              
+
               // Get all paragraph elements to determine image positions
               // Use the same logic as paragraph extraction to get matching elements
               let allParagraphElements: Element[] = [];
-              
+
               // Get semantic paragraph elements
               const semanticParas = Array.from(contentContainer.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li'));
-              
+
               // Get div elements that look like paragraphs (same logic as paragraph extraction)
               const imageParagraphDivs = Array.from(contentContainer.querySelectorAll('div')).filter(el => {
                 const text = el.textContent || '';
-                return text.length > 50 && 
+                return text.length > 50 &&
                        text.split(/\s+/).length > 8 &&
                        !el.querySelector('div div div') &&
                        !el.querySelector('button, input, script, style, iframe') &&
@@ -1810,9 +1886,9 @@ export async function scrapeEdgePropMCP(
                        !text.toLowerCase().includes('tags:') &&
                        el.children.length <= 5;
               });
-              
+
               allParagraphElements = [...semanticParas, ...imageParagraphDivs];
-              
+
               // Helper function to find which paragraph an image comes after
               const findParagraphIndex = (imgElement: Element): number => {
                 if (!contentContainer) return -1;
@@ -1822,18 +1898,18 @@ export async function scrapeEdgePropMCP(
                   NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
                   null
                 );
-                
+
                 const nodes: Node[] = [];
                 let node: Node | null;
                 while (node = walker.nextNode()) {
                   nodes.push(node);
                 }
-                
+
                 const imgNode = imgElement;
                 const imgPosition = nodes.indexOf(imgNode);
-                
+
                 if (imgPosition === -1) return -1;
-                
+
                 // Find the last paragraph element that appears before this image
                 let lastParaIndex = -1;
                 for (let i = 0; i < imgPosition; i++) {
@@ -1849,31 +1925,31 @@ export async function scrapeEdgePropMCP(
                     }
                   }
                 }
-                
+
                 // Now map to our extracted paragraphs array index
                 // We need to match the paragraph text to find its index in the paragraphs array
                 if (lastParaIndex >= 0 && lastParaIndex < allParagraphElements.length) {
                   const paraElement = allParagraphElements[lastParaIndex];
                   const paraText = paraElement.textContent?.trim() || '';
-                  
+
                   // Find matching paragraph in our extracted paragraphs array
                   const matchingParaIdx = paragraphs.findIndex(p => {
                     // Check if this paragraph text matches or is contained in the extracted paragraph
                     return p.includes(paraText.substring(0, 50)) || paraText.includes(p.substring(0, 50));
                   });
-                  
+
                   return matchingParaIdx >= 0 ? matchingParaIdx : lastParaIndex;
                 }
-                
+
                 return lastParaIndex;
               };
-              
+
               const images: Array<{url: string; alt?: string; caption?: string; paragraph_index?: number}> = [];
-              
+
               imageElements.forEach((img, idx) => {
                 const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
                 const srcSet = img.getAttribute('srcset') || '';
-                
+
                 // Get the actual image URL (prefer src, fallback to first srcset entry)
                 let imageUrl = src;
                 if (!imageUrl && srcSet) {
@@ -1882,12 +1958,12 @@ export async function scrapeEdgePropMCP(
                     imageUrl = srcSetMatch[1];
                   }
                 }
-                
+
                 if (imageUrl) {
                   // Filter out logos, icons, avatars, and other non-content images
                   const lowerUrl = imageUrl.toLowerCase();
-                  if (lowerUrl.includes('logo') || 
-                      lowerUrl.includes('icon') || 
+                  if (lowerUrl.includes('logo') ||
+                      lowerUrl.includes('icon') ||
                       lowerUrl.includes('avatar') ||
                       lowerUrl.includes('button') ||
                       lowerUrl.includes('badge') ||
@@ -1900,14 +1976,18 @@ export async function scrapeEdgePropMCP(
                     console.log(`   ⏭️  Skipping image ${idx + 1}: ${imageUrl.substring(0, 80)}... (logo/icon/avatar/newsletter/speaker)`);
                     return;
                   }
-                  
+
                   // Make URL absolute if relative
-                  const fullUrl = imageUrl.startsWith('http') ? imageUrl : `https://www.edgeprop.sg${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
+                  const fullUrl = imageUrl.startsWith('//')
+                    ? `https:${imageUrl}`
+                    : imageUrl.startsWith('http')
+                      ? imageUrl
+                      : `https://www.edgeprop.sg${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
                   const alt = img.getAttribute('alt') || '';
-                  
+
                   // Try to find caption (check multiple possible locations)
                   let caption = '';
-                  
+
                   // Check parent figure for figcaption
                   if (img.closest('figure')) {
                     const figCaption = img.closest('figure')?.querySelector('figcaption');
@@ -1915,17 +1995,17 @@ export async function scrapeEdgePropMCP(
                       caption = figCaption.textContent?.trim() || '';
                     }
                   }
-                  
+
                   // Check next sibling
                   if (!caption && img.nextElementSibling) {
                     const nextSibling = img.nextElementSibling;
-                    if (nextSibling.tagName === 'FIGCAPTION' || 
+                    if (nextSibling.tagName === 'FIGCAPTION' ||
                         nextSibling.classList.toString().includes('caption') ||
                         nextSibling.tagName === 'P') {
                       caption = nextSibling.textContent?.trim() || '';
                     }
                   }
-                  
+
                   // Check parent for caption class
                   if (!caption && img.parentElement) {
                     const captionEl = img.parentElement.querySelector('[class*="caption"], figcaption');
@@ -1933,10 +2013,10 @@ export async function scrapeEdgePropMCP(
                       caption = captionEl.textContent?.trim() || '';
                     }
                   }
-                  
+
                   // Find which paragraph this image comes after
                   const paragraphIndex = findParagraphIndex(img);
-                  
+
                   images.push({
                     url: fullUrl,
                     alt: alt,
@@ -1948,38 +2028,42 @@ export async function scrapeEdgePropMCP(
                   console.log(`   ⚠️  Image ${idx + 1} has no src or data-src`);
                 }
               });
-              
+
               console.log(`📊 Extracted ${images.length} valid images from ${imageElements.length} total img elements`);
-              
+
               // Get main image (usually the first large image, or featured image)
               // mainImageUrl and mainImageCaption already declared at function scope
-              
+
               console.log(`🔍 Looking for main/featured image...`);
-              
+
               // Try to find featured/main image (prioritize larger images or featured images)
               let mainImage = contentContainer.querySelector('img[class*="featured"], img[class*="main"], img[class*="hero"]') ||
                               contentContainer.querySelector('img[class*="cover"]') ||
                               null;
-              
+
               // If no featured image, try to find the first large image (not logo/icon)
               if (!mainImage && images.length > 0) {
                 // Use the first valid image as main image
                 const firstValidImage = imageElements.find(img => {
                   const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-                  return src && 
-                         !src.toLowerCase().includes('logo') && 
+                  return src &&
+                         !src.toLowerCase().includes('logo') &&
                          !src.toLowerCase().includes('icon') &&
                          !src.toLowerCase().includes('avatar');
                 });
                 mainImage = firstValidImage || imageElements[0];
               }
-              
+
               if (mainImage && images.length > 0) {
                 // Use the corresponding image from our extracted images array
                 const mainSrc = mainImage.getAttribute('src') || mainImage.getAttribute('data-src') || mainImage.getAttribute('data-lazy-src') || '';
                 if (mainSrc) {
-                  mainImageUrl = mainSrc.startsWith('http') ? mainSrc : `https://www.edgeprop.sg${mainSrc.startsWith('/') ? '' : '/'}${mainSrc}`;
-                  
+                  mainImageUrl = mainSrc.startsWith('//')
+                    ? `https:${mainSrc}`
+                    : mainSrc.startsWith('http')
+                      ? mainSrc
+                      : `https://www.edgeprop.sg${mainSrc.startsWith('/') ? '' : '/'}${mainSrc}`;
+
                   // Find the corresponding image in our images array to get caption
                   const correspondingImage = images.find(img => img.url === mainImageUrl || img.url.includes(mainSrc));
                   if (correspondingImage && correspondingImage.caption) {
@@ -1993,29 +2077,29 @@ export async function scrapeEdgePropMCP(
                       mainImageCaption = captionEl.textContent?.trim() || '';
                     }
                   }
-                  
+
                   console.log(`✅ Found main image: ${mainImageUrl.substring(0, 80)}...`);
                 }
               } else {
                 console.log(`⚠️  No main image found`);
               }
-              
+
               // Extract HTML content (sanitized)
               htmlContent = contentContainer.innerHTML || '';
-              
+
               // Extract tags
               const tagElements = document.querySelectorAll('[class*="tag"], a[href*="field_tags_tid"]');
               tags = Array.from(tagElements)
                 .map(el => el.textContent?.trim())
                 .filter(tag => tag && tag.length > 0 && !tag.includes('Tags:'))
                 .slice(0, 10); // Limit tags to 10
-              
-              description = paragraphs.length > 0 ? 
-                paragraphs.find(p => p.length > 50 && !p.toLowerCase().includes(articleTitle.toLowerCase().substring(0, 20)))?.substring(0, 200) || 
+
+              description = paragraphs.length > 0 ?
+                paragraphs.find(p => p.length > 50 && !p.toLowerCase().includes(articleTitle.toLowerCase().substring(0, 20)))?.substring(0, 200) ||
                 paragraphs[0].substring(0, 200) : '';
-              
+
               console.log(`📊 Final image summary: ${images.length} images extracted, main image: ${mainImageUrl ? mainImageUrl.substring(0, 60) + '...' : 'Not found'}`);
-              
+
               return {
                 extractionSuccess,
                 usedSelector,
@@ -2059,7 +2143,7 @@ export async function scrapeEdgePropMCP(
                 }
               })(articleTitle); // Close IIFE and pass articleTitle
             }, article.title); // Pass the article title as a parameter
-            
+
             console.log(`✅ page.evaluate() completed for: ${article.title}`);
             console.log(`🔍 Checking extraction results:`);
             console.log(`   - articleData exists: ${!!articleData}`);
@@ -2076,7 +2160,7 @@ export async function scrapeEdgePropMCP(
             }
             console.log(`   - main_image_url: ${articleData?.main_image_url ? articleData.main_image_url.substring(0, 80) + '...' : 'Not found'}`);
             console.log(`   - tags count: ${articleData?.tags?.length || 0}`);
-            
+
             // Enhanced validation: check for Cloudflare blocks
             const hasCloudflareBlock = articleData?.text_content && (
               articleData.text_content.toLowerCase().includes('verify you are a human') ||
@@ -2085,16 +2169,16 @@ export async function scrapeEdgePropMCP(
               articleData.text_content.toLowerCase().includes('ddos protection') ||
               articleData.text_content.toLowerCase().includes('cloudflare')
             );
-            
+
             // Validate content quality before saving
-            const hasValidContent = articleData && 
-                                  articleData.extractionSuccess && 
-                                  articleData.text_content && 
+            const hasValidContent = articleData &&
+                                  articleData.extractionSuccess &&
+                                  articleData.text_content &&
                                   articleData.text_content.length > 500 && // Minimum content length
-                                  articleData.paragraphs && 
+                                  articleData.paragraphs &&
                                   articleData.paragraphs.length > 0 &&
                                   !hasCloudflareBlock;
-            
+
             if (hasCloudflareBlock) {
               console.log(`❌ Cloudflare block detected in content, skipping: ${article.title}`);
               articlesFailed++;
@@ -2112,7 +2196,7 @@ export async function scrapeEdgePropMCP(
               await articlePage.close();
               continue;
             }
-            
+
             if (hasValidContent) {
               console.log(`✅ Extraction successful! Creating fullArticle object...`);
               const fullArticle: MCPArticle = {
@@ -2136,17 +2220,17 @@ export async function scrapeEdgePropMCP(
 
               allArticles.push(fullArticle);
               console.log(`✅ Scraped: ${article.title} by ${articleData.author}`);
-              
+
               // Save immediately if requested
               if (saveImmediately && sessionId) {
                 try {
                   console.log(`💾 Saving article immediately: ${article.title}`);
                   console.log(`💾 saveImmediately: ${saveImmediately}, sessionId: ${sessionId}`);
-                  
+
                   // Save basic article metadata
                   const savedArticles = await db.upsertArticles([fullArticle], sessionId);
                   console.log(`✅ Saved metadata: ${savedArticles.newArticles} new, ${savedArticles.duplicates} duplicates`);
-                  
+
                   // Save full content
                   if (fullArticle.text_content) {
                     const contentData = {
@@ -2166,7 +2250,7 @@ export async function scrapeEdgePropMCP(
                     await upsertArticleContent({ ...fullArticle, ...contentData } as any);
                     console.log(`✅ Saved full content with ${fullArticle.images?.length || 0} images for: ${article.title}`);
                   }
-                  
+
                   // Send progress update with save confirmation
                   onProgress?.({
                     currentPage: pageNum,
@@ -2178,7 +2262,7 @@ export async function scrapeEdgePropMCP(
                     status: 'running',
                     message: `✅ Saved: ${article.title.substring(0, 50)}...`
                   });
-                  
+
                 } catch (saveError: any) {
                   console.error(`❌ Failed to save article ${article.title}:`, saveError);
                 }
@@ -2188,7 +2272,7 @@ export async function scrapeEdgePropMCP(
               console.log(`❌ Failed to extract content: ${article.title}`);
               console.log(`   - Reason: extractionSuccess=${articleData?.extractionSuccess}, text_content_length=${articleData?.text_content?.length || 0}`);
             }
-            
+
           } catch (error: any) {
             articlesFailed++;
             console.error(`Failed to scrape article ${article.title}:`, error);
@@ -2199,17 +2283,17 @@ export async function scrapeEdgePropMCP(
               console.log(`   ⚠️  Error closing article page (may already be closed)`);
             });
           }
-          
+
           // Reduced delay between articles (optimized for speed while avoiding rate limits)
           await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000)); // 2-4 seconds
         }
-        
+
         // Reduced delay between pages (optimized for speed)
         if (pageNum < maxPages) {
           await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)); // 1-3 seconds
         }
     }
-    
+
     onProgress({
       currentPage: maxPages,
       totalPages: maxPages,
@@ -2220,9 +2304,9 @@ export async function scrapeEdgePropMCP(
       status: 'completed',
       message: `Scraping completed! Found ${allArticles.length} articles, ${articlesFailed} failed.`
     });
-    
+
     return allArticles;
-    
+
   } catch (error: any) {
     console.error('❌ Scraper error:', error);
     onProgress({
@@ -2288,11 +2372,11 @@ export async function scrapeSingleArticleMCP(
   saveImmediately: boolean = false
 ): Promise<MCPArticle | null> {
   console.log('Starting single article scrape for:', url);
-  
+
   // Use regular playwright (Flaresolverr handles Cloudflare bypass)
   const { chromium } = await import('playwright');
-  
-  const launchOptions = { 
+
+  const launchOptions = {
     headless: false,
     args: [
       '--disable-blink-features=AutomationControlled',
@@ -2301,10 +2385,10 @@ export async function scrapeSingleArticleMCP(
       '--disable-setuid-sandbox',
     ]
   };
-  
+
   const browser = await chromium.launch(launchOptions);
   const page = await browser.newPage();
-  
+
   try {
     onProgress?.({
       currentPage: 1,
@@ -2316,21 +2400,21 @@ export async function scrapeSingleArticleMCP(
       status: 'running',
       message: 'Starting single article scrape...'
     });
-    
+
     // Navigate to the article URL
     console.log(`🌐 Navigating to: ${url}`);
-    await page.goto(url, { 
-      waitUntil: 'domcontentloaded', 
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
-    
+
     // Simple content verification (Flaresolverr should be used before calling this function)
     await page.waitForTimeout(2000); // Brief wait for content to load
-    
+
         const hasArticle = await page.evaluate(() => {
           const selectors = [
             'article .content',
-            '.article-content', 
+            '.article-content',
             '.post-content',
             '.entry-content',
             'article',
@@ -2338,27 +2422,27 @@ export async function scrapeSingleArticleMCP(
             '.content-body',
             '.article-body'
           ];
-          
+
           for (const selector of selectors) {
             const el = document.querySelector(selector);
             if (el && (el.textContent?.length || 0) > 500) {
               return true;
             }
           }
-          
+
           const bodyText = document.body?.textContent || '';
           return bodyText.length > 2000;
         }).catch(() => false);
-        
+
     if (!hasArticle) {
       console.log(`⚠️ Content not loaded`);
     } else {
       console.log(`✅ Content loaded successfully`);
     }
-    
+
     // Wait for content to stabilize
     await page.waitForTimeout(2000);
-    
+
     // Extract the article
     onProgress?.({
       currentPage: 1,
@@ -2370,13 +2454,13 @@ export async function scrapeSingleArticleMCP(
       status: 'running',
       message: 'Extracting article content...'
     });
-    
+
     try {
-      await page.waitForSelector('.jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
+	    await page.waitForSelector('#detail-content, .jsx-2128998887.detail-content, .jsx-4217446631, main article, article', { timeout: 5000 });
       console.log(`✅ Content container found`);
-      
+
       await page.waitForTimeout(2000);
-      
+
       await page.evaluate(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
@@ -2388,7 +2472,7 @@ export async function scrapeSingleArticleMCP(
     } catch (e: unknown) {
       console.log(`⚠️ Content container not found, proceeding anyway...`);
     }
-    
+
     // Extract article data using the same logic as scrapeEdgePropMCP
     const articleData = await page.evaluate(() => {
       try {
@@ -2396,7 +2480,7 @@ export async function scrapeSingleArticleMCP(
           (window as any).__name = function() { return ''; };
         }
       } catch (e: any) {}
-      
+
       return (function() {
         const cleanParagraphs = (rawParagraphs: string[]): string[] => {
           return rawParagraphs
@@ -2404,12 +2488,32 @@ export async function scrapeSingleArticleMCP(
             .filter(text => {
               if (!text || typeof text !== 'string') return false;
               if (text.length < 15) return false;
-              
+
               const wordCount = text.split(/\s+/).length;
               if (wordCount < 3) return false;
-              
+
               const lower = text.toLowerCase();
-              
+              const compactLower = lower.replace(/\s+/g, '');
+              const footerTerms = [
+                'about us',
+                'terms & conditions',
+                'privacy policy',
+                'contact us',
+                'advertise with us',
+                'user guide',
+                "we're hiring",
+                'faqs'
+              ];
+              const footerTermMatches = footerTerms.filter(term => lower.includes(term)).length;
+
+              if (footerTermMatches >= 3 ||
+	                  compactLower.includes('aboutusterms&conditionsprivacypolicycontactus') ||
+	                  compactLower.includes('followourchannelstoreceivepropertynewsupdates') ||
+	                  compactLower.includes('whatdoyouthinkofthisarticle?askbuddy') ||
+	                  lower.includes('for more news and analysis, read our weekly e-paper')) {
+                return false;
+              }
+
               const skipPatterns = [
                 /^(subscribe|login|register|sign up|sign in)$/i,
                 /^(home|news|property|search)$/i,
@@ -2426,7 +2530,8 @@ export async function scrapeSingleArticleMCP(
                 /^(javascript|enable javascript)$/i,
                 /^(cookies|accept cookies)$/i,
                 /^(newsletter|subscribe to)$/i,
-                /^(related articles|you may also like)$/i,
+                /^(related articles|related news|you may also like)$/i,
+                /^read also:/i,
                 /^(tags?:|categories?:|filed under)$/i,
                 /^(posted by|written by|author:)$/i,
                 /^(published on|updated on|last modified)$/i,
@@ -2439,35 +2544,69 @@ export async function scrapeSingleArticleMCP(
                 /^(trending|popular|most read)$/i,
                 /^(advertisement|ad|sponsored content)$/i
               ];
-              
+
               for (const pattern of skipPatterns) {
                 if (pattern.test(text)) return false;
               }
-              
+
               const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
               if (alphaCount < text.length * 0.5) return false;
-              
-              if (text.includes('function(') || text.includes('var ') || text.includes('const ') || 
+
+              if (text.includes('function(') || text.includes('var ') || text.includes('const ') ||
                   text.includes('let ') || text.includes('return ') || text.includes('console.')) {
                 return false;
               }
-              
+
               if (lower.includes('edgeprop') && (lower.includes('subscribe') || lower.includes('follow') || lower.includes('newsletter'))) {
                 return false;
               }
-              
-              if (lower.includes('edgeprop singapore') || 
+
+              if (lower.includes('edgeprop singapore') ||
                   lower.includes('edgeprop.sg') ||
                   lower.includes('contact agents') ||
                   lower.includes('clear all')) {
                 return false;
               }
-              
+
               return true;
-            });
-        };
-        
-        let extractionSuccess = false;
+	            });
+	        };
+	        const isTrailingNavigationParagraph = (text: string): boolean => {
+	          const lower = text.toLowerCase();
+	          const compactLower = lower.replace(/\s+/g, '');
+	          const concatenatedWords = (text.match(/[a-z][A-Z]/g) || []).length;
+	          const navigationSignals = [
+	            'browse listings',
+	            'popular for sale',
+	            'popular for rent',
+	            'by amenities',
+	            'near mrts',
+	            'near schools',
+	            'by hdb estate',
+	            'top articles',
+	            'buyer demand for prime london homes resilientprime london',
+	            'right condo upgrade starts years before the move',
+	          ];
+
+	          return navigationSignals.some(signal => lower.includes(signal)) ||
+	            compactLower.includes('angmokiobedokbishanbukitbatok') ||
+	            compactLower.includes('freeholdcondos999-yearcondos') ||
+	            compactLower.includes('sentosacovenormanton') ||
+	            compactLower.includes('onesophiaartisan') ||
+	            compactLower.includes('ubitechparkenterprise') ||
+	            compactLower.includes('commercialonesophiaartisan') ||
+	            compactLower.includes('industrialubitechparkenterprise') ||
+	            (text.length > 90 && concatenatedWords >= 1 && !/[.!?]["')\]]?$/.test(text));
+	        };
+	        const trimTrailingNavigationParagraphs = (items: string[]): string[] => {
+	          const cleaned = [...items];
+	          while (cleaned.length > 0 && isTrailingNavigationParagraph(cleaned[cleaned.length - 1])) {
+	            cleaned.pop();
+	          }
+	          return cleaned;
+	        };
+
+	        let extractionSuccess = false;
         let paragraphs: string[] = [];
         let textContent = '';
         let contentContainer: Element | null = null;
@@ -2485,10 +2624,10 @@ export async function scrapeSingleArticleMCP(
         let wordCount = 0;
         let readingTime = 0;
         let description = '';
-        
+
         try {
           console.log('🔍 Starting article data extraction...');
-          
+
           const checkSuccess = () => {
             if (paragraphs.length > 0 && textContent.length > 100) {
               extractionSuccess = true;
@@ -2496,9 +2635,10 @@ export async function scrapeSingleArticleMCP(
           };
 
           // Find the main article content area - use EdgeProp specific selectors
-          const articleSelectors = [
-            '.jsx-4217446631.article-detail.left-section', // Main article container
-            '.jsx-2128998887.detail-content', // Article content area
+	          const articleSelectors = [
+	            '#detail-content',
+	            '.jsx-4217446631.article-detail.left-section', // Main article container
+	            '.jsx-2128998887.detail-content', // Article content area
             '.jsx-4217446631', // Article container
             '.jsx-2128998887', // Content wrapper
             'main article', // Semantic article in main
@@ -2523,7 +2663,7 @@ export async function scrapeSingleArticleMCP(
               console.log(`❌ Selector failed: ${selector}`);
             }
           }
-          
+
           // Fallback to body but be more selective
           if (!contentContainer) {
             contentContainer = document.body;
@@ -2533,11 +2673,11 @@ export async function scrapeSingleArticleMCP(
           } else {
             console.log(`✅ Using targeted content container: ${contentContainer.tagName} (${usedSelector})`);
           }
-          
+
           // Extract title
           title = document.querySelector('h1')?.textContent?.trim() || '';
           console.log(`Title extracted: ${title}`);
-          
+
           // Extract metadata from article page
           // Try to find author using multiple approaches
           // First: Check if we're on a Cloudflare protection page
@@ -2547,7 +2687,7 @@ export async function scrapeSingleArticleMCP(
                                        document.querySelector('.cf-browser-verification') ||
                                        document.title?.toLowerCase().includes('cloudflare') ||
                                        document.body.textContent?.includes('Just a moment');
-          
+
           if (isCloudflareProtection) {
             console.log('⚠️ Detected Cloudflare protection page - skipping author extraction');
             author = 'EdgeProp Staff';
@@ -2561,7 +2701,7 @@ export async function scrapeSingleArticleMCP(
                 console.log(`Found author from meta tag: ${author}`);
               }
             }
-            
+
             // Method 1.5: Try additional meta tags
             if (author === 'EdgeProp Staff') {
               const additionalMetaTags = document.querySelectorAll('meta[property="author"], meta[name="article:author"], meta[property="article:author"]');
@@ -2574,7 +2714,7 @@ export async function scrapeSingleArticleMCP(
                 }
               }
             }
-            
+
             // Method 1.6: Look for JSON-LD structured data
             if (author === 'EdgeProp Staff') {
               const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -2582,7 +2722,7 @@ export async function scrapeSingleArticleMCP(
                 try {
                   const data = JSON.parse(script.textContent || '');
                   if (data.author) {
-                    const authorName = typeof data.author === 'string' ? data.author : 
+                    const authorName = typeof data.author === 'string' ? data.author :
                                      data.author.name || data.author['@name'] || '';
                     if (authorName && authorName.trim() && !authorName.toLowerCase().includes('edgeprop')) {
                       author = authorName.trim();
@@ -2596,25 +2736,25 @@ export async function scrapeSingleArticleMCP(
               }
             }
           }
-          
+
           // Method 2: Look for specific EdgeProp author patterns in different sections
           if (author === 'EdgeProp Staff') {
             const pageText = document.body.textContent || '';
-            
+
             const patterns = [
               /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:and|&)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)?)\s*\/\s*EdgeProp Singapore/i,
               /By\s+EdgeProp Singapore\s*\/\s*EdgeProp Singapore/i,
               /(?<![\w\s])([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*\/\s*EdgeProp Singapore/i,
               /By\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)(?:\s|$)/i
             ];
-            
+
             const searchSections = [
               pageText.substring(0, 5000),
               pageText.substring(5000, 10000),
               pageText.substring(10000, 20000),
               pageText
             ];
-            
+
             for (const pattern of patterns) {
               for (const section of searchSections) {
                 const match = section.match(pattern);
@@ -2624,10 +2764,10 @@ export async function scrapeSingleArticleMCP(
                     console.log(`Found EdgeProp staff writer: ${author}`);
                     break;
                   }
-                  
+
                   if (match[1]) {
                     const candidateAuthor = match[1].trim();
-                    
+
                     if (candidateAuthor &&
                         candidateAuthor.length > 3 &&
                         candidateAuthor.length < 50 &&
@@ -2663,46 +2803,47 @@ export async function scrapeSingleArticleMCP(
               if (author !== 'EdgeProp Staff') break;
             }
           }
-          
+
           console.log(`Final author determined: ${author}`);
-          
+
           // Try to find published date
           const dateElement = document.querySelector('time, [class*="date"], [class*="published"], meta[property="article:published_time"]');
           if (dateElement) {
-            publishedDate = dateElement.getAttribute('datetime') || 
-                            dateElement.getAttribute('content') || 
+            publishedDate = dateElement.getAttribute('datetime') ||
+                            dateElement.getAttribute('content') ||
                             dateElement.textContent?.trim() || '';
           }
-          
+
           // Try to find categories/tags - improved extraction
           const categoryElements = document.querySelectorAll('[class*="category"], [class*="tag"], meta[property="article:section"], a[href*="field_tags_tid"]');
-          const rawCategories = Array.from(categoryElements).map(el => 
+          const rawCategories = Array.from(categoryElements).map(el =>
             el.getAttribute('content') || el.textContent?.trim()
           ).filter(Boolean);
-          
+
           categories = [...new Set(rawCategories)]
             .filter(cat => cat && cat.length > 0 && cat.length < 100)
             .map(cat => cat.trim())
-            .filter(cat => !cat.toLowerCase().includes('tags:') && 
+            .filter(cat => !cat.toLowerCase().includes('tags:') &&
                            !cat.toLowerCase().includes('property news') ||
                            cat.toLowerCase() === 'property news');
-          
+
           if (categories.length === 0) {
             categories = ['Property News'];
           }
-          
+
           // Extract text content and paragraphs
           let mainContentArea = contentContainer;
-          
-          const contentAreaSelectors = [
-            '.jsx-2128998887.detail-content',
+
+	          const contentAreaSelectors = [
+	            '#detail-content',
+	            '.jsx-2128998887.detail-content',
             '.jsx-4217446631.article-detail',
             '[class*="detail-content"]',
             '[class*="article-content"]',
             'article > div',
             'main > article > div'
           ];
-          
+
           for (const selector of contentAreaSelectors) {
             const area = contentContainer.querySelector(selector);
             if (area && area.textContent && area.textContent.length > 500) {
@@ -2711,22 +2852,22 @@ export async function scrapeSingleArticleMCP(
               break;
             }
           }
-          
+
           let paragraphElements = Array.from(mainContentArea.querySelectorAll('p'));
-          
+
           // Check if we have enough substantial paragraphs
           const substantialParagraphs = paragraphElements.filter(p => {
             const text = p.textContent?.trim() || '';
             return text.length > 100 && text.split(/\s+/).length > 10;
           });
-          
+
           console.log(`Found ${paragraphElements.length} total <p> tags, ${substantialParagraphs.length} are substantial`);
-          
+
           // If not enough substantial paragraphs, also try divs that are likely content paragraphs
           if (paragraphElements.length < 5 || substantialParagraphs.length < 3) {
             const articleDivs = Array.from(mainContentArea.querySelectorAll('div')).filter(el => {
               const text = el.textContent || '';
-              return text.length > 100 && 
+              return text.length > 100 &&
                      text.split(/\s+/).length > 10 &&
                      !el.querySelector('div div div') &&
                      !el.querySelector('button, input, script, style, iframe') &&
@@ -2740,9 +2881,9 @@ export async function scrapeSingleArticleMCP(
             paragraphElements = paragraphElements.concat(articleDivs as any);
             console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
           }
-          
+
           console.log(`Found ${paragraphElements.length} paragraph elements from main content area`);
-          
+
           if (paragraphElements.length > 0) {
             const rawParagraphs = paragraphElements
               .map(el => el.textContent?.trim())
@@ -2754,23 +2895,23 @@ export async function scrapeSingleArticleMCP(
                        !lower.includes('cookie') &&
                        !lower.startsWith('http');
               });
-            
+
             console.log(`Raw paragraphs after filtering non-content: ${rawParagraphs.length}`);
-            
+
             if (rawParagraphs.length > 0) {
               console.log(`First raw paragraph: "${rawParagraphs[0]?.substring(0, 150)}..."`);
             }
-            
+
             paragraphs = cleanParagraphs(rawParagraphs);
             console.log(`🔍 After cleanParagraphs: ${paragraphs.length} paragraphs from ${rawParagraphs.length} raw`);
-            
+
             if (paragraphs.length === 0 && rawParagraphs.length > 0) {
               console.log(`⚠️ All paragraphs filtered by cleanParagraphs, using raw with minimal filter`);
               paragraphs = rawParagraphs.filter(p => {
                 if (!p || p.length < 20) return false;
                 const lower = p.toLowerCase();
-                return !lower.includes('subscribe') && 
-                       !lower.includes('follow us') && 
+                return !lower.includes('subscribe') &&
+                       !lower.includes('follow us') &&
                        !lower.includes('cookie policy') &&
                        !lower.includes('read also:') &&
                        !lower.startsWith('http') &&
@@ -2781,20 +2922,20 @@ export async function scrapeSingleArticleMCP(
                 console.log(`First minimal filtered paragraph: "${paragraphs[0].substring(0, 150)}..."`);
               }
             }
-            
+
             if (paragraphs.length === 0 && rawParagraphs.length > 0) {
               console.log(`⚠️ Even minimal filter removed everything, accepting all raw paragraphs`);
               paragraphs = rawParagraphs.filter(p => p && p.length >= 20);
               console.log(`Last resort: ${paragraphs.length} paragraphs`);
             }
-            
+
             if (paragraphs.length > 0) {
               textContent = paragraphs.join('\n\n');
               extractionSuccess = true;
               console.log(`✅ Generated textContent: ${textContent.length} chars from ${paragraphs.length} paragraphs`);
             }
           }
-          
+
           // Extract links
           links = Array.from(contentContainer.querySelectorAll('a'))
             .map(link => {
@@ -2806,17 +2947,17 @@ export async function scrapeSingleArticleMCP(
               };
             })
             .filter(link => link.url);
-          
+
           // Extract images from article content
           console.log(`🔍 Looking for images in contentContainer...`);
           const imageElements = Array.from(contentContainer.querySelectorAll('img'));
           console.log(`📷 Found ${imageElements.length} total img elements`);
-          
+
           const allParagraphElements: Element[] = [];
           const semanticParas = Array.from(contentContainer.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li'));
           const imageParagraphDivs = Array.from(contentContainer.querySelectorAll('div')).filter(el => {
             const text = el.textContent || '';
-            return text.length > 50 && 
+            return text.length > 50 &&
                    text.split(/\s+/).length > 8 &&
                    !el.querySelector('div div div') &&
                    !el.querySelector('button, input, script, style, iframe') &&
@@ -2827,9 +2968,9 @@ export async function scrapeSingleArticleMCP(
                    !text.toLowerCase().includes('tags:') &&
                    el.children.length <= 5;
           });
-          
+
           allParagraphElements.push(...semanticParas, ...imageParagraphDivs);
-          
+
           // Helper function to find which paragraph an image comes after
           const findParagraphIndex = (imgElement: Element): number => {
             if (!contentContainer) return -1;
@@ -2839,18 +2980,18 @@ export async function scrapeSingleArticleMCP(
               NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
               null
             );
-            
+
             const nodes: Node[] = [];
             let node: Node | null;
             while (node = walker.nextNode()) {
               nodes.push(node);
             }
-            
+
             const imgNode = imgElement;
             const imgPosition = nodes.indexOf(imgNode);
-            
+
             if (imgPosition === -1) return -1;
-            
+
             // Find the last paragraph element that appears before this image
             let lastParaIndex = -1;
             for (let i = 0; i < imgPosition; i++) {
@@ -2866,32 +3007,32 @@ export async function scrapeSingleArticleMCP(
                 }
               }
             }
-            
+
             // Now map to our extracted paragraphs array index
             // We need to match the paragraph text to find its index in the paragraphs array
             if (lastParaIndex >= 0 && lastParaIndex < allParagraphElements.length) {
               const paraElement = allParagraphElements[lastParaIndex];
               const paraText = paraElement.textContent?.trim() || '';
-              
+
               // Find matching paragraph in our extracted paragraphs array
               const matchingParaIdx = paragraphs.findIndex(p => {
                 // Check if this paragraph text matches or is contained in the extracted paragraph
                 return p.includes(paraText.substring(0, 50)) || paraText.includes(p.substring(0, 50));
               });
-              
+
               return matchingParaIdx >= 0 ? matchingParaIdx : lastParaIndex;
             }
-            
+
             return lastParaIndex;
           };
-          
+
           imageElements.forEach((img, idx) => {
             const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
-            
+
             if (src) {
               const lowerUrl = src.toLowerCase();
-              if (lowerUrl.includes('logo') || 
-                  lowerUrl.includes('icon') || 
+              if (lowerUrl.includes('logo') ||
+                  lowerUrl.includes('icon') ||
                   lowerUrl.includes('avatar') ||
                   lowerUrl.includes('button') ||
                   lowerUrl.includes('badge') ||
@@ -2903,30 +3044,34 @@ export async function scrapeSingleArticleMCP(
                   src.includes('data:image')) {
                 return;
               }
-              
-              const fullUrl = src.startsWith('http') ? src : `https://www.edgeprop.sg${src.startsWith('/') ? '' : '/'}${src}`;
+
+              const fullUrl = src.startsWith('//')
+                ? `https:${src}`
+                : src.startsWith('http')
+                  ? src
+                  : `https://www.edgeprop.sg${src.startsWith('/') ? '' : '/'}${src}`;
               const alt = img.getAttribute('alt') || '';
               let caption = '';
-              
+
               if (img.closest('figure')) {
                 const figCaption = img.closest('figure')?.querySelector('figcaption');
                 if (figCaption) {
                   caption = figCaption.textContent?.trim() || '';
                 }
               }
-              
+
               if (!caption && img.nextElementSibling) {
                 const nextSibling = img.nextElementSibling;
-                if (nextSibling.tagName === 'FIGCAPTION' || 
+                if (nextSibling.tagName === 'FIGCAPTION' ||
                     nextSibling.classList.toString().includes('caption') ||
                     nextSibling.tagName === 'P') {
                   caption = nextSibling.textContent?.trim() || '';
                 }
               }
-              
+
               // Find which paragraph this image comes after
               const paragraphIndex = findParagraphIndex(img);
-              
+
               images.push({
                 url: fullUrl,
                 alt: alt,
@@ -2936,49 +3081,53 @@ export async function scrapeSingleArticleMCP(
               console.log(`   ✅ Added image ${idx + 1}: ${fullUrl.substring(0, 80)}... (after paragraph ${paragraphIndex >= 0 ? paragraphIndex : 'unknown'})`);
             }
           });
-          
+
           console.log(`📊 Extracted ${images.length} valid images from ${imageElements.length} total img elements`);
-          
+
           // Get main image (thumbnail)
           let mainImage = contentContainer.querySelector('img[class*="featured"], img[class*="main"], img[class*="hero"]') ||
                           contentContainer.querySelector('img[class*="cover"]') ||
                           null;
-          
+
           if (!mainImage && images.length > 0) {
             const firstValidImage = imageElements.find(img => {
               const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-              return src && 
-                     !src.toLowerCase().includes('logo') && 
+              return src &&
+                     !src.toLowerCase().includes('logo') &&
                      !src.toLowerCase().includes('icon') &&
                      !src.toLowerCase().includes('avatar');
             });
             mainImage = firstValidImage || imageElements[0];
           }
-          
+
           if (mainImage && images.length > 0) {
             const mainSrc = mainImage.getAttribute('src') || mainImage.getAttribute('data-src') || mainImage.getAttribute('data-lazy-src') || '';
             if (mainSrc) {
-              mainImageUrl = mainSrc.startsWith('http') ? mainSrc : `https://www.edgeprop.sg${mainSrc.startsWith('/') ? '' : '/'}${mainSrc}`;
+              mainImageUrl = mainSrc.startsWith('//')
+                ? `https:${mainSrc}`
+                : mainSrc.startsWith('http')
+                  ? mainSrc
+                  : `https://www.edgeprop.sg${mainSrc.startsWith('/') ? '' : '/'}${mainSrc}`;
               console.log(`✅ Found main image: ${mainImageUrl.substring(0, 80)}...`);
             }
           }
-          
+
           htmlContent = contentContainer.innerHTML || '';
-          
+
           // Extract tags
           const tagElements = document.querySelectorAll('[class*="tag"], a[href*="field_tags_tid"]');
           tags = Array.from(tagElements)
             .map(el => el.textContent?.trim())
             .filter(tag => tag && tag.length > 0 && !tag.includes('Tags:'))
             .slice(0, 10);
-          
-          description = paragraphs.length > 0 ? 
-            paragraphs.find(p => p.length > 50)?.substring(0, 200) || 
+
+          description = paragraphs.length > 0 ?
+            paragraphs.find(p => p.length > 50)?.substring(0, 200) ||
             paragraphs[0].substring(0, 200) : '';
-          
+
           wordCount = textContent.split(/\s+/).length;
           readingTime = Math.ceil(wordCount / 200);
-          
+
           return {
             extractionSuccess,
             usedSelector,
@@ -3023,7 +3172,7 @@ export async function scrapeSingleArticleMCP(
       })();
     }).catch((error: any) => {
       console.log('Error in page.evaluate:', error);
-      return { 
+      return {
         extractionSuccess: false,
         usedSelector: '',
         title: '',
@@ -3043,7 +3192,7 @@ export async function scrapeSingleArticleMCP(
         reading_time_minutes: 0
       };
     });
-    
+
     // Enhanced validation: check for Cloudflare blocks in extracted content
     const hasCloudflareBlock = articleData.text_content && (
       articleData.text_content.toLowerCase().includes('verify you are a human') ||
@@ -3052,7 +3201,7 @@ export async function scrapeSingleArticleMCP(
       articleData.text_content.toLowerCase().includes('ddos protection') ||
       articleData.text_content.toLowerCase().includes('cloudflare')
     );
-    
+
     if (hasCloudflareBlock) {
       console.log('❌ Cloudflare block detected in extracted content');
       onProgress?.({
@@ -3067,15 +3216,15 @@ export async function scrapeSingleArticleMCP(
       });
       return null;
     }
-    
+
     // Validate content quality before saving
-    const hasValidContent = articleData.extractionSuccess && 
-                            articleData.paragraphs && 
+    const hasValidContent = articleData.extractionSuccess &&
+                            articleData.paragraphs &&
                             articleData.paragraphs.length > 0 &&
                             articleData.text_content &&
                             articleData.text_content.length > 500 && // Minimum content length
                             !hasCloudflareBlock;
-    
+
     if (!hasValidContent) {
       console.log('❌ Failed to extract valid article content');
       console.log(`   - extractionSuccess: ${articleData.extractionSuccess}`);
@@ -3093,11 +3242,11 @@ export async function scrapeSingleArticleMCP(
       });
       return null;
     }
-    
+
     // Extract path from URL
     const urlObj = new URL(url);
     const path = urlObj.pathname;
-    
+
     // Create article object using the extracted data
     const article: MCPArticle = {
       nid: `single-${Date.now()}`,
@@ -3122,18 +3271,18 @@ export async function scrapeSingleArticleMCP(
       html_content: articleData.html_content,
       scraped_at: new Date()
     };
-    
+
     console.log(`✅ Successfully scraped article: ${article.title}`);
-    
+
     // Save immediately if requested
     if (saveImmediately && sessionId) {
       try {
         console.log(`💾 Saving article immediately: ${article.title}`);
-        
+
         // Save basic article metadata
         const savedArticles = await db.upsertArticles([article], sessionId);
         console.log(`✅ Saved metadata: ${savedArticles.newArticles} new, ${savedArticles.duplicates} duplicates`);
-        
+
         // Save full content
         if (article.text_content) {
           const contentData = {
@@ -3157,7 +3306,7 @@ export async function scrapeSingleArticleMCP(
         console.error(`❌ Failed to save article: ${saveError}`);
       }
     }
-    
+
     onProgress?.({
       currentPage: 1,
       totalPages: 1,
@@ -3168,9 +3317,9 @@ export async function scrapeSingleArticleMCP(
       status: 'completed',
       message: `Successfully scraped: ${article.title}`
     });
-    
+
     return article;
-    
+
   } catch (error: any) {
     console.error('❌ Single article scrape failed:', error);
     onProgress?.({

@@ -14,13 +14,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SmartProp - Property Management Platform",
-  description: "Advanced property management and outreach platform",
+  title: "ViewProperty.ai - Property Intelligence Platform",
+  description: "Property intelligence, lead matching, and outreach automation for Singapore agents.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "SmartProp Swipe",
+    title: "ViewProperty.ai",
   },
 };
 

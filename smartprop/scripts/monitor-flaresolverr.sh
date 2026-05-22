@@ -42,7 +42,7 @@ check_api_health() {
         -H 'Content-Type: application/json' \
         -d '{"cmd":"request.get","url":"https://www.google.com","maxTimeout":60000}' \
         2>/dev/null || echo "000")
-    
+
     if [ "$response_code" = "200" ] || [ "$response_code" = "405" ]; then
         return 0  # Healthy
     else
@@ -63,30 +63,34 @@ check_container_health() {
 # Restart FlareSolverr container
 restart_flaresolverr() {
     log "WARN" "Attempting to restart FlareSolverr..."
-    
+
     # Stop existing container
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
-    
+
     # Pull latest image
     docker pull ghcr.io/flaresolverr/flaresolverr:latest
-    
+
     # Start with proper configuration
     docker run -d \
         --name="$CONTAINER_NAME" \
+        --platform=linux/arm64/v8 \
         --restart=unless-stopped \
+        --shm-size=2g \
         -p 8191:8191 \
         -e LOG_LEVEL=info \
         -e LOG_HTML=false \
         -e CAPTCHA_SOLVER=none \
         -e TZ=Asia/Singapore \
-        --memory=1g \
-        --cpus=1.0 \
+        -e MAX_TIMEOUT=300000 \
+        -e BROWSER_TIMEOUT=300000 \
+        --memory=2g \
+        --cpus=1.5 \
         ghcr.io/flaresolverr/flaresolverr:latest
-    
+
     # Wait for container to start
     sleep 10
-    
+
     # Verify it started
     if check_container_running; then
         log "INFO" "FlareSolverr container restarted successfully"
@@ -100,53 +104,52 @@ restart_flaresolverr() {
 # Main health check function
 main() {
     rotate_log
-    
+
     log "INFO" "Starting FlareSolverr health check..."
-    
+
     # Check if container exists and is running
     if ! check_container_running; then
         log "ERROR" "FlareSolverr container is not running"
         restart_flaresolverr
         exit $?
     fi
-    
+
     # Check container health status
     if ! check_container_health; then
         log "WARN" "FlareSolverr container health check failed"
     fi
-    
+
     # Check API health
     if ! check_api_health; then
         log "ERROR" "FlareSolverr API health check failed"
-        
+
         # Check restart cooldown
         local last_restart=$(grep "restarted successfully" "$LOG_FILE" 2>/dev/null | tail -1 | cut -d' ' -f1-2 || echo "")
         if [ -n "$last_restart" ]; then
             local last_restart_epoch=$(date -d "$last_restart" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M:%S" "$last_restart" +%s 2>/dev/null || echo 0)
             local current_epoch=$(date +%s)
             local time_since_restart=$((current_epoch - last_restart_epoch))
-            
+
             if [ $time_since_restart -lt $RESTART_COOLDOWN ]; then
                 log "WARN" "Skipping restart (cooldown period: $((RESTART_COOLDOWN - time_since_restart))s remaining)"
                 exit 1
             fi
         fi
-        
+
         # Count recent restart attempts
         local recent_restarts=$(grep -c "restarted successfully" "$LOG_FILE" 2>/dev/null | tail -1 || echo 0)
         if [ "$recent_restarts" -ge "$MAX_RESTART_ATTEMPTS" ]; then
             log "ERROR" "Maximum restart attempts ($MAX_RESTART_ATTEMPTS) reached. Manual intervention required."
             exit 1
         fi
-        
+
         restart_flaresolverr
         exit $?
     fi
-    
+
     log "INFO" "FlareSolverr is healthy"
     exit 0
 }
 
 # Run main function
 main "$@"
-

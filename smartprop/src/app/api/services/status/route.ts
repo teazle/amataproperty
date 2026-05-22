@@ -134,11 +134,13 @@ async function checkWAHA(): Promise<ServiceStatus['waha']> {
       if (sessionResponse.ok) {
         const sessionData = await sessionResponse.json();
         const sessionStatus = sessionData?.status;
+        const isConnected = sessionStatus === 'WORKING' ||
+          Boolean(sessionData?.me?.id && sessionData?.engine?.state === 'CONNECTED');
         return {
           online: true,
-          ready: sessionStatus === 'WORKING',
+          ready: isConnected,
           sessionStatus: sessionStatus || 'unknown',
-          error: sessionStatus !== 'WORKING' ? `Session status: ${sessionStatus}` : undefined,
+          error: !isConnected ? `Session status: ${sessionStatus}` : undefined,
         };
       } else {
         return {
@@ -284,4 +286,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

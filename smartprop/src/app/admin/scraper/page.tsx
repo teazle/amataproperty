@@ -29,13 +29,20 @@ export default async function ScraperPage() {
       <Suspense fallback={<div>Loading...</div>}>
         <ScraperDashboard
           initialActiveJob={activeJob}
-          initialJobHistory={jobHistory.jobs}
-          initialDistricts={districtData.districts}
-          initialQualityMetrics={qualityMetrics.metrics}
-          initialAuthStatus={authStatus.auth}
+          initialJobHistory={jobHistory.jobs || []}
+          initialDistricts={districtData.districts || []}
+          initialQualityMetrics={qualityMetrics.metrics || {
+            completenessScore: 0,
+            phoneValidationRate: 0,
+            duplicatesToday: 0,
+            staleListings: 0,
+          }}
+          initialAuthStatus={authStatus.auth || {
+            propertyguru: { exists: false, isAuthenticated: false, isFresh: false, cookieCount: 0, lastModified: null, lastAuth: null, stateAgeHours: null, failureReason: 'Auth status unavailable' },
+            edgeprop: { exists: false, isAuthenticated: false, isFresh: false, cookieCount: 0, lastModified: null, lastAuth: null, stateAgeHours: null, failureReason: 'Auth status unavailable' },
+          }}
         />
       </Suspense>
     </div>
   );
 }
-

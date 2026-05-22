@@ -6,7 +6,7 @@
 
 If you have the EC2 key and IP:
 ```bash
-ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ${EC2_USER:-ec2-user}@${EC2_IP}
 ```
 
 Or if using a different key:
@@ -96,7 +96,7 @@ Via Supabase Dashboard:
 
 Or via SQL:
 ```sql
-SELECT 
+SELECT
   id,
   platform,
   status,

@@ -6,15 +6,15 @@
 
 import Groq from 'groq-sdk';
 import { sendMessageWithTyping } from '../wa/waha';
-import { 
-  getContextualDelay, 
+import {
+  getContextualDelay,
   isTypingSimulationEnabled,
-  TimingContext 
+  TimingContext
 } from './human-behavior';
 import { getActivePrompt } from './prompt-manager';
-import { 
-  analyzeConversationWithAdvancedAI, 
-  ConversationContext as AdvancedConversationContext 
+import {
+  analyzeConversationWithAdvancedAI,
+  ConversationContext as AdvancedConversationContext
 } from './conversation-analyzer';
 import { cleanQuotes, hasQuotes } from './quote-cleaner';
 
@@ -121,7 +121,7 @@ export function updateObjectivesStatus(context: ConversationContext): {
   let timeslotsText: string | undefined;
 
   // Use database status if available, otherwise default to 'unknown'
-  let coBrokingStatus: 'willing' | 'not_willing' | 'needs_discussion' | 'unknown' = 
+  let coBrokingStatus: 'willing' | 'not_willing' | 'needs_discussion' | 'unknown' =
     context.objectivesStatus?.coBrokingStatus || 'unknown';
   let coBrokingConfirmed = context.objectivesStatus?.coBrokingConfirmed || false;
 
@@ -176,14 +176,14 @@ export function updateObjectivesStatus(context: ConversationContext): {
     const text = currentMessage.message?.toLowerCase() || '';
 
     // Look for user asking about co-broking, then check agent's response
-    if (currentMessage.role === 'user' && 
+    if (currentMessage.role === 'user' &&
         (text.includes('co-brok') || text.includes('co bro') || text.includes('cobroke'))) {
-      
+
       // Check the next message (agent's response)
       const nextMessage = history[i + 1];
       if (nextMessage && nextMessage.role === 'agent') {
         const agentResponse = nextMessage.message?.toLowerCase() || '';
-        
+
         if (negativeSignals.some(pattern => agentResponse.includes(pattern))) {
           coBrokingStatus = 'not_willing' as const;
           coBrokingConfirmed = false;
@@ -238,12 +238,12 @@ export async function analyzeConversationWithAdvancedContext(
 
     // Use advanced AI analysis
     const analysis = await analyzeConversationWithAdvancedAI(advancedContext);
-    
+
     // Convert back to legacy format
     // If recommendedResponse is empty, don't reply
-    const hasValidResponse = analysis.recommendedResponse && analysis.recommendedResponse.trim().length > 0;
+    const hasValidResponse = Boolean(analysis.recommendedResponse && analysis.recommendedResponse.trim().length > 0);
     const shouldReply = analysis.shouldContinue && hasValidResponse;
-    
+
     return {
       shouldReply,
       replyMessage: hasValidResponse ? analysis.recommendedResponse : undefined,
@@ -304,7 +304,7 @@ export async function analyzeConversationWithContext(
 
   // Check if we have both objectives (timeslots + co-broking confirmed)
   const objectives = updateObjectivesStatus(context);
-  
+
   if (objectives.timeslotsReceived && objectives.coBrokingConfirmed) {
     console.log('✅ Both objectives achieved - sending thank you');
     return {
@@ -352,17 +352,17 @@ export async function analyzeConversationWithContext(
   // Already gracefully ended - only reply to direct questions, keep it brief
   if (context.currentPhase === 'gracefully_ended') {
     console.log('🛑 Conversation already gracefully ended, checking for business questions...');
-    
+
     // Import business question detection
     const { detectBusinessQuestions, generateBusinessQuestionDeflection } = await import('./conversation-analyzer');
-    
+
     // Check if the message contains business questions
     const businessQuestionAnalysis = detectBusinessQuestions(context.agentMessage);
-    
+
     if (businessQuestionAnalysis.isBusinessQuestion) {
       // Generate appropriate deflection response
       const deflectionResponse = generateBusinessQuestionDeflection(businessQuestionAnalysis.questionType || 'general');
-      
+
       return {
         shouldReply: true,
         replyMessage: deflectionResponse,
@@ -374,14 +374,14 @@ export async function analyzeConversationWithContext(
         gracefulExit: true
       };
     }
-    
+
     // For non-business questions, provide a brief acknowledgment
-    const isQuestion = context.agentMessage.includes('?') || 
+    const isQuestion = context.agentMessage.includes('?') ||
                       context.agentMessage.toLowerCase().includes('when') ||
                       context.agentMessage.toLowerCase().includes('how') ||
                       context.agentMessage.toLowerCase().includes('what') ||
                       context.agentMessage.toLowerCase().includes('where');
-    
+
     if (isQuestion) {
       // Give a brief, graceful response to wrap up
       return {
@@ -395,7 +395,7 @@ export async function analyzeConversationWithContext(
         gracefulExit: true
       };
     }
-    
+
     return {
       shouldReply: false,
       newPhase: 'gracefully_ended',
@@ -425,13 +425,13 @@ export async function analyzeConversationWithContext(
   const determinePhase = (context: ConversationContext) => {
     const history = context.conversationHistory;
     const lastMessage = context.agentMessage.toLowerCase();
-    
+
     // Check for co-broking confirmation
-    const hasCoBrokingConfirmation = lastMessage.includes('yes') && 
+    const hasCoBrokingConfirmation = lastMessage.includes('yes') &&
       (lastMessage.includes('co-broke') || lastMessage.includes('co broke') || lastMessage.includes('co-broking'));
-    
+
     // Check for timeslots
-    const hasTimeslots = context.timeslotsDetected || context.timeslots || 
+    const hasTimeslots = context.timeslotsDetected || context.timeslots ||
       (lastMessage.match(/(?:mon|tue|wed|thu|fri|sat|sun).*\d+(?::\d+)?(?:\s*(?:am|pm))?/i) !== null);
 
     if (hasCoBrokingConfirmation && hasTimeslots) {
@@ -441,7 +441,7 @@ export async function analyzeConversationWithContext(
     } else if (hasTimeslots) {
       return 'timeslots_received';
     }
-    
+
     return context.currentPhase;
   };
 
@@ -454,10 +454,10 @@ export async function analyzeConversationWithContext(
     const timePatterns = [
       // Days with times
       /(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s*(?:to|-|,|\s)\s*(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s*(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:to|-|,|\s)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
-      
+
       // Single day with time
       /(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:to|-|,|\s)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/i,
-      
+
       // Just time ranges
       /\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:to|-|,|\s)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/i
     ];
@@ -479,7 +479,7 @@ export async function analyzeConversationWithContext(
 
   // Let AI handle initial message detection instead of pattern matching
   const hasInitialMessage = context.conversationHistory.length > 0;
-  
+
   if (!hasInitialMessage && context.conversationHistory.length === 0) {
     console.log('⚠️  No initial message found in empty conversation - this should not happen');
     return {
@@ -502,7 +502,7 @@ export async function analyzeConversationWithContext(
     ...context,
     timeslotsDetected: timeslotInfo.detected
   });
-  
+
   return aiDecision;
 }
 
@@ -527,18 +527,18 @@ async function callGroqAIWithContext(
   try {
     // Get current date and time context
     const now = new Date();
-    const options: Intl.DateTimeFormatOptions = { 
+    const options: Intl.DateTimeFormatOptions = {
       timeZone: 'Asia/Singapore',
       weekday: 'long',
       year: 'numeric',
-      month: 'long', 
+      month: 'long',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     };
     const currentDateTime = now.toLocaleString('en-SG', options);
     const currentDay = now.toLocaleString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long' });
-    
+
     // Format conversation history for AI
     const historyText = context.conversationHistory
       .map(msg => `${msg.role === 'user' ? 'You' : 'Agent'}: ${msg.message}`)
@@ -546,18 +546,18 @@ async function callGroqAIWithContext(
 
     // Get dynamic prompt from database - this should always exist now
     const dynamicPrompt = await getActivePrompt();
-    
+
     if (!dynamicPrompt) {
       throw new Error('No active AI prompt found in database. Please ensure a prompt is configured and active.');
     }
-    
+
     // Replace template variables in the prompt
     const systemPrompt = dynamicPrompt
       .replace(/\$\{BUYER_AGENT_NAME\}/g, BUYER_AGENT_NAME)
       .replace(/\$\{currentDateTime\}/g, currentDateTime)
       .replace(/\$\{context\.currentPhase\}/g, context.currentPhase)
       .replace(/\$\{context\.daysElapsed\}/g, context.daysElapsed.toString())
-      .replace(/\$\{context\.objectivesStatus\?\.timeslotsReceived \? '✓ Timeslots' : '✗ Timeslots'\}/g, 
+      .replace(/\$\{context\.objectivesStatus\?\.timeslotsReceived \? '✓ Timeslots' : '✗ Timeslots'\}/g,
         context.objectivesStatus?.timeslotsReceived ? '✓ Timeslots' : '✗ Timeslots')
       .replace(/\$\{context\.objectivesStatus\?\.coBrokingConfirmed \? '✓ Co-broking' : '✗ Co-broking'\}/g,
         context.objectivesStatus?.coBrokingConfirmed ? '✓ Co-broking' : '✗ Co-broking');
@@ -598,7 +598,7 @@ Analyze and decide: Should we reply? What phase are we in?`,
 
     const decision = JSON.parse(responseText) as ConversationDecision;
     console.log('🤖 AI Decision:', decision);
-    
+
     return decision;
   } catch (error: unknown) {
     console.error('❌ Error analyzing conversation with AI:', error);
@@ -878,16 +878,16 @@ export async function sendAutoReply(
       console.error(`   This should never happen - empty messages should be filtered earlier`);
       return false;
     }
-    
+
     // CRITICAL: Remove any quotes before sending (final safety check)
     const originalMessage = replyMessage;
     replyMessage = cleanQuotes(replyMessage);
-    
+
     // Validate quotes were removed
     if (hasQuotes(replyMessage)) {
       console.warn(`⚠️ [sendAutoReply] Quotes detected in message, cleaning again: "${replyMessage.substring(0, 50)}..."`);
       replyMessage = cleanQuotes(replyMessage);
-      
+
       if (hasQuotes(replyMessage)) {
         console.error(`❌ [sendAutoReply] Failed to remove quotes after multiple attempts!`);
         console.error(`   Original: "${originalMessage.substring(0, 100)}"`);
@@ -896,7 +896,7 @@ export async function sendAutoReply(
         replyMessage = replyMessage.replace(/^["']+|["']+$/g, '').trim();
       }
     }
-    
+
     // Log if we cleaned quotes
     if (originalMessage !== replyMessage) {
       console.log(`🧹 [sendAutoReply] Cleaned quotes before sending:`, {
@@ -904,20 +904,20 @@ export async function sendAutoReply(
         after: replyMessage.substring(0, 60)
       });
     }
-    
+
     console.log(`📤 Preparing auto-reply #${currentAutoReplyCount + 1} to ${agentPhone}`);
     console.log(`   Message: "${replyMessage}"`);
-    
+
     // Check if typing simulation is enabled
     if (isTypingSimulationEnabled()) {
       // Calculate contextual delay based on message length and conversation context
       const delay = getContextualDelay(replyMessage.length, context);
-      
+
       console.log(`⌨️  Simulating human typing: ${delay}ms delay`);
-      
+
       // Send message with typing indicator
       const result = await sendMessageWithTyping(agentPhone, replyMessage, delay);
-      
+
       if (!result.success) {
         console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
         console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
@@ -984,7 +984,7 @@ export async function analyzeAgentMessage(
   };
 
   const decision = await analyzeConversationWithContext(context);
-  
+
   return {
     shouldReply: decision.shouldReply,
     replyMessage: decision.replyMessage,
@@ -1014,7 +1014,7 @@ export function generateAutoReply(decision: {
 
 export function analyzeCoBrokingStatus(message: string): CoBrokingAnalysisResult {
   const lowerMessage = message.toLowerCase();
-  
+
   // Check for explicit co-broking rejection
   if (lowerMessage.includes('no co-broke') || lowerMessage.includes('no co broke') || lowerMessage.includes('not co-broke')) {
     return {
@@ -1022,7 +1022,7 @@ export function analyzeCoBrokingStatus(message: string): CoBrokingAnalysisResult
       reason: 'Agent explicitly rejected co-broking'
     };
   }
-  
+
   // Check for co-broking discussion needed
   if (lowerMessage.includes('discuss') || lowerMessage.includes('talk') || lowerMessage.includes('check')) {
     return {
@@ -1030,7 +1030,7 @@ export function analyzeCoBrokingStatus(message: string): CoBrokingAnalysisResult
       reason: 'Agent wants to discuss co-broking terms'
     };
   }
-  
+
   // Check for co-broking acceptance
   if (lowerMessage.includes('co-broke') || lowerMessage.includes('co broke') || lowerMessage.includes('co-broking')) {
     if (lowerMessage.includes('yes') || lowerMessage.includes('ok') || lowerMessage.includes('sure')) {
@@ -1040,7 +1040,7 @@ export function analyzeCoBrokingStatus(message: string): CoBrokingAnalysisResult
       };
     }
   }
-  
+
   // Default case - need more information
   return {
     coBrokingStatus: 'unknown' as const,

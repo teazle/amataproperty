@@ -1,19 +1,19 @@
 /**
  * PropertyGuru District-based Scraper
- * 
+ *
  * This script scrapes PropertyGuru listings by district (D01-D28)
  * with configurable price range.
- * 
+ *
  * Usage:
  *   bun src/workers/pg.districts.ts
- * 
+ *
  * Environment Variables:
  *   PG_DISTRICTS - Comma-separated list of districts to scrape (e.g., "01,09,10,11")
  *                  Default: All districts (01-28)
  *   PG_MIN_PRICE - Minimum price filter (default: 1000000)
  *   PG_MAX_PRICE - Maximum price filter (default: 3000000)
  *   PG_MAX_PAGES - Max pages per district (default: 3)
- * 
+ *
  * Examples:
  *   PG_DISTRICTS="09,10,11" bun src/workers/pg.districts.ts
  *   PG_DISTRICTS="01,02,03" PG_MAX_PAGES=5 bun src/workers/pg.districts.ts
@@ -28,24 +28,51 @@ import { CHROME_UA, humanPause } from './stealth.js';
 import { upsertAgentAndListing } from './upsert.js';
 import { execSync, exec, spawn } from 'child_process';
 import { supabase } from './supa.js';
-import { 
-  solveCloudflareWithFlaresolverr, 
-  applyFlaresolverrToContext, 
+import {
+  solveCloudflareWithFlaresolverr,
+  applyFlaresolverrToContext,
   FLARESOLVERR_UA,
   createFlaresolverrSession
 } from './flaresolverr.js';
+import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health.js';
+
+const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
 
 // Helper function to re-authenticate if needed
 async function reAuthenticate(): Promise<boolean> {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
-  const authScriptPath = path.join(process.cwd(), 'src', 'workers', 'auth.pg.ts');
+
+  // Check if credentials are available
+  if (!process.env.PG_EMAIL || !process.env.PG_PASSWORD) {
+    console.error('❌ PG_EMAIL and PG_PASSWORD environment variables are not set!');
+    return false;
+  }
+
+  const browserUseAuthScriptPath = path.join(process.cwd(), 'scripts', 'auth-pg-browser-use-cloud.ts');
+  const defaultAuthScriptPath = path.join(process.cwd(), 'src', 'workers', 'auth.pg.ts');
+  const shouldUseBrowserUseCloud = Boolean(process.env.BROWSER_USE_API_KEY) && fs.existsSync(browserUseAuthScriptPath);
+  const authScriptPath = shouldUseBrowserUseCloud ? browserUseAuthScriptPath : defaultAuthScriptPath;
   const stateFilePath = path.join(process.cwd(), 'storage', 'pg.state.json');
   const isLinux = process.platform === 'linux';
-  const bunPath = '/home/ec2-user/.bun/bin/bun'; // Explicit Bun path
+  const bunCandidates = [
+    process.env.BUN_PATH,
+    '/usr/local/bin/bun',
+    '/root/.bun/bin/bun',
+    '/home/ec2-user/.bun/bin/bun',
+    'bun',
+  ].filter((value): value is string => Boolean(value));
+  const bunPath =
+    bunCandidates.find((candidate) => candidate === 'bun' || fs.existsSync(candidate)) ?? 'bun';
+
+  // Ensure storage directory exists
+  const storageDir = path.dirname(stateFilePath);
+  if (!fs.existsSync(storageDir)) {
+    fs.mkdirSync(storageDir, { recursive: true });
+  }
 
   const env = {
     ...process.env,
-    PATH: `${bunPath}:${process.env.PATH}`, // Ensure Bun is in PATH
+    PATH: isLinux ? `${bunPath}:${process.env.PATH}` : process.env.PATH, // Ensure Bun is in PATH
     HOME: process.env.HOME || '/home/ec2-user',
   };
 
@@ -53,12 +80,21 @@ async function reAuthenticate(): Promise<boolean> {
   let initialMtimeMs = 0;
   if (fs.existsSync(stateFilePath)) {
     initialMtimeMs = fs.statSync(stateFilePath).mtimeMs;
+    try {
+      fs.unlinkSync(stateFilePath);
+      console.log('   🗑️  Removed old auth state file');
+    } catch (_) {
+      /* ignore */
+    }
   }
 
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const command = isLinux ? 'xvfb-run' : bunPath;
     const args = isLinux ? ['-a', bunPath, authScriptPath] : [authScriptPath];
 
+    if (shouldUseBrowserUseCloud) {
+      console.log('   ☁️  Using Browser Use Cloud auth fallback for PropertyGuru');
+    }
     console.log(`   🚀 Spawning auth process: ${command} ${args.join(' ')}`);
     const child = spawn(command, args, {
       cwd: process.cwd(),
@@ -95,30 +131,52 @@ async function reAuthenticate(): Promise<boolean> {
       resolve(false);
     });
 
-    child.on('exit', async (code, signal) => {
-      clearTimeout(timeout);
-      console.log(`   Auth process exited with code ${code}, signal ${signal}`);
-      // Check if the state file was updated after the process started
-      if (fs.existsSync(stateFilePath)) {
-        const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
-        if (newMtimeMs > initialMtimeMs) {
-          console.log('✅ Authentication state file updated, assuming successful re-authentication.');
-          authSuccess = true;
-        } else {
-          console.log('⚠️  Authentication state file not updated, re-authentication may have failed.');
-        }
-      } else {
-        console.log('⚠️  Authentication state file does not exist after re-authentication attempt.');
-      }
+      child.on('exit', (code, signal) => {
+        clearTimeout(timeout);
+        console.log(`   Auth process exited with code ${code ?? 'null'}, signal ${signal ?? 'none'}`);
 
-      if (authSuccess) {
-        console.log('✅ Re-authentication complete!\n');
-        resolve(true);
-      } else {
-        console.error('❌ Re-authentication failed (process exited abnormally or state not updated).');
-        resolve(false);
-      }
-    });
+        // Wait a moment for file writes to complete
+        setTimeout(() => {
+          // Check if the state file was updated after the process started
+          if (fs.existsSync(stateFilePath)) {
+            const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
+            if (newMtimeMs > initialMtimeMs) {
+              try {
+                const content = fs.readFileSync(stateFilePath, 'utf-8');
+                const data = JSON.parse(content);
+                if (Array.isArray(data.cookies) && data.cookies.length > 0) {
+                  console.log(`✅ Authentication state file updated with ${data.cookies.length} cookies.`);
+                  authSuccess = true;
+                } else {
+                  console.log('⚠️  Authentication state file updated but has no cookies.');
+                  console.log(`   State file keys: ${Object.keys(data).join(', ')}`);
+                }
+              } catch (parseError) {
+                console.error('⚠️  Could not parse state file:', parseError);
+              }
+            } else {
+              console.log(`⚠️  Authentication state file not updated (mtime unchanged: ${initialMtimeMs} -> ${newMtimeMs}).`);
+            }
+          } else {
+            console.log('⚠️  Authentication state file does not exist after re-authentication attempt.');
+            console.log(`   Expected path: ${stateFilePath}`);
+          }
+
+          if (authSuccess) {
+            console.log('✅ Re-authentication complete!\n');
+            resolve(true);
+          } else if (code === 0 || code === null) {
+            // Exit code 0 or null but no state file - might still be OK if file check passed
+            console.log('⚠️  Process exited with code 0/null but state file check failed - treating as failure');
+            console.log(`   Possible causes: Authentication script failed silently, Flaresolverr unavailable, or login flow changed`);
+            resolve(false);
+          } else {
+            console.error(`❌ Re-authentication failed (process exited with code ${code}).`);
+            console.error(`   Common causes: Invalid credentials, Cloudflare blocking, Flaresolverr unavailable, or website changes`);
+            resolve(false);
+          }
+        }, 1000); // Wait 1 second for file writes to complete
+      });
   });
 }
 
@@ -133,49 +191,49 @@ function parsePrice(priceText: string): number | undefined {
 
 function cleanPropertyTitle(title: string): string {
   if (!title) return title;
-  
+
   let cleaned = title;
-  
+
   // Remove PropertyGuru suffix
   cleaned = cleaned.replace(/\s*\|\s*PropertyGuru Singapore$/i, '');
   cleaned = cleaned.replace(/\s*\|\s*PropertyGuru$/i, '');
-  
+
   // Remove EdgeProp suffix
   cleaned = cleaned.replace(/\s*\|\s*EdgeProp.*$/i, '');
-  
+
   // Remove "For Sale at S$..." suffix
   cleaned = cleaned.replace(/\s+(For Sale|For Rent)\s+at\s+S\$.*$/i, '');
-  
+
   // Remove just "For Sale" or "For Rent" at the end
   cleaned = cleaned.replace(/\s+(For Sale|For Rent)$/i, '');
-  
+
   // Remove property type at the end if redundant
   cleaned = cleaned.replace(/\s+(Condominium|Apartment|HDB|Landed|Terrace)$/i, '');
-  
+
   return cleaned.trim();
 }
 
 function cleanAddress(address: string): string {
   if (!address) return address;
-  
+
   let cleaned = address;
-  
+
   // Remove PropertyGuru suffix
   cleaned = cleaned.replace(/\s*\|\s*PropertyGuru Singapore$/i, '');
   cleaned = cleaned.replace(/\s*\|\s*PropertyGuru$/i, '');
-  
+
   // Remove EdgeProp suffix
   cleaned = cleaned.replace(/\s*\|\s*EdgeProp.*$/i, '');
-  
+
   // Remove "For Sale at S$..." suffix
   cleaned = cleaned.replace(/\s+(For Sale|For Rent)\s+at\s+S\$.*$/i, '');
-  
+
   // Remove just "For Sale" or "For Rent" at the end
   cleaned = cleaned.replace(/\s+(For Sale|For Rent)$/i, '');
-  
+
   // Remove property type at the end if redundant
   cleaned = cleaned.replace(/\s+(Condominium|Apartment|HDB|Landed|Terrace|Shophouse)$/i, '');
-  
+
   return cleaned.trim();
 }
 
@@ -225,16 +283,16 @@ async function extractPropertyDetails(page: Page, title: string): Promise<{
     // Column 1 has TOP/Year info, Column 2 has Tenure info
     const detailsCol1Selector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.col-lg-8.col-md-12 > div.row > div > section.details-section > div > table > tbody > tr:nth-child(2) > td:nth-child(1) > div > div > div > div';
     const detailsCol2Selector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.col-lg-8.col-md-12 > div.row > div > section.details-section > div > table > tbody > tr:nth-child(2) > td:nth-child(2) > div > div > div';
-    
+
     const detailsTextCol1 = await page.locator(detailsCol1Selector).textContent().catch(() => '');
     const detailsTextCol2 = await page.locator(detailsCol2Selector).textContent().catch(() => '');
-    
+
     // Combine both columns for parsing
     const detailsText = `${detailsTextCol1} ${detailsTextCol2}`;
-    
+
     if (detailsText) {
       console.log(`   📋 Details text: ${detailsText.substring(0, 100)}`);
-      
+
       // Extract tenure - look for "Freehold tenure", "Freehold", "99-year lease", "103-year lease", etc.
       const tenureMatch = detailsText.match(/(\d+[\s-]*years?(?:\s+lease)?|freehold(?:\s+tenure)?)/i);
       if (tenureMatch) {
@@ -246,7 +304,7 @@ async function extractPropertyDetails(page: Page, title: string): Promise<{
           tenure = 'Freehold';
         }
       }
-      
+
       // Extract year built
       const yearMatch = detailsText.match(/(?:TOP|Completed|Built).*?(\d{4})|(\b19\d{2}\b|\b20\d{2}\b)/i);
       if (yearMatch) {
@@ -261,7 +319,7 @@ async function extractPropertyDetails(page: Page, title: string): Promise<{
     // Look for various property type patterns
     const propertySnapshotSelector = 'div.property-snapshot-section';
     const snapshotText = await page.locator(propertySnapshotSelector).textContent().catch(() => '');
-    
+
     // Try multiple patterns to catch all variations
     const propertyTypePatterns = [
       // Complex types first (more specific)
@@ -273,7 +331,7 @@ async function extractPropertyDetails(page: Page, title: string): Promise<{
       // Simple types
       /(Condominium|Apartment|HDB|Landed|Terrace|Detached|Bungalow|Townhouse)\s+for\s+(sale|rent)/i,
     ];
-    
+
     if (snapshotText) {
       for (const pattern of propertyTypePatterns) {
         const match = snapshotText.match(pattern);
@@ -334,11 +392,11 @@ async function extractPropertyDetails(page: Page, title: string): Promise<{
 async function scrapePropertyGuruByDistrict() {
   // Check for active scraper lock
   const lockFile = path.join(process.cwd(), 'storage', 'pg-scraper.lock');
-  
+
   if (fs.existsSync(lockFile)) {
     const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf-8'));
     const lockAge = Date.now() - new Date(lockData.startedAt).getTime();
-    
+
     // Check if the process is actually running
     let processRunning = false;
     if (lockData.pid) {
@@ -361,7 +419,7 @@ async function scrapePropertyGuruByDistrict() {
     } else {
       console.log('   ⚠ No PID in lock file, cannot verify process');
     }
-    
+
     // If process is not running, remove stale lock file
     if (!processRunning) {
       console.log('⚠️  Found stale lock file (process not running), removing...');
@@ -402,14 +460,14 @@ async function scrapePropertyGuruByDistrict() {
   // Build district list
   let districts: string[] = [];
   const validDistricts = Array.from({ length: 28 }, (_, i) => (i + 1).toString().padStart(2, '0'));
-  
+
   if (districtsInput === 'ALL') {
     // All Singapore districts (01-28)
     districts = validDistricts;
   } else {
     // Parse and validate districts
     const requestedDistricts = districtsInput.split(',').map(d => d.trim().padStart(2, '0'));
-    
+
     // Validate each district
     for (const district of requestedDistricts) {
       if (!validDistricts.includes(district)) {
@@ -428,7 +486,7 @@ async function scrapePropertyGuruByDistrict() {
       districts.push(district);
     }
   }
-  
+
   if (districts.length === 0) {
     console.error('❌ No valid districts specified!');
     // Remove lock file before exit
@@ -447,9 +505,11 @@ async function scrapePropertyGuruByDistrict() {
   const jobStatus = {
     startedAt: new Date().toISOString(),
     districts: districts.join(','),
+    jobId: process.env.PG_JOB_ID || null,
     pid: process.pid,
     status: 'running',
     statusMessage: 'Starting scraper...',
+    dryRun: isDryRun,
     progress: {
       currentDistrict: null as string | null,
       currentPage: 0,
@@ -459,20 +519,20 @@ async function scrapePropertyGuruByDistrict() {
     completedAt: undefined as string | undefined,
     stats: undefined as typeof overallStats | undefined
   };
-  
+
   fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-  
+
   // Flag to track if we should stop gracefully
   let shouldStop = false;
-  
+
   // CRITICAL: Browser cleanup function that ensures browsers are ALWAYS closed
   // Declare context variable outside so it's accessible in cleanup
   let context: BrowserContext | null = null;
-  
+
   const cleanupBrowser = async (browserInstance: Browser | null, reason: string = 'cleanup') => {
     try {
       console.log(`🧹 Closing browser resources (${reason})...`);
-      
+
       // Close context first, then browser
       if (context) {
         try {
@@ -483,7 +543,7 @@ async function scrapePropertyGuruByDistrict() {
         }
         context = null;
       }
-      
+
       if (browserInstance && browserInstance.isConnected()) {
         await browserInstance.close();
         console.log('✅ Browser closed successfully');
@@ -510,10 +570,10 @@ async function scrapePropertyGuruByDistrict() {
   const handleStopSignal = async (signal: string) => {
     console.log(`\n🛑 Received ${signal} signal - stopping scraper gracefully...`);
     shouldStop = true;
-    
+
     // CRITICAL: Close browser FIRST before doing anything else
     await cleanupBrowser(browser, `signal: ${signal}`);
-    
+
     // Update and remove lock file
     if (fs.existsSync(lockFile)) {
       try {
@@ -537,7 +597,7 @@ async function scrapePropertyGuruByDistrict() {
         }
       }
     }
-    
+
     // Update database if jobId exists
     const jobId = process.env.PG_JOB_ID;
     if (jobId) {
@@ -555,19 +615,19 @@ async function scrapePropertyGuruByDistrict() {
         console.error('Failed to update database:', error);
       }
     }
-    
+
     // Clean up and exit
     process.exit(0);
   };
-  
+
   // Register signal handlers
   process.on('SIGTERM', () => handleStopSignal('SIGTERM'));
   process.on('SIGINT', () => handleStopSignal('SIGINT'));
-  
+
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
   // Declare browser variable early so it can be accessed in error handlers
   let browser: any = null;
-  
+
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
   process.on('uncaughtException', async (error) => {
     console.error('❌ Uncaught exception:', error);
@@ -576,7 +636,7 @@ async function scrapePropertyGuruByDistrict() {
     }
     process.exit(1);
   });
-  
+
   // CRITICAL: Handle unhandled promise rejections - close browser before crashing
   process.on('unhandledRejection', async (reason, promise) => {
     console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
@@ -585,7 +645,7 @@ async function scrapePropertyGuruByDistrict() {
     }
     process.exit(1);
   });
-  
+
   console.log('🚀 Starting PropertyGuru District-based Scraper...');
   console.log(`📍 Districts to scrape: ${districts.join(', ')}`);
   console.log(`💰 Price range: $${minPrice.toLocaleString()} - $${maxPrice.toLocaleString()}`);
@@ -598,7 +658,7 @@ async function scrapePropertyGuruByDistrict() {
 
   const stateFilePath = path.join(process.cwd(), 'storage', 'pg.state.json');
   const hasStorageState = fs.existsSync(stateFilePath);
-  
+
   if (!hasStorageState) {
     console.log('⚠️  No storage state found - running without authentication');
     console.log('💡 Run `bun run auth:pg` first to save login state\n');
@@ -607,7 +667,7 @@ async function scrapePropertyGuruByDistrict() {
   // Check if auth state file exists and is recent (less than 24 hours old)
   const stateFileExists = fs.existsSync(stateFilePath);
   let shouldReAuth = !stateFileExists;
-  
+
   if (stateFileExists) {
     const stats = fs.statSync(stateFilePath);
     const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
@@ -618,12 +678,12 @@ async function scrapePropertyGuruByDistrict() {
       console.log(`✅ Using existing auth state file (${ageInHours.toFixed(1)} hours old)`);
     }
   }
-  
+
   // Re-authenticate only if needed
   if (shouldReAuth) {
     console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
     const authSuccess = await reAuthenticate();
-    
+
     if (!authSuccess) {
       console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
       // Update lock file and database, then remove lock file
@@ -647,7 +707,7 @@ async function scrapePropertyGuruByDistrict() {
           }
         }
       }
-      
+
       const jobId = process.env.PG_JOB_ID;
       if (jobId) {
         try {
@@ -664,10 +724,10 @@ async function scrapePropertyGuruByDistrict() {
           console.error('Failed to update database:', error);
         }
       }
-      
+
       process.exit(1);
     }
-    
+
     // Verify auth state exists after re-auth
     const updatedStateExists = fs.existsSync(stateFilePath);
     if (!updatedStateExists) {
@@ -693,7 +753,7 @@ async function scrapePropertyGuruByDistrict() {
           }
         }
       }
-      
+
       const jobId = process.env.PG_JOB_ID;
       if (jobId) {
         try {
@@ -710,11 +770,11 @@ async function scrapePropertyGuruByDistrict() {
           console.error('Failed to update database:', error);
         }
       }
-      
+
       process.exit(1);
     }
   }
-  
+
   // Final check: ensure auth state file exists before proceeding
   if (!fs.existsSync(stateFilePath)) {
     console.error('❌ Authentication state file not found! Cannot proceed.');
@@ -739,10 +799,10 @@ async function scrapePropertyGuruByDistrict() {
         }
       }
     }
-    
+
     process.exit(1);
   }
-  
+
 
   // CRITICAL: Create a Flaresolverr session at the start to maintain cookies across all requests
   // Sessions retain cookies until destroyed, which is essential for Cloudflare bypass across multiple pages
@@ -759,7 +819,7 @@ async function scrapePropertyGuruByDistrict() {
   // Match Flaresolverr's browser fingerprint exactly for cookie compatibility
   const isHeadless = process.env.HEADLESS !== 'false' && process.env.HEADLESS !== '0'; // Default to headless unless explicitly disabled
   // Note: browser is already declared earlier for error handlers, just assign to it here
-  
+
   // Initialize overallStats BEFORE try block so it's accessible in finally block
   const overallStats = {
     totalDistricts: 0,
@@ -768,9 +828,12 @@ async function scrapePropertyGuruByDistrict() {
     totalErrors: 0,
     totalSkippedNoPhone: 0,
   };
-  
+
   try {
     browser = await chromium.launch({
+    executablePath: resolveChromiumExecutablePath(
+      typeof chromium.executablePath === 'function' ? chromium.executablePath() : undefined
+    ) || undefined,
     headless: isHeadless, // Use headless mode on EC2/server environments
     plugins: [
       ...plugins.recommended({
@@ -834,20 +897,21 @@ async function scrapePropertyGuruByDistrict() {
   // Always use the fresh auth state after re-auth
   contextOptions.storageState = stateFilePath;
 
-  context = await browser.newContext(contextOptions);
+  const scraperContext = await browser.newContext(contextOptions);
+  context = scraperContext;
 
   // Enhanced stealth script matching EdgeProp scraper (works on EC2)
-  await context.addInitScript(() => {
+  await scraperContext.addInitScript(() => {
     // Remove webdriver property
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
     });
-    
+
     // Mock chrome object
     (window as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome = {
       runtime: {},
     };
-    
+
     // Override permissions API
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
@@ -855,17 +919,17 @@ async function scrapePropertyGuruByDistrict() {
         Promise.resolve({ state: Notification.permission } as PermissionStatus) :
         originalQuery(parameters)
     );
-    
+
     // Mock plugins
     Object.defineProperty(navigator, 'plugins', {
       get: () => [1, 2, 3, 4, 5],
     });
-    
+
     // Mock mimeTypes
     Object.defineProperty(navigator, 'mimeTypes', {
       get: () => [1, 2, 3, 4, 5],
     });
-    
+
     // Override getBattery
     if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
       (navigator as any).getBattery = () => Promise.resolve({
@@ -879,10 +943,10 @@ async function scrapePropertyGuruByDistrict() {
 
   let consecutiveNoPhone = 0;
   const MAX_CONSECUTIVE_NO_PHONE = 2; // Re-auth if 2 consecutive listings have no phone
-  
+
   // Track processed URLs to avoid duplicates across pages
   const processedUrls = new Set<string>();
-  
+
   // Track cookie saves to avoid excessive file I/O
   let listingsSinceLastCookieSave = 0;
   const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
@@ -899,7 +963,7 @@ async function scrapePropertyGuruByDistrict() {
     // Track if Flaresolverr has been called for search page (to avoid multiple calls)
     let flaresolverrCalledForSearchPage = false;
 
-    const page = await context.newPage();
+    const page = await scraperContext.newPage();
 
     try {
       for (let pageNum = 1; pageNum <= maxPagesPerDistrict; pageNum++) {
@@ -909,7 +973,7 @@ async function scrapePropertyGuruByDistrict() {
         jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
         jobStatus.statusMessage = `Scraping District ${district} - Page ${pageNum}/${maxPagesPerDistrict}`;
         fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-        
+
         // Build search URL with proper query string handling
         const baseUrl = 'https://www.propertyguru.com.sg/property-for-sale';
         const params = new URLSearchParams({
@@ -921,7 +985,7 @@ async function scrapePropertyGuruByDistrict() {
           districtCode: districtCode
         });
         const searchUrl = `${baseUrl}?${params.toString()}`;
-        
+
         console.log(`\n📖 District ${district} - Page ${pageNum}/${maxPagesPerDistrict}...`);
         console.log(`🔗 URL: ${searchUrl}`);
 
@@ -929,7 +993,7 @@ async function scrapePropertyGuruByDistrict() {
         let navigationSuccess = false;
         let navRetryCount = 0;
         const maxNavRetries = 3;
-        
+
         while (!navigationSuccess && navRetryCount < maxNavRetries) {
           try {
               // Try Flaresolverr first if this is the first attempt for search page
@@ -944,51 +1008,51 @@ async function scrapePropertyGuruByDistrict() {
               } catch (navError) {
                 console.log(`   ⚠️  Pre-navigation failed, continuing anyway: ${navError}`);
               }
-              
+
               // Use the persistent session for search page
               const flaresolverrResult = await solveCloudflareWithFlaresolverr(searchUrl, true, flaresolverrSessionId || undefined);
-              
+
               if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
                 // Apply cookies and user-agent from Flaresolverr
-                await applyFlaresolverrToContext(context, flaresolverrResult);
-                
+                await applyFlaresolverrToContext(scraperContext, flaresolverrResult);
+
                 // Always save cookies immediately after search page (first fresh cookies)
                 try {
-                  await context.storageState({ path: stateFilePath });
+                  await scraperContext.storageState({ path: stateFilePath });
                   console.log(`   💾 Saved fresh Cloudflare cookies to storage state (search page)`);
                   listingsSinceLastCookieSave = 0; // Reset counter after saving
                 } catch (saveError) {
                   console.log(`   ⚠️  Failed to save cookies: ${saveError}`);
                 }
-                
+
                 // Small delay to ensure cookies are set before navigation
                 await humanPause(500, 1000);
                 flaresolverrCalledForSearchPage = true;
               }
             }
-            
+
             // Navigate to the page
-            await page.goto(searchUrl, { 
-              waitUntil: 'domcontentloaded', 
+            await page.goto(searchUrl, {
+              waitUntil: 'domcontentloaded',
               timeout: 60000,
               // Add referer to make it look more natural
               referer: 'https://www.propertyguru.com.sg/',
             });
             await humanPause(3000, 5000); // Normal wait
-            
+
             // Check for Cloudflare using EdgeProp's approach: check for actual errors AND content
             const pageText = await page.textContent('body').catch(() => null) || '';
             const pageTitle = await page.title().catch(() => '') || '';
-            
+
             // Check for actual Cloudflare errors (not just Cloudflare presence)
-            const hasActualError = pageText.includes('Pardon Our Interruption') || 
+            const hasActualError = pageText.includes('Pardon Our Interruption') ||
                                    pageText.includes('Verify you are human') ||
                                    pageText.includes('Enable JavaScript and cookies to continue') ||
                                    (pageText.includes('Just a moment') && pageText.length < 500) || // Short page = challenge page
                                    (pageTitle.includes('Just a moment') && pageText.length < 500);
-            
+
             // Check for actual property content (positive check) - matching EdgeProp approach
-            const hasPropertyContent = pageText.includes('Bed') || 
+            const hasPropertyContent = pageText.includes('Bed') ||
                                      pageText.includes('Bath') ||
                                      pageText.includes('sqft') ||
                                      pageText.includes('Property Type') ||
@@ -997,7 +1061,7 @@ async function scrapePropertyGuruByDistrict() {
                                      pageText.includes('Bathrooms') ||
                                      pageText.length > 10000 || // Large page = likely loaded
                                      (await page.locator('div.listing-card-v2').count().catch(() => 0) > 0);
-            
+
             // If we have actual errors AND no property content, it's a real Cloudflare error
             if (hasActualError && !hasPropertyContent) {
               navRetryCount++;
@@ -1010,7 +1074,7 @@ async function scrapePropertyGuruByDistrict() {
                 break;
               }
             }
-            
+
             // If we have property content, page loaded successfully (even if it mentions cloudflare)
             if (hasPropertyContent) {
               console.log(`   ✅ Page loaded successfully (found property content)`);
@@ -1041,7 +1105,7 @@ async function scrapePropertyGuruByDistrict() {
             }
           }
         }
-        
+
         if (!navigationSuccess) {
           console.log(`   ⚠️  Skipping page ${pageNum} due to navigation/Cloudflare issues`);
           break;
@@ -1061,22 +1125,22 @@ async function scrapePropertyGuruByDistrict() {
         const listingUrls: string[] = [];
         for (let cardIdx = 0; cardIdx < cards.length; cardIdx++) {
           const card = cards[cardIdx];
-          
+
           // Check if this is a promoted/ad card and skip it
           const cardClass = await card.getAttribute('class').catch(() => null);
           if (cardClass && (cardClass.includes('promoted') || cardClass.includes('featured') || cardClass.includes('spotlight'))) {
             console.log(`   ⚠️  Card ${cardIdx + 1} is promoted/ad - skipping`);
             continue;
           }
-          
+
           // Try to find link - some cards have different structures
           let link = await card.locator('a[href*="/listing/"]').first().getAttribute('href').catch(() => null);
-          
+
           // If no link found, try getting any link within the card
           if (!link) {
             link = await card.locator('a[href*="/property/"]').first().getAttribute('href').catch(() => null);
           }
-          
+
           // If still no link, try getting the first <a> tag
           if (!link) {
             const allLinks = await card.locator('a').all();
@@ -1088,7 +1152,7 @@ async function scrapePropertyGuruByDistrict() {
               }
             }
           }
-          
+
           if (link && (link.includes('/listing/') || link.includes('/property/'))) {
             const fullUrl = link.startsWith('http') ? link : `https://www.propertyguru.com.sg${link}`;
             listingUrls.push(fullUrl);
@@ -1102,13 +1166,13 @@ async function scrapePropertyGuruByDistrict() {
         // Process each listing
         for (let i = 0; i < listingUrls.length; i++) {
           const listingUrl = listingUrls[i];
-          
+
           // Skip if already processed (duplicate across pages)
           if (processedUrls.has(listingUrl)) {
             console.log(`🏠 [D${district} - ${i + 1}/${listingUrls.length}] ⏭️  Skipping duplicate URL`);
             continue;
           }
-          
+
           overallStats.totalListings++;
           processedUrls.add(listingUrl);
 
@@ -1120,18 +1184,18 @@ async function scrapePropertyGuruByDistrict() {
           // Using the same Flaresolverr session ensures cookies persist across requests
           // We MUST use Flaresolverr on each listing URL to get fresh cookies for that specific URL
           console.log(`   🔄 Solving Cloudflare for this listing URL...`);
-          
+
           // Use Flaresolverr on the ACTUAL listing URL with the same session to maintain cookies
           const flaresolverrResult = await solveCloudflareWithFlaresolverr(listingUrl, true, flaresolverrSessionId || undefined);
-          
+
           if (flaresolverrResult && flaresolverrResult.cookies.length > 0) {
             // Apply cookies to context BEFORE creating new page
-            await applyFlaresolverrToContext(context, flaresolverrResult);
-            
+            await applyFlaresolverrToContext(scraperContext, flaresolverrResult);
+
             // Save fresh cookies periodically (every 5 listings to avoid too many writes)
             if (listingsSinceLastCookieSave >= 5) {
               try {
-                await context.storageState({ path: stateFilePath });
+                await scraperContext.storageState({ path: stateFilePath });
                 console.log(`   💾 Saved Cloudflare cookies`);
                 listingsSinceLastCookieSave = 0;
               } catch (saveError) {
@@ -1140,7 +1204,7 @@ async function scrapePropertyGuruByDistrict() {
             } else {
               listingsSinceLastCookieSave++;
             }
-            
+
             // Wait for cookies to be fully applied to context
             await humanPause(2000, 3000);
           } else {
@@ -1148,8 +1212,8 @@ async function scrapePropertyGuruByDistrict() {
           }
 
           // NOW create the page - cookies are already applied to context and will be inherited
-          let listingPage = await context.newPage();
-          
+          const listingPage = await scraperContext.newPage();
+
           // Declare timeout variable outside try block so it's accessible in finally
           let listingTimeout: NodeJS.Timeout | null = null;
           let listingTimedOut = false;
@@ -1164,21 +1228,21 @@ async function scrapePropertyGuruByDistrict() {
 
             // Navigate directly to listing page - cookies are already in context and will be sent automatically
             // Playwright automatically sends cookies with the first request, no need to navigate to domain root first
-            await listingPage.goto(listingUrl, { 
+            await listingPage.goto(listingUrl, {
               waitUntil: 'domcontentloaded', // Use domcontentloaded - faster and more reliable than networkidle
               timeout: 60000,
               referer: 'https://www.propertyguru.com.sg/' // Add referer to make navigation look natural
             });
-            
+
             // Check if timed out during navigation
             if (listingTimedOut) {
               throw new Error('Listing navigation timed out');
             }
-            
+
             // Wait for page to fully load and any Cloudflare checks to complete
             // Give time for Cloudflare JavaScript to verify cookies (usually 2-5 seconds)
             await humanPause(3000, 5000);
-            
+
             // Try to wait for key content elements to appear (more reliable than networkidle)
             // This ensures the page actually loaded content, not just Cloudflare challenge
             try {
@@ -1189,11 +1253,11 @@ async function scrapePropertyGuruByDistrict() {
             } catch {
               // Continue anyway - page might have loaded or selectors might be different
             }
-            
+
             // Scroll down to trigger lazy-loaded content and ensure all scripts execute
             await listingPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
             await humanPause(2000, 3000); // Give time for content to load after scroll
-            
+
             if (listingTimedOut) {
               throw new Error('Listing processing timed out');
             }
@@ -1204,26 +1268,26 @@ async function scrapePropertyGuruByDistrict() {
             const priceSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.col-lg-8.col-md-12 > div.row > div > div.property-snapshot-section > div > div > div.price > h2';
             const priceText = await listingPage.locator(priceSelector).textContent().catch(() => '');
             const price = priceText ? parsePrice(priceText) : undefined;
-            
+
             // Define selectors for reuse
             const ceaSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-header > a > div.details-wrapper > span > div';
             const otherWaysButtonSelector = '#__next > div > div.base-page-layout-root > div.main-content > div.ldp-container.container-sm > div > div.agent-section-desktop.rich-contact--enabled.col-lg-4.col-md-12 > div > div > div > div > div.card-body > div > div.extended-view-root > div.actionable-link.contact-button-root.extend-view-trigger-point';
-            
+
             // Check if we have actual property content FIRST (more reliable than checking for Cloudflare text)
             // Property content means the page loaded successfully, regardless of Cloudflare text in comments/cache
             const listingPageText = await listingPage.textContent('body').catch(() => null) || '';
-            const hasPropertyContent = title && title !== 'Untitled' && title.length > 10 && 
+            const hasPropertyContent = title && title !== 'Untitled' && title.length > 10 &&
                                       (priceText || listingPageText.includes('Bed') || listingPageText.includes('Bath') || listingPageText.length > 5000);
-            
+
             // Only check for Cloudflare if we DON'T have property content
             // If content is available, ignore Cloudflare text (might be in comments, old cache, or transient)
             const hasCloudflareText = !hasPropertyContent && (
-              listingPageText.includes('Pardon Our Interruption') || 
+              listingPageText.includes('Pardon Our Interruption') ||
               listingPageText.includes('Verify you are human') ||
               listingPageText.includes('Enable JavaScript and cookies') ||
               (listingPageText.includes('Just a moment') && listingPageText.length < 1000) // Short page = challenge page
             );
-            
+
             // If Cloudflare blocks AND we don't have content, skip this listing
             // Note: We already use Flaresolverr proactively on each listing URL, so this should rarely happen
             // If it does happen, it means Flaresolverr failed or Cloudflare detected something suspicious
@@ -1313,21 +1377,21 @@ async function scrapePropertyGuruByDistrict() {
               console.log(`   ⚠️  No phone number found - SKIPPING to maintain data integrity`);
               consecutiveNoPhone++;
               overallStats.totalSkippedNoPhone++;
-              
+
               // Update stats in lock file immediately
               jobStatus.stats = overallStats;
               jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
               fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-              
+
               // If we've had too many consecutive failures, trigger re-authentication
               if (consecutiveNoPhone >= MAX_CONSECUTIVE_NO_PHONE) {
                 console.log(`\n🚨 ${consecutiveNoPhone} consecutive listings without phone numbers!`);
                 console.log(`🔄 Authentication may have expired. Triggering re-login...\n`);
-                
+
                 // Update status message
                 jobStatus.statusMessage = '🔄 Re-authenticating...';
                 fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                
+
                 // CRITICAL: Close all pages and browser BEFORE re-authenticating
                 console.log('🧹 Closing all pages and browser before re-authentication...');
                 try {
@@ -1335,7 +1399,7 @@ async function scrapePropertyGuruByDistrict() {
                   await page.close().catch(() => {});
                   await cleanupBrowser(browser, 're-authentication');
                   browser = null; // Clear browser reference
-                  
+
                   // Wait a moment to ensure browser processes are fully closed
                   await new Promise(resolve => setTimeout(resolve, 2000));
                   console.log('✅ Browser closed, proceeding with re-authentication...');
@@ -1343,7 +1407,7 @@ async function scrapePropertyGuruByDistrict() {
                   console.error('⚠️  Error closing browser before re-auth:', closeError);
                   // Continue anyway - cleanup will happen in finally block
                 }
-                
+
                 // Re-authenticate
                 const reAuthSuccess = await reAuthenticate();
                 if (!reAuthSuccess) {
@@ -1354,26 +1418,26 @@ async function scrapePropertyGuruByDistrict() {
                   }
                   process.exit(1);
                 }
-                
+
                 // Update status message before removing lock
                 jobStatus.statusMessage = '✅ Re-authenticated! Restarting in 2s...';
                 fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-                
+
                 console.log('✅ Re-authentication complete! Auto-restarting scraper...\n');
                 console.log('🔄 Restarting with fresh authentication in 2 seconds...');
-                
+
                 // Wait a moment for UI to show the message
                 await new Promise(resolve => setTimeout(resolve, 2000));
-                
+
                 // Remove lock file to allow restart
                 if (fs.existsSync(lockFile)) {
                   fs.unlinkSync(lockFile);
                 }
-                
+
                 // CRITICAL: Ensure browser is fully closed before spawning new process
                 // Wait additional time to ensure all Chromium processes are terminated
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                
+
                 // Restart the entire scraping process with fresh authentication
                 // Preserve the original environment variables from the admin page
                 setTimeout(() => {
@@ -1382,9 +1446,9 @@ async function scrapePropertyGuruByDistrict() {
                   const districts = process.env.PG_DISTRICTS || 'ALL';
                   const maxPages = process.env.PG_MAX_PAGES || '3';
                   const jobId = process.env.PG_JOB_ID || '';
-                  
+
                   const restartCmd = `cd ${cwd} && PG_DISTRICTS="${districts}" PG_MAX_PAGES=${maxPages} PG_JOB_ID="${jobId}" bun src/workers/pg.districts.ts > /tmp/pg-scraper-${jobId}.log 2>&1 &`;
-                  
+
                   console.log(`🔄 Restarting with command: ${restartCmd}`);
                   exec(restartCmd, (error: unknown) => {
                     if (error) {
@@ -1393,15 +1457,15 @@ async function scrapePropertyGuruByDistrict() {
                     }
                   });
                 }, 1000); // Additional delay to ensure cleanup
-                
+
                 // Exit this process - new one will start
                 process.exit(0);
               }
-              
+
               await listingPage.close();
               continue;
             }
-            
+
             // Reset consecutive counter if we got a phone
             consecutiveNoPhone = 0;
 
@@ -1439,18 +1503,18 @@ async function scrapePropertyGuruByDistrict() {
               },
             });
 
-            console.log(`   ✅ Saved: ${agentName.trim()} - ${cleanPhone}`);
+            console.log(`   ✅ ${isDryRun ? 'Validated' : 'Saved'}: ${agentName.trim()} - ${cleanPhone}`);
             console.log(`   🏠 Title: ${cleanedTitle}`);
             console.log(`   📍 District: ${districtValue}`);
             overallStats.totalSuccess++;
-            
+
             // Check if we've reached max listings
             if (maxListings && overallStats.totalSuccess >= maxListings) {
               console.log(`\n🎯 Reached max listings limit (${maxListings}). Stopping scraper...`);
               shouldStop = true;
               break;
             }
-            
+
             // Update stats and progress in lock file for real-time display
             jobStatus.stats = overallStats;
             jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
@@ -1460,12 +1524,12 @@ async function scrapePropertyGuruByDistrict() {
             const errorMsg = _error instanceof Error ? _error.message : String(_error);
             console.error(`   ❌ Error: ${errorMsg}`);
             overallStats.totalErrors++;
-            
+
             // Update stats in lock file immediately after error
             jobStatus.stats = overallStats;
             jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
             fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
-            
+
             // If timeout, log it specifically
             if (listingTimedOut || errorMsg.includes('timeout')) {
               console.log(`   ⏭️  Skipping to next listing due to timeout`);
@@ -1478,13 +1542,13 @@ async function scrapePropertyGuruByDistrict() {
             await listingPage.close().catch(() => {});
           }
         }
-        
+
         // Check if we should stop after processing all listings on this page
         if (shouldStop) {
           break;
         }
       }
-      
+
       // Check if we should stop after processing all pages in this district
       if (shouldStop) {
         break;
@@ -1496,7 +1560,7 @@ async function scrapePropertyGuruByDistrict() {
       // Always close page for this district
       await page.close().catch(() => {});
     }
-    
+
     // Check if we should stop after processing this district
     if (shouldStop) {
       break;
@@ -1526,7 +1590,7 @@ async function scrapePropertyGuruByDistrict() {
       jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
       jobStatus.stats = overallStats;
     }
-    
+
     const jobId = process.env.PG_JOB_ID;
     if (jobId) {
       try {
@@ -1549,22 +1613,20 @@ async function scrapePropertyGuruByDistrict() {
     // Use cleanupBrowser to ensure proper cleanup even if browser.close() fails
     await cleanupBrowser(browser, 'finally block');
     browser = null; // Clear reference
-    
+
     // Update database job status BEFORE removing lock file to prevent race condition
     const jobId = process.env.PG_JOB_ID;
     if (jobId && typeof overallStats !== 'undefined') {
       try {
         // Ensure status is set (should already be set above, but ensure it's set)
-        if (!jobStatus.status || jobStatus.status === 'running') {
-          jobStatus.status = 'completed';
-        }
+        jobStatus.status = normalizeCompletionStatus(jobStatus.status, 'completed');
         jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
         jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
         jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
         jobStatus.stats = overallStats;
-        
+
         // Update database FIRST before removing lock file
-        const finalStatus = jobStatus.status === 'failed' ? 'failed' : 'completed';
+        const finalStatus = normalizeCompletionStatus(jobStatus.status, 'completed');
         await supabase
           .from('scraper_jobs')
           .update({
@@ -1584,19 +1646,19 @@ async function scrapePropertyGuruByDistrict() {
         console.error('   Error details:', _error instanceof Error ? _error.message : String(_error));
       }
     }
-    
+
     // Now remove lock file AFTER database update completes
     if (fs.existsSync(lockFile)) {
       try {
         // Update job status with final values (in case they weren't set above)
-        jobStatus.status = jobStatus.status || 'completed';
+        jobStatus.status = normalizeCompletionStatus(jobStatus.status, 'completed');
         jobStatus.statusMessage = jobStatus.statusMessage || 'Scraping completed';
         jobStatus.completedAt = jobStatus.completedAt || new Date().toISOString();
         if (typeof overallStats !== 'undefined') {
           jobStatus.progress.listingsProcessed = overallStats.totalSuccess;
           jobStatus.stats = overallStats;
         }
-        
+
         // Save completed/failed status to a separate file before removing lock
         fs.writeFileSync(lockFile.replace('.lock', '.completed.json'), JSON.stringify(jobStatus, null, 2));
         fs.unlinkSync(lockFile);
@@ -1635,8 +1697,8 @@ async function scrapePropertyGuruByDistrict() {
         console.log(`⚠️  Could not retrieve districts from completed file: ${e}`);
       }
     }
-    
-    if (typeof overallStats !== 'undefined' && districtsToUpdate && districtsToUpdate.length > 0) {
+
+    if (!isDryRun && typeof overallStats !== 'undefined' && districtsToUpdate && districtsToUpdate.length > 0) {
       console.log(`\n🔄 Updating district metadata for ${districtsToUpdate.length} district(s)...`);
       for (const district of districtsToUpdate) {
         const districtCode = `D${district}`;
@@ -1661,7 +1723,7 @@ async function scrapePropertyGuruByDistrict() {
             }, {
               onConflict: 'district'
             });
-          
+
           if (upsertError) {
             console.error(`⚠️  Failed to update district metadata for ${districtCode}:`, upsertError);
           } else {
@@ -1685,6 +1747,18 @@ async function scrapePropertyGuruByDistrict() {
       console.log(`${'='.repeat(60)}\n`);
     } else {
       console.log(`⚠️  Skipping district metadata update: overallStats=${typeof overallStats}, districts=${districts ? districts.length : 'undefined'}`);
+    }
+
+    if (isDryRun) {
+      console.log(JSON.stringify({
+        kind: 'scraper-smoke-result',
+        platform: 'propertyguru',
+        dryRun: true,
+        status: normalizeCompletionStatus(jobStatus.status, 'completed'),
+        jobId: process.env.PG_JOB_ID || null,
+        listingsProcessed: typeof overallStats !== 'undefined' ? overallStats.totalSuccess : 0,
+        stats: typeof overallStats !== 'undefined' ? overallStats : null,
+      }, null, 2));
     }
   }
 }

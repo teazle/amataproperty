@@ -82,7 +82,7 @@
 
 2. **Then pull on EC2**:
    ```bash
-   ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@52.76.114.103
+   ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ${EC2_USER:-ec2-user}@${EC2_IP}
    cd /opt/smartprop/app/smartprop
    git pull
    ```
@@ -94,7 +94,7 @@
 
 ## Summary
 
-**You don't need to worry about version differences** - everything is synchronized! 
+**You don't need to worry about version differences** - everything is synchronized!
 
 The **GitHub main branch (commit ab4be86)** is the working version, and both your local machine and EC2 match it exactly.
 

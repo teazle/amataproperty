@@ -6,11 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { triggerReAuth, checkAuthStatus } from '../actions';
 import { toast } from 'sonner';
-
-interface AuthStatus {
-  propertyguru: { isAuthenticated: boolean; lastAuth: string | null };
-  edgeprop: { isAuthenticated: boolean; lastAuth: string | null };
-}
+import type { AuthPlatformStatus, AuthStatus } from '../types';
 
 interface AuthStatusCardProps {
   authStatus: AuthStatus;
@@ -22,9 +18,9 @@ export function AuthStatusCard({ authStatus, onAuthStatusChange }: AuthStatusCar
 
   const handleReAuth = async (platform: 'propertyguru' | 'edgeprop') => {
     setIsReAuthenticating(platform);
-    
+
     const result = await triggerReAuth(platform);
-    
+
     if (result.success) {
       toast.success(result.message);
       // Refresh auth status
@@ -35,13 +31,13 @@ export function AuthStatusCard({ authStatus, onAuthStatusChange }: AuthStatusCar
     } else {
       toast.error(result.error || 'Re-authentication failed');
     }
-    
+
     setIsReAuthenticating(null);
   };
 
   const formatLastAuth = (lastAuth: string | null) => {
     if (!lastAuth) return 'Never';
-    
+
     const date = new Date(lastAuth);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -57,6 +53,50 @@ export function AuthStatusCard({ authStatus, onAuthStatusChange }: AuthStatusCar
     }
   };
 
+  const renderPlatform = (label: string, platform: 'propertyguru' | 'edgeprop', status: AuthPlatformStatus) => {
+    const badgeVariant = status.isAuthenticated ? 'default' : status.exists ? 'secondary' : 'destructive';
+    const badgeLabel = status.isAuthenticated
+      ? 'Fresh State'
+      : status.exists
+        ? 'Stale State'
+        : 'Missing State';
+
+    return (
+      <div className="flex items-center justify-between p-4 border rounded-lg">
+        <div className="flex items-center gap-4">
+          <div>
+            <p className="font-semibold text-gray-900">{label}</p>
+            <p className="text-sm text-gray-700">
+              Last auth: {formatLastAuth(status.lastAuth)}
+            </p>
+            <p className="text-sm text-gray-600">
+              {status.cookieCount} cookies
+              {typeof status.stateAgeHours === 'number' ? `, ${status.stateAgeHours.toFixed(1)}h old` : ''}
+            </p>
+            {status.failureReason && (
+              <p className="text-sm text-amber-700">
+                {status.failureReason}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Badge variant={badgeVariant}>
+            {badgeLabel}
+          </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleReAuth(platform)}
+            disabled={isReAuthenticating === platform}
+          >
+            {isReAuthenticating === platform ? 'Re-authenticating...' : 'Re-auth'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -68,57 +108,9 @@ export function AuthStatusCard({ authStatus, onAuthStatusChange }: AuthStatusCar
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* PropertyGuru Auth */}
-        <div className="flex items-center justify-between p-4 border rounded-lg">
-          <div className="flex items-center gap-4">
-            <div>
-              <p className="font-semibold text-gray-900">PropertyGuru</p>
-              <p className="text-sm text-gray-700">
-                Last auth: {formatLastAuth(authStatus.propertyguru.lastAuth)}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={authStatus.propertyguru.isAuthenticated ? 'default' : 'destructive'}>
-              {authStatus.propertyguru.isAuthenticated ? '✓ Logged In' : '✗ Not Authenticated'}
-            </Badge>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleReAuth('propertyguru')}
-              disabled={isReAuthenticating === 'propertyguru'}
-            >
-              {isReAuthenticating === 'propertyguru' ? 'Re-authenticating...' : '🔄 Re-auth'}
-            </Button>
-          </div>
-        </div>
-
-        {/* EdgeProp Auth */}
-        <div className="flex items-center justify-between p-4 border rounded-lg">
-          <div className="flex items-center gap-4">
-            <div>
-              <p className="font-semibold text-gray-900">EdgeProp</p>
-              <p className="text-sm text-gray-700">
-                Last auth: {formatLastAuth(authStatus.edgeprop.lastAuth)}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={authStatus.edgeprop.isAuthenticated ? 'default' : 'destructive'}>
-              {authStatus.edgeprop.isAuthenticated ? '✓ Logged In' : '✗ Not Authenticated'}
-            </Badge>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleReAuth('edgeprop')}
-              disabled={isReAuthenticating === 'edgeprop'}
-            >
-              {isReAuthenticating === 'edgeprop' ? 'Re-authenticating...' : '🔄 Re-auth'}
-            </Button>
-          </div>
-        </div>
+        {renderPlatform('PropertyGuru', 'propertyguru', authStatus.propertyguru)}
+        {renderPlatform('EdgeProp', 'edgeprop', authStatus.edgeprop)}
       </CardContent>
     </Card>
   );
 }
-

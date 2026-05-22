@@ -69,7 +69,7 @@ A Record: your-domain.com → [EC2_PUBLIC_IP]
 
 SSH into your server and run:
 ```bash
-ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ec2-user@[EC2_PUBLIC_IP]
+ssh -i /Users/vincent/propertydemo/smartprop-new-key.pem -o StrictHostKeyChecking=no ${EC2_USER:-ec2-user}@${EC2_IP}
 sudo certbot --nginx -d your-domain.com
 ```
 

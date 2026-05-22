@@ -1,9 +1,9 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { getLinkedInSettings } from '@/lib/linkedin/tracker';
 import { startLinkedInAutomation } from '@/lib/linkedin/automation';
-import { readLockFile, isProcessRunning } from '@/lib/linkedin/storage';
+import { readLockFile, isProcessRunning, isLinkedInLockExpired } from '@/lib/linkedin/storage';
 
-let scheduledTask: cron.ScheduledTask | null = null;
+let scheduledTask: ScheduledTask | null = null;
 let currentSchedule: string | null = null;
 let initializationAttempts = 0;
 const MAX_INIT_ATTEMPTS = 5;
@@ -26,6 +26,10 @@ async function shouldSkipRun(): Promise<boolean> {
     return false;
   }
   const stillRunning = await isProcessRunning(lockData.pid);
+  if (lockData.status === 'running' && stillRunning && isLinkedInLockExpired(lockData)) {
+    console.warn('⚠️  Scheduled LinkedIn automation found an expired running lock; start flow will clean it up');
+    return false;
+  }
   return lockData.status === 'running' && stillRunning;
 }
 
@@ -36,7 +40,7 @@ async function shouldSkipRun(): Promise<boolean> {
 export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<void> {
   try {
     const settings = await getLinkedInSettings();
-    
+
     // If settings don't exist or database error, retry with exponential backoff
     if (!settings && retryCount < MAX_INIT_ATTEMPTS) {
       const delay = INIT_RETRY_DELAY_MS * (retryCount + 1);
@@ -113,7 +117,7 @@ export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<
     currentSchedule = schedule;
     scheduledTask.start();
     initializationAttempts = 0; // Reset on successful initialization
-    
+
     // Note: scheduledTask.start() doesn't throw, so if we get here, the task is scheduled
     // The task will run according to the cron schedule
     console.log(`✅ Scheduled LinkedIn automation started: ${schedule} (${settings?.timezone || 'Asia/Singapore'})`);
@@ -121,11 +125,11 @@ export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<
     initializationAttempts++;
     const errorMsg = error?.message || String(error);
     console.error(`❌ Unable to refresh LinkedIn scheduler (attempt ${initializationAttempts}):`, errorMsg);
-    
+
     // Retry on database/connection errors
     if (retryCount < MAX_INIT_ATTEMPTS && (
-      errorMsg.includes('database') || 
-      errorMsg.includes('connection') || 
+      errorMsg.includes('database') ||
+      errorMsg.includes('connection') ||
       errorMsg.includes('timeout') ||
       errorMsg.includes('ECONNREFUSED') ||
       errorMsg.includes('PGRST')
@@ -142,4 +146,3 @@ export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<
     }
   }
 }
-

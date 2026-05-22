@@ -32,6 +32,8 @@ test-screenshot-*
 # Playwright and automation artifacts
 .playwright-mcp/
 playwright-screenshots/
+.codex-openclaw-watchdog-fix/
+smartprop/.playwright-cli/
 
 # Archive directory
 archive/

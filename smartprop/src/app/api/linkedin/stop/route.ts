@@ -5,6 +5,7 @@ import {
   deleteLockFile,
   isProcessRunning
 } from '@/lib/linkedin/storage';
+import { terminateLinkedInProcess } from '@/lib/linkedin/automation';
 
 export async function POST() {
   const lockData = readLockFile();
@@ -23,9 +24,8 @@ export async function POST() {
   if (lockData.pid) {
     try {
       if (await isProcessRunning(lockData.pid)) {
-        process.kill(lockData.pid, 'SIGTERM');
-        killResult = `SIGTERM sent to PID ${lockData.pid}`;
-        console.log(`⏹️ SIGTERM sent to PID ${lockData.pid}`);
+        killResult = await terminateLinkedInProcess(lockData.pid, { forceAfterMs: 3000 });
+        console.log(`⏹️ ${killResult}`);
       } else {
         killResult = 'process already exited';
       }
@@ -35,13 +35,11 @@ export async function POST() {
     }
   }
 
-  setTimeout(async () => {
-    const stillRunning = lockData.pid ? await isProcessRunning(lockData.pid) : false;
-    if (!stillRunning) {
-      deleteLockFile();
-      console.log('🧹 LinkedIn lock file removed after stop');
-    }
-  }, 5000);
+  const stillRunning = lockData.pid ? await isProcessRunning(lockData.pid) : false;
+  if (!stillRunning) {
+    deleteLockFile();
+    console.log('🧹 LinkedIn lock file removed after stop');
+  }
 
   return NextResponse.json({
     success: true,
@@ -49,4 +47,3 @@ export async function POST() {
     detail: killResult
   });
 }
-

@@ -65,25 +65,29 @@ isolated by source file (see "Owner outreach projects" below).
 
 ## Accepted Column Shapes
 
-The importer normalizes case, spaces, hyphens, and underscores. Both the
-"normalized_*" naming and the raw OpenClaw FSBO/FRBO codes are accepted.
+The importer normalizes case, spaces, hyphens, and underscores. Three input
+shapes are recognized natively: the "normalized_*" naming, the raw OpenClaw
+FSBO/FRBO codes, and URA-caveats transaction exports.
 
-| Field          | Accepted columns                                                                                                        |
-|----------------|--------------------------------------------------------------------------------------------------------------------------|
-| Name           | `name`, `full_name`, `contact_name`, `client_name`, `customer_name`, `lead_name`, `buyer_name`, `normalized_name`, `NAME` |
-| Phone          | `phone`, `phone_number`, `mobile`, `mobile_number`, `whatsapp`, `whatsapp_number`, `contact_number`, `telephone`, `normalized_phone`, `normalized_mobile`, `PHONE` |
-| Email          | `email`, `email_address`, `email_addr`, `normalized_email`                                                              |
-| Property title | `property_title`, `property_interest`, `interested_property`, `property`, `project`, `project_name`, `listing`, `listing_title`, `LOCATION`, `address`, `property_address` |
-| Project slug   | `project_slug`, `slug`                                                                                                  |
-| Message/notes  | `message`, `inquiry`, `inquiry_message`, `notes`, `remarks`, `requirements`, `normalized_message`                       |
-| Status         | `status`, `lead_status`, `pipeline_status`, `stage`                                                                     |
-| Priority       | `priority`, `lead_priority`                                                                                              |
-| Owner          | `assigned_to`, `agent`, `owner`, `handled_by`                                                                            |
-| Follow-up      | `follow_up_at`, `next_follow_up`, `next_follow_up_date`                                                                  |
-| Source         | `source`, `lead_source`, `channel`, `origin`                                                                             |
-| External id    | `id`, `lead_id`, `external_id`, `openclaw_id`, `record_id`                                                               |
-| Source path    | `source_path`, `source_page`, `page_path`                                                                                |
-| Source URL     | `source_url`, `url`, `lead_url`, `profile_url`                                                                           |
+| Field          | Accepted columns                                                                                                                          |
+|----------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| Name           | `name`, `full_name`, `contact_name`, `client_name`, `customer_name`, `lead_name`, `buyer_name`, `normalized_name`, `NAME`, `Purchasers`, `Buyer` |
+| Phone          | `phone`, `phone_number`, `mobile`, `mobile_number`, `HP`, `handphone`, `whatsapp`, `whatsapp_number`, `contact_number`, `telephone`, `Pur Tel`, `Proj Tel`, `normalized_phone`, `normalized_mobile`, `PHONE` |
+| Email          | `email`, `email_address`, `email_addr`, `normalized_email`                                                                                |
+| Property title | `property_title`, `property_interest`, `interested_property`, `property`, `project`, `project_name`, `listing`, `listing_title`, `LOCATION`, `address`, `property_address`, `ProjName` |
+| Project slug   | `project_slug`, `slug`                                                                                                                    |
+| Message/notes  | `message`, `inquiry`, `inquiry_message`, `notes`, `remarks`, `requirements`, `normalized_message`                                         |
+| Status         | `status`, `lead_status`, `pipeline_status`, `stage`                                                                                       |
+| Priority       | `priority`, `lead_priority`                                                                                                                |
+| Owner          | `assigned_to`, `agent`, `owner`, `handled_by`                                                                                              |
+| Follow-up      | `follow_up_at`, `next_follow_up`, `next_follow_up_date`                                                                                    |
+| Source         | `source`, `lead_source`, `channel`, `origin`                                                                                               |
+| External id    | `id`, `lead_id`, `external_id`, `openclaw_id`, `record_id`                                                                                 |
+| Source path    | `source_path`, `source_page`, `page_path`                                                                                                  |
+| Source URL     | `source_url`, `url`, `lead_url`, `profile_url`                                                                                             |
+
+Phone aliases are checked top-to-bottom — `HP` beats `Pur Tel` so caveats rows
+that have both mobile + landline use the mobile.
 
 ## OpenClaw FSBO/FRBO files
 
@@ -112,17 +116,66 @@ Notes:
 - FRBO files have a blank top row before the header — the XLSX parser skips it
   automatically.
 
-## Owner outreach projects
+## URA caveats files (.xls)
 
-For OpenClaw FSBO/FRBO imports, route each file into its dedicated project so
-the CRM filter dropdown can separate sale vs rent, apartment vs landed:
+Legacy URA caveats exports look like `ALESSANDREA H62 97 1453A.xls` —
+condo-specific transaction history with `Proj Blk, Proj Street, Proj Unit,
+Proj Postal, ProjName, Contract Date, Amount, Area, Purchasers, HP, Pur Blk,
+Pur Street, Pur Unit, Pur Postal, Proj Tel, Pur Tel`. Each row is one purchaser
+(joint owners appear as two rows on the same unit).
 
-| Source file                | `defaultProjectSlug`   |
-|----------------------------|------------------------|
-| FSBO_LANDED.xlsx           | `fsbo-landed`          |
-| FSBO_PTE_APARTMENT.xlsx    | `fsbo-pte-apartment`   |
-| FRBO_LANDED.xlsx           | `frbo-landed`          |
-| FRBO_PTE_APARTMENT.xlsx    | `frbo-pte-apartment`   |
+The CRM importer does **not** read the binary `.xls` format directly — convert
+to CSV first using the snippet below, then upload through the same import API
+or the admin UI dialog:
+
+```bash
+python3 << 'EOF'
+import xlrd, csv
+def cell_to_str(cell, datemode):
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        from xlrd.xldate import xldate_as_datetime
+        return xldate_as_datetime(cell.value, datemode).strftime("%Y-%m-%d")
+    v = cell.value
+    return str(int(v)) if isinstance(v, float) and v.is_integer() else str(v).strip()
+src, dst = "/tmp/INPUT.xls", "/tmp/output.csv"
+wb = xlrd.open_workbook(src)
+sh = wb.sheet_by_index(0)  # main sheet, not the H<NN> curated subset
+with open(dst, "w", encoding="utf-8", newline="") as f:
+    w = csv.writer(f)
+    for i in range(sh.nrows):
+        w.writerow([cell_to_str(sh.cell(i, c), wb.datemode) for c in range(sh.ncols)])
+EOF
+```
+
+When the rows arrive, the importer synthesizes a caveats-style note:
+
+> [OpenClaw] · ALESSANDREA · #01-01 · 116 sqm
+> Purchased 14 Aug 2001 for SGD 778,388.
+> Project: 31, ALEXANDRA ROAD, S159967.
+> Buyer address: 45, SIMEI RISE, #08-29, S528786.
+
+Rows with no `HP` or `Pur Tel` are skipped as `Missing contact`. Joint
+purchasers with different mobile numbers become two leads on the same unit;
+joint purchasers sharing a phone are deduped.
+
+## CRM projects (routing)
+
+Route imports into their dedicated project so the CRM filter dropdown can
+separate the lead types. Pass `defaultProjectSlug` in the import multipart
+body — it now overrides any slug inferred from the property title.
+
+| Source file                                     | `defaultProjectSlug`   |
+|-------------------------------------------------|------------------------|
+| FSBO_LANDED.xlsx                                | `fsbo-landed`          |
+| FSBO_PTE_APARTMENT.xlsx                         | `fsbo-pte-apartment`   |
+| FRBO_LANDED.xlsx                                | `frbo-landed`          |
+| FRBO_PTE_APARTMENT.xlsx                         | `frbo-pte-apartment`   |
+| `<CONDO> H<NN> <total> <ref>.xls` (caveats)     | `<condo-slug>`         |
+
+Caveats projects already created: `alessandrea`, `cliften`. For a new condo,
+create the project row first via the Supabase admin (or `POST /rest/v1/crm_projects`)
+before importing — the importer rejects unknown slugs by falling back to
+`general-luxe`, which mixes prospects with customer enquiries.
 
 Existing customer enquiry projects (do not mix owner prospects in here):
 `general-luxe`, `upperhouse`, `promenade-peak`, `zyon-grand`, `river-modern`,

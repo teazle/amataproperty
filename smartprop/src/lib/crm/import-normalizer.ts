@@ -47,16 +47,24 @@ const fieldAliases = {
     'leadname',
     'buyername',
     'normalizedname',
+    'purchasers',
+    'purchaser',
+    'buyers',
+    'buyer',
   ],
   phone: [
     'phone',
     'phonenumber',
     'mobile',
     'mobilenumber',
+    'hp',
+    'handphone',
     'whatsapp',
     'whatsappnumber',
     'contactnumber',
     'telephone',
+    'purtel',
+    'projtel',
     'normalizedphone',
     'normalizedmobile',
   ],
@@ -83,6 +91,7 @@ const fieldAliases = {
     'location',
     'address',
     'propertyaddress',
+    'projname',
   ],
   projectSlug: ['projectslug', 'project_slug', 'slug'],
   sourcePath: ['sourcepath', 'source_path', 'sourcepage', 'pagepath'],
@@ -282,6 +291,64 @@ function buildOpenClawMessage(row: RawLeadRow, defaultSource: string): string {
   return lines.join('\n');
 }
 
+// URA-caveats-style imports (".xls" transaction exports converted to CSV):
+// each row is a unit purchase with Proj* columns describing the property and
+// Pur* columns capturing the buyer's address at the time of purchase.
+function buildCaveatsMessage(row: RawLeadRow, defaultSource: string): string {
+  const projName = pickRaw(row, ['projname']);
+  const contractDate = pickRaw(row, ['contractdate']);
+  if (!projName || !contractDate) return '';
+
+  const projBlk = pickRaw(row, ['projblk']);
+  const projStreet = pickRaw(row, ['projstreet']);
+  const projUnit = pickRaw(row, ['projunit', 'proju']);
+  const projPostal = pickRaw(row, ['projpostal']);
+  const amount = pickRaw(row, ['amount', 'price', 'pricesgd']);
+  const area = pickRaw(row, ['area']);
+  const purBlk = pickRaw(row, ['purblk']);
+  const purStreet = pickRaw(row, ['purstreet']);
+  const purUnit = pickRaw(row, ['purunit']);
+  const purPostal = pickRaw(row, ['purpostal']);
+
+  const lines: string[] = [];
+  const headerBits: string[] = [`[${defaultSource}]`, String(projName).trim()];
+  if (projUnit) headerBits.push(`#${String(projUnit).trim()}`);
+  if (area) {
+    const areaStr = String(area).trim();
+    if (areaStr && areaStr !== '-') headerBits.push(`${areaStr} sqm`);
+  }
+  lines.push(headerBits.join(' · '));
+
+  const txnBits: string[] = [];
+  const purchaseDate = formatListingDate(contractDate);
+  if (purchaseDate) txnBits.push(`Purchased ${purchaseDate}`);
+  if (amount) {
+    const amt = Number(String(amount).replace(/[^\d.]/g, ''));
+    if (Number.isFinite(amt) && amt > 0) {
+      txnBits.push(`for SGD ${amt.toLocaleString('en-SG')}`);
+    }
+  }
+  if (txnBits.length) lines.push(txnBits.join(' ') + '.');
+
+  const projAddrBits: string[] = [];
+  if (projBlk) projAddrBits.push(String(projBlk).trim());
+  if (projStreet) projAddrBits.push(String(projStreet).trim());
+  if (projPostal) projAddrBits.push(`S${String(projPostal).trim()}`);
+  if (projAddrBits.length) lines.push(`Project: ${projAddrBits.join(', ')}.`);
+
+  const purAddrBits: string[] = [];
+  if (purBlk) purAddrBits.push(String(purBlk).trim());
+  if (purStreet) purAddrBits.push(String(purStreet).trim());
+  if (purUnit) {
+    const u = String(purUnit).trim();
+    if (u && u !== '-') purAddrBits.push(`#${u}`);
+  }
+  if (purPostal) purAddrBits.push(`S${String(purPostal).trim()}`);
+  if (purAddrBits.length) lines.push(`Buyer address: ${purAddrBits.join(', ')}.`);
+
+  return lines.join('\n');
+}
+
 // OpenClaw names often have noise jammed on the end: a backup phone
 // number ("MRS TAN 69660869"), a tag like "(LH)" for landlord, or both.
 // Strip both so the contact display stays clean.
@@ -321,6 +388,7 @@ export function normalizeCrmImportRows(rows: RawLeadRow[], options: NormalizeOpt
     const explicitMessage = pick(row, fieldAliases.message);
     const message =
       explicitMessage ||
+      buildCaveatsMessage(row, source) ||
       buildOpenClawMessage(row, source) ||
       `Imported lead from ${source}.`;
 

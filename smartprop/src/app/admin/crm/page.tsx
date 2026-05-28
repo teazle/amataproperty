@@ -23,6 +23,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
   CrmLeadPriority,
@@ -84,20 +92,20 @@ type ImportResponse = {
 };
 type ActivityType = 'note' | 'call' | 'follow_up_scheduled';
 
-const statusTone: Record<CrmLeadStatus, string> = {
-  new: 'bg-blue-50 border-blue-200',
-  contacted: 'bg-cyan-50 border-cyan-200',
-  qualified: 'bg-indigo-50 border-indigo-200',
-  viewing_scheduled: 'bg-amber-50 border-amber-200',
-  offer: 'bg-orange-50 border-orange-200',
-  won: 'bg-emerald-50 border-emerald-200',
-  lost: 'bg-gray-50 border-gray-200',
+const statusPillClass: Record<CrmLeadStatus, string> = {
+  new: 'bg-blue-50 text-blue-700 ring-blue-200',
+  contacted: 'bg-cyan-50 text-cyan-700 ring-cyan-200',
+  qualified: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  viewing_scheduled: 'bg-amber-50 text-amber-800 ring-amber-200',
+  offer: 'bg-orange-50 text-orange-800 ring-orange-200',
+  won: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  lost: 'bg-gray-100 text-gray-600 ring-gray-200',
 };
 
-const priorityTone: Record<CrmLeadPriority, string> = {
-  low: 'bg-gray-100 text-gray-800',
-  normal: 'bg-blue-100 text-blue-800',
-  high: 'bg-red-100 text-red-800',
+const priorityPillClass: Record<CrmLeadPriority, string> = {
+  low: 'bg-gray-50 text-gray-600 ring-gray-200',
+  normal: 'bg-blue-50 text-blue-700 ring-blue-200',
+  high: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
 
 function formatDate(value: string | null) {
@@ -188,11 +196,12 @@ export default function CrmPage() {
     };
   }, [leads]);
 
-  const leadsByStatus = useMemo(() => {
-    return crmLeadStatuses.reduce<Record<CrmLeadStatus, CrmLead[]>>((acc, status) => {
-      acc[status] = leads.filter((lead) => lead.status === status);
-      return acc;
-    }, {} as Record<CrmLeadStatus, CrmLead[]>);
+  const sortedLeads = useMemo(() => {
+    return [...leads].sort((a, b) => {
+      const aTime = new Date(a.last_activity_at || a.created_at).getTime();
+      const bTime = new Date(b.last_activity_at || b.created_at).getTime();
+      return bTime - aTime;
+    });
   }, [leads]);
 
   function updateSelectedLead(updatedLeads: CrmLead[]) {
@@ -404,44 +413,101 @@ export default function CrmPage() {
         </div>
       )}
 
-      {loading ? (
-        <div className="rounded-md border bg-white p-10 text-center text-gray-600">Loading CRM leads...</div>
-      ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-7 gap-4">
-          {crmLeadStatuses.map((status) => (
-            <section key={status} className={`rounded-lg border p-3 ${statusTone[status]}`}>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-gray-900">{formatCrmStatus(status)}</h2>
-                <Badge variant="secondary">{leadsByStatus[status].length}</Badge>
-              </div>
-              <div className="space-y-3 min-h-32">
-                {leadsByStatus[status].map((lead) => (
-                  <button
-                    key={lead.id}
-                    className="w-full rounded-md border border-gray-200 bg-white p-3 text-left shadow-sm transition hover:border-gray-400 hover:shadow-md"
-                    onClick={() => {
-                      setSelectedLead(lead);
-                      setFollowUpValue(isoToDatetimeLocal(lead.follow_up_at));
-                    }}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">{lead.name}</p>
-                        <p className="text-xs text-gray-600 mt-1">{lead.crm_projects?.title || lead.property_title}</p>
-                      </div>
-                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${priorityTone[lead.priority]}`}>
-                        {lead.priority}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-3 line-clamp-2">{lead.message}</p>
-                    <p className="text-[11px] text-gray-500 mt-3">{formatDate(lead.created_at)}</p>
-                  </button>
-                ))}
-              </div>
-            </section>
-          ))}
+      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50/60 px-4 py-2.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+            Leads {loading ? '' : `· ${sortedLeads.length}`}
+          </p>
+          <p className="text-[11px] text-gray-500">Sorted by latest activity</p>
         </div>
-      )}
+
+        {loading ? (
+          <LeadTableSkeleton />
+        ) : sortedLeads.length === 0 ? (
+          <div className="px-6 py-16 text-center">
+            <p className="text-sm font-medium text-gray-900">No leads match these filters</p>
+            <p className="mt-1 text-xs text-gray-500">
+              Try clearing filters, or drop an OpenClaw export into the import panel above.
+            </p>
+          </div>
+        ) : (
+          <Table className="text-sm">
+            <TableHeader className="bg-gray-50/60">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Lead</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Project</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Contact</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Status</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Priority</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Message</TableHead>
+                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Follow-up</TableHead>
+                <TableHead className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Last activity</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedLeads.map((lead) => (
+                <TableRow
+                  key={lead.id}
+                  className="cursor-pointer border-gray-100 hover:bg-rose-50/40 transition-colors"
+                  onClick={() => {
+                    setSelectedLead(lead);
+                    setFollowUpValue(isoToDatetimeLocal(lead.follow_up_at));
+                  }}
+                >
+                  <TableCell className="px-4 py-3 align-top">
+                    <p className="font-semibold text-gray-900">{lead.name || 'Unnamed lead'}</p>
+                    {lead.assigned_to && (
+                      <p className="mt-0.5 text-[11px] text-gray-500">Assigned to {lead.assigned_to}</p>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top text-gray-700">
+                    {lead.crm_projects?.title || lead.property_title || <span className="text-gray-400">—</span>}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <div className="space-y-1 text-[12px] text-gray-700 tabular-nums">
+                      {lead.phone ? (
+                        <p className="flex items-center gap-1.5"><Phone className="h-3 w-3 text-gray-400" />{lead.phone}</p>
+                      ) : null}
+                      {lead.email ? (
+                        <p className="flex items-center gap-1.5"><Mail className="h-3 w-3 text-gray-400" /><span className="truncate max-w-[180px]">{lead.email}</span></p>
+                      ) : null}
+                      {!lead.phone && !lead.email && <span className="text-gray-400">—</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusPillClass[lead.status]}`}>
+                      {formatCrmStatus(lead.status)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ring-1 ring-inset ${priorityPillClass[lead.priority]}`}>
+                      {lead.priority}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top text-gray-600 max-w-[280px]">
+                    <p className="truncate" title={lead.message}>
+                      {lead.message || <span className="text-gray-400">—</span>}
+                    </p>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top text-gray-700 tabular-nums">
+                    {lead.follow_up_at ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <CalendarClock className="h-3 w-3 text-gray-400" />
+                        {formatDate(lead.follow_up_at)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top text-right text-gray-500 tabular-nums">
+                    {formatDate(lead.last_activity_at || lead.created_at)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
 
       <Dialog open={Boolean(selectedLead)} onOpenChange={(open) => !open && setSelectedLead(null)}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -550,6 +616,23 @@ export default function CrmPage() {
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function LeadTableSkeleton() {
+  return (
+    <div className="divide-y divide-gray-100">
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div key={index} className="flex items-center gap-4 px-4 py-3">
+          <div className="h-4 w-32 animate-pulse rounded bg-gray-100" />
+          <div className="h-4 w-40 animate-pulse rounded bg-gray-100" />
+          <div className="h-4 w-28 animate-pulse rounded bg-gray-100" />
+          <div className="h-5 w-20 animate-pulse rounded-full bg-gray-100" />
+          <div className="h-5 w-14 animate-pulse rounded-full bg-gray-100" />
+          <div className="ml-auto h-4 w-24 animate-pulse rounded bg-gray-100" />
+        </div>
+      ))}
     </div>
   );
 }

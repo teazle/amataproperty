@@ -4,10 +4,13 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
+  AlertCircle,
+  FileSpreadsheet,
   Mail,
   Phone,
   RefreshCcw,
   Search,
+  Upload,
   UserRound,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -70,6 +73,15 @@ type CrmLead = {
 
 type ProjectsResponse = { projects: CrmProject[] };
 type LeadsResponse = { leads: CrmLead[] };
+type ImportResponse = {
+  fileName: string;
+  rowsRead: number;
+  imported: number;
+  skipped: number;
+  duplicates: number;
+  detectedColumns: string[];
+  skippedRows: Array<{ rowNumber: number; reason: string }>;
+};
 type ActivityType = 'note' | 'call' | 'follow_up_scheduled';
 
 const statusTone: Record<CrmLeadStatus, string> = {
@@ -131,6 +143,9 @@ export default function CrmPage() {
   const [note, setNote] = useState('');
   const [activityType, setActivityType] = useState<ActivityType>('note');
   const [followUpValue, setFollowUpValue] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResponse | null>(null);
 
   async function loadProjects() {
     const data = await fetchJson<ProjectsResponse>('/api/admin/crm/projects');
@@ -230,6 +245,36 @@ export default function CrmPage() {
     }
   }
 
+  async function importLeadFile(file: File) {
+    setError(null);
+    setImportResult(null);
+    setImporting(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('defaultProjectSlug', selectedProject === 'all' ? 'general-luxe' : selectedProject);
+
+      const data = await fetchJson<ImportResponse>('/api/admin/crm/import', {
+        method: 'POST',
+        body: formData,
+      });
+
+      setImportResult(data);
+      await refreshAll();
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : 'Failed to import leads');
+    } finally {
+      setImporting(false);
+      setDragActive(false);
+    }
+  }
+
+  function handleFileList(files: FileList | null) {
+    const file = files?.[0];
+    if (file) void importLeadFile(file);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -251,6 +296,71 @@ export default function CrmPage() {
         <Metric label="Follow-ups" value={stats.followUps} />
         <Metric label="Won" value={stats.won} />
       </div>
+
+      <section className="rounded-lg border border-dashed border-gray-300 bg-white p-4 shadow-sm">
+        <div className="grid gap-4 lg:grid-cols-[1fr_320px] lg:items-center">
+          <label
+            className={`flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-md border px-4 py-6 text-center transition ${
+              dragActive ? 'border-rose-400 bg-rose-50' : 'border-gray-200 bg-gray-50 hover:border-gray-400'
+            }`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleFileList(event.dataTransfer.files);
+            }}
+          >
+            <input
+              type="file"
+              accept=".xlsx,.xlsm,.csv,.tsv"
+              className="sr-only"
+              onChange={(event) => handleFileList(event.target.files)}
+              disabled={importing}
+            />
+            <Upload className="h-6 w-6 text-gray-500" />
+            <span className="mt-3 text-sm font-semibold text-gray-900">
+              {importing ? 'Importing leads...' : 'Drop OpenClaw Excel or CSV leads here'}
+            </span>
+            <span className="mt-1 text-xs text-gray-500">
+              Uses normalized name, phone, email, project, status, priority, and notes columns when present.
+            </span>
+          </label>
+
+          <div className="rounded-md border bg-gray-50 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <FileSpreadsheet className="h-4 w-4 text-rose-500" />
+              Lead import
+            </div>
+            {importResult ? (
+              <div className="mt-3 space-y-2 text-sm text-gray-700">
+                <p className="font-medium text-gray-900">{importResult.fileName}</p>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <ImportStat label="Rows" value={importResult.rowsRead} />
+                  <ImportStat label="Added" value={importResult.imported} />
+                  <ImportStat label="Skipped" value={importResult.skipped} />
+                  <ImportStat label="Dupes" value={importResult.duplicates} />
+                </div>
+                {importResult.skippedRows.length > 0 && (
+                  <div className="flex gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    <span>
+                      Row {importResult.skippedRows[0].rowNumber}: {importResult.skippedRows[0].reason}
+                      {importResult.skippedRows.length > 1 ? `, plus ${importResult.skippedRows.length - 1} more` : ''}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-gray-600">
+                Imports into the selected project, or General Luxe when all projects are selected.
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-[220px_180px_1fr] gap-3">
         <select
@@ -449,6 +559,15 @@ function Metric({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg border bg-white px-4 py-3 shadow-sm">
       <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</p>
       <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
+    </div>
+  );
+}
+
+function ImportStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border bg-white px-2 py-2">
+      <p className="text-[11px] font-medium uppercase text-gray-500">{label}</p>
+      <p className="text-base font-bold text-gray-900">{value}</p>
     </div>
   );
 }

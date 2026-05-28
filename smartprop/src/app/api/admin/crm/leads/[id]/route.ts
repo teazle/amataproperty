@@ -2,6 +2,46 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
 import { crmLeadUpdateSchema, formatCrmStatus } from '@/lib/crm/validation';
 
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const supabase = getSupabaseClient();
+
+    const { data: lead, error: leadError } = await supabase
+      .from('crm_leads')
+      .select('*, crm_projects(*)')
+      .eq('id', id)
+      .single();
+
+    if (leadError || !lead) {
+      return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+    }
+
+    const { data: activities, error: activityError } = await supabase
+      .from('crm_lead_activities')
+      .select('*')
+      .eq('lead_id', id)
+      .order('created_at', { ascending: false });
+
+    if (activityError) {
+      throw activityError;
+    }
+
+    return NextResponse.json({
+      lead: { ...lead, activities: activities || [] },
+    });
+  } catch (error) {
+    console.error('[CRM] Failed to fetch lead:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch lead' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -76,7 +116,13 @@ export async function PATCH(
       }
     }
 
-    return NextResponse.json({ lead });
+    const { data: allActivities } = await supabase
+      .from('crm_lead_activities')
+      .select('*')
+      .eq('lead_id', id)
+      .order('created_at', { ascending: false });
+
+    return NextResponse.json({ lead: { ...lead, activities: allActivities || [] } });
   } catch (error) {
     console.error('[CRM] Failed to update lead:', error);
     const message = error instanceof Error ? error.message : 'Failed to update lead';

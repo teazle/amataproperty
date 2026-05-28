@@ -1,10 +1,10 @@
+"use client";
+
 import Link from 'next/link';
-import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AdminLogoutButton } from '@/components/AdminLogoutButton';
-import { ADMIN_SESSION_COOKIE, isValidAdminSession } from '@/lib/admin-auth';
 import { 
   Home, 
   Users, 
@@ -18,16 +18,15 @@ import {
   ChevronDown
 } from 'lucide-react';
 
-export default async function AdminLayout({
+export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(ADMIN_SESSION_COOKIE)?.value;
+  const pathname = usePathname();
 
-  if (!await isValidAdminSession(token)) {
-    redirect('/login?next=/admin');
+  if (pathname === '/admin') {
+    return <>{children}</>;
   }
 
   return (
@@ -46,6 +45,14 @@ export default async function AdminLayout({
             
             {/* Primary Pages Navigation */}
             <div className="hidden md:flex space-x-1 lg:space-x-2 flex-wrap">
+              <Link href="/admin/crm">
+                <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-rose-50">
+                  <Target className="h-4 w-4" />
+                  <span>CRM</span>
+                  <CheckCircle className="h-3 w-3 text-green-500" />
+                </Button>
+              </Link>
+
               <Link href="/admin/listings">
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-green-50">
                   <Home className="h-4 w-4" />
@@ -69,7 +76,7 @@ export default async function AdminLayout({
                   <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
-              
+
               <Link href="/admin/scraper">
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-orange-50">
                   <Zap className="h-4 w-4" />
@@ -114,6 +121,11 @@ export default async function AdminLayout({
               </Button>
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
                 <div className="py-1">
+                  <Link href="/admin/crm" className="block px-4 py-2 text-sm text-gray-700 hover:bg-rose-50 flex items-center space-x-2">
+                    <Target className="h-4 w-4" />
+                    <span>CRM</span>
+                    <CheckCircle className="h-3 w-3 text-green-500" />
+                  </Link>
                   <Link href="/admin/listings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-green-50 flex items-center space-x-2">
                     <Home className="h-4 w-4" />
                     <span>Listings</span>

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "smartprop-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd smartprop && PORT=3456 bun run dev"],
+      "port": 3456
+    }
+  ]
+}

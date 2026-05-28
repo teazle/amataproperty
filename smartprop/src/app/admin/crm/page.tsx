@@ -154,6 +154,7 @@ export default function CrmPage() {
   const [dragActive, setDragActive] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResponse | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   async function loadProjects() {
     const data = await fetchJson<ProjectsResponse>('/api/admin/crm/projects');
@@ -285,125 +286,18 @@ export default function CrmPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Project CRM</h1>
-          <p className="text-sm text-gray-600 mt-2">
-            Customer inquiries from Luxe Realty project pages, organized by project and pipeline stage.
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-900">CRM</h1>
+          <p className="mt-1 text-sm text-gray-500">Lead inbox for Luxe Realty projects.</p>
         </div>
-        <Button variant="outline" onClick={() => void refreshAll()} disabled={loading}>
-          <RefreshCcw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Metric label="Total leads" value={stats.total} />
-        <Metric label="New" value={stats.new} />
-        <Metric label="Follow-ups" value={stats.followUps} />
-        <Metric label="Won" value={stats.won} />
-      </div>
-
-      <section className="rounded-lg border border-dashed border-gray-300 bg-white p-4 shadow-sm">
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px] lg:items-center">
-          <label
-            className={`flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-md border px-4 py-6 text-center transition ${
-              dragActive ? 'border-rose-400 bg-rose-50' : 'border-gray-200 bg-gray-50 hover:border-gray-400'
-            }`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragActive(true);
-            }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              handleFileList(event.dataTransfer.files);
-            }}
-          >
-            <input
-              type="file"
-              accept=".xlsx,.xlsm,.csv,.tsv"
-              className="sr-only"
-              onChange={(event) => handleFileList(event.target.files)}
-              disabled={importing}
-            />
-            <Upload className="h-6 w-6 text-gray-500" />
-            <span className="mt-3 text-sm font-semibold text-gray-900">
-              {importing ? 'Importing leads...' : 'Drop OpenClaw Excel or CSV leads here'}
-            </span>
-            <span className="mt-1 text-xs text-gray-500">
-              Uses normalized name, phone, email, project, status, priority, and notes columns when present.
-            </span>
-          </label>
-
-          <div className="rounded-md border bg-gray-50 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-              <FileSpreadsheet className="h-4 w-4 text-rose-500" />
-              Lead import
-            </div>
-            {importResult ? (
-              <div className="mt-3 space-y-2 text-sm text-gray-700">
-                <p className="font-medium text-gray-900">{importResult.fileName}</p>
-                <div className="grid grid-cols-4 gap-2 text-center">
-                  <ImportStat label="Rows" value={importResult.rowsRead} />
-                  <ImportStat label="Added" value={importResult.imported} />
-                  <ImportStat label="Skipped" value={importResult.skipped} />
-                  <ImportStat label="Dupes" value={importResult.duplicates} />
-                </div>
-                {importResult.skippedRows.length > 0 && (
-                  <div className="flex gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                    <span>
-                      Row {importResult.skippedRows[0].rowNumber}: {importResult.skippedRows[0].reason}
-                      {importResult.skippedRows.length > 1 ? `, plus ${importResult.skippedRows.length - 1} more` : ''}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="mt-3 text-sm text-gray-600">
-                Imports into the selected project, or General Luxe when all projects are selected.
-              </p>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <div className="grid grid-cols-1 lg:grid-cols-[220px_180px_1fr] gap-3">
-        <select
-          className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900"
-          value={selectedProject}
-          onChange={(event) => setSelectedProject(event.target.value)}
-        >
-          <option value="all">All projects</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.slug}>
-              {project.title}
-            </option>
-          ))}
-        </select>
-        <select
-          className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900"
-          value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value)}
-        >
-          <option value="all">All statuses</option>
-          {crmLeadStatuses.map((status) => (
-            <option key={status} value={status}>
-              {formatCrmStatus(status)}
-            </option>
-          ))}
-        </select>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by name, phone, email, or project"
-            className="pl-9 bg-white"
-          />
+        <div className="flex items-center gap-5">
+          <StatChip label="Total" value={stats.total} />
+          <span className="hidden h-8 w-px bg-gray-200 sm:block" />
+          <StatChip label="New" value={stats.new} tone="blue" />
+          <StatChip label="Follow-ups" value={stats.followUps} tone="amber" />
+          <StatChip label="Won" value={stats.won} tone="emerald" />
         </div>
       </div>
 
@@ -413,12 +307,65 @@ export default function CrmPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50/60 px-4 py-2.5">
-          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
-            Leads {loading ? '' : `· ${sortedLeads.length}`}
-          </p>
-          <p className="text-[11px] text-gray-500">Sorted by latest activity</p>
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-gray-50/60 px-3 py-2">
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name, phone, email, project..."
+              className="h-9 bg-white pl-9"
+            />
+          </div>
+          <select
+            className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900"
+            value={selectedProject}
+            onChange={(event) => setSelectedProject(event.target.value)}
+          >
+            <option value="all">All projects</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.slug}>
+                {project.title}
+              </option>
+            ))}
+          </select>
+          <select
+            className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="all">All statuses</option>
+            {crmLeadStatuses.map((status) => (
+              <option key={status} value={status}>
+                {formatCrmStatus(status)}
+              </option>
+            ))}
+          </select>
+          <div className="ml-auto flex items-center gap-1">
+            <span className="hidden text-xs text-gray-500 sm:inline">
+              {loading ? '' : `${sortedLeads.length} ${sortedLeads.length === 1 ? 'lead' : 'leads'}`}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => setImportOpen(true)}
+            >
+              <Upload className="h-4 w-4" />
+              Import
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 w-9 p-0"
+              onClick={() => void refreshAll()}
+              disabled={loading}
+              aria-label="Refresh"
+            >
+              <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
         </div>
 
         {loading ? (
@@ -427,12 +374,12 @@ export default function CrmPage() {
           <div className="px-6 py-16 text-center">
             <p className="text-sm font-medium text-gray-900">No leads match these filters</p>
             <p className="mt-1 text-xs text-gray-500">
-              Try clearing filters, or drop an OpenClaw export into the import panel above.
+              Try clearing filters, or use <span className="font-medium text-gray-700">Import</span> to load an OpenClaw export.
             </p>
           </div>
         ) : (
           <Table className="text-sm">
-            <TableHeader className="bg-gray-50/60">
+            <TableHeader className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur">
               <TableRow className="hover:bg-transparent">
                 <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Lead</TableHead>
                 <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Project</TableHead>
@@ -440,30 +387,29 @@ export default function CrmPage() {
                 <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Status</TableHead>
                 <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Priority</TableHead>
                 <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Message</TableHead>
-                <TableHead className="px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500">Follow-up</TableHead>
-                <TableHead className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Last activity</TableHead>
+                <TableHead className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Follow-up</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sortedLeads.map((lead) => (
                 <TableRow
                   key={lead.id}
-                  className="cursor-pointer border-gray-100 hover:bg-rose-50/40 transition-colors"
+                  className="cursor-pointer border-gray-100 odd:bg-white even:bg-gray-50/40 hover:!bg-rose-50/50 transition-colors"
                   onClick={() => {
                     setSelectedLead(lead);
                     setFollowUpValue(isoToDatetimeLocal(lead.follow_up_at));
                   }}
                 >
-                  <TableCell className="px-4 py-3 align-top">
+                  <TableCell className="px-4 py-2.5 align-top">
                     <p className="font-semibold text-gray-900">{lead.name || 'Unnamed lead'}</p>
                     {lead.assigned_to && (
                       <p className="mt-0.5 text-[11px] text-gray-500">Assigned to {lead.assigned_to}</p>
                     )}
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top text-gray-700">
+                  <TableCell className="px-4 py-2.5 align-top text-gray-700">
                     {lead.crm_projects?.title || lead.property_title || <span className="text-gray-400">—</span>}
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top">
+                  <TableCell className="px-4 py-2.5 align-top">
                     <div className="space-y-1 text-[12px] text-gray-700 tabular-nums">
                       {lead.phone ? (
                         <p className="flex items-center gap-1.5"><Phone className="h-3 w-3 text-gray-400" />{lead.phone}</p>
@@ -474,22 +420,22 @@ export default function CrmPage() {
                       {!lead.phone && !lead.email && <span className="text-gray-400">—</span>}
                     </div>
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top">
+                  <TableCell className="px-4 py-2.5 align-top">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${statusPillClass[lead.status]}`}>
                       {formatCrmStatus(lead.status)}
                     </span>
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top">
+                  <TableCell className="px-4 py-2.5 align-top">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ring-1 ring-inset ${priorityPillClass[lead.priority]}`}>
                       {lead.priority}
                     </span>
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top text-gray-600 max-w-[280px]">
+                  <TableCell className="px-4 py-2.5 align-top text-gray-600 max-w-[280px]">
                     <p className="truncate" title={lead.message}>
                       {lead.message || <span className="text-gray-400">—</span>}
                     </p>
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top text-gray-700 tabular-nums">
+                  <TableCell className="px-4 py-2.5 align-top text-right text-gray-700 tabular-nums">
                     {lead.follow_up_at ? (
                       <span className="inline-flex items-center gap-1.5">
                         <CalendarClock className="h-3 w-3 text-gray-400" />
@@ -499,15 +445,73 @@ export default function CrmPage() {
                       <span className="text-gray-400">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="px-4 py-3 align-top text-right text-gray-500 tabular-nums">
-                    {formatDate(lead.last_activity_at || lead.created_at)}
-                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </div>
+
+      <Dialog open={importOpen} onOpenChange={(open) => { setImportOpen(open); if (!open) setImportResult(null); }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5 text-rose-500" />
+              Import leads
+            </DialogTitle>
+            <DialogDescription>
+              Drop an OpenClaw export (.xlsx, .xlsm, .csv, .tsv). Rows are matched to the project by{' '}
+              <code className="rounded bg-gray-100 px-1 py-0.5 text-[11px]">project_slug</code>, or fall back to{' '}
+              <strong>{selectedProject === 'all' ? 'General Luxe' : selectedProject}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <label
+            className={`flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
+              dragActive ? 'border-rose-400 bg-rose-50' : 'border-gray-200 bg-gray-50 hover:border-gray-400'
+            }`}
+            onDragOver={(event) => { event.preventDefault(); setDragActive(true); }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={(event) => { event.preventDefault(); handleFileList(event.dataTransfer.files); }}
+          >
+            <input
+              type="file"
+              accept=".xlsx,.xlsm,.csv,.tsv"
+              className="sr-only"
+              onChange={(event) => handleFileList(event.target.files)}
+              disabled={importing}
+            />
+            <Upload className="h-6 w-6 text-gray-500" />
+            <span className="mt-3 text-sm font-semibold text-gray-900">
+              {importing ? 'Importing leads...' : 'Drop file here or click to choose'}
+            </span>
+            <span className="mt-1 text-xs text-gray-500">
+              Detects normalized name, phone, email, project, status, priority, and notes columns.
+            </span>
+          </label>
+
+          {importResult && (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-gray-900">{importResult.fileName}</p>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <ImportStat label="Rows" value={importResult.rowsRead} />
+                <ImportStat label="Added" value={importResult.imported} />
+                <ImportStat label="Skipped" value={importResult.skipped} />
+                <ImportStat label="Dupes" value={importResult.duplicates} />
+              </div>
+              {importResult.skippedRows.length > 0 && (
+                <div className="flex gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <span>
+                    Row {importResult.skippedRows[0].rowNumber}: {importResult.skippedRows[0].reason}
+                    {importResult.skippedRows.length > 1 ? `, plus ${importResult.skippedRows.length - 1} more` : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(selectedLead)} onOpenChange={(open) => !open && setSelectedLead(null)}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -637,11 +641,25 @@ function LeadTableSkeleton() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function StatChip({
+  label,
+  value,
+  tone = 'gray',
+}: {
+  label: string;
+  value: number;
+  tone?: 'gray' | 'blue' | 'amber' | 'emerald';
+}) {
+  const toneClass: Record<NonNullable<typeof tone>, string> = {
+    gray: 'text-gray-900',
+    blue: 'text-blue-700',
+    amber: 'text-amber-700',
+    emerald: 'text-emerald-700',
+  };
   return (
-    <div className="rounded-lg border bg-white px-4 py-3 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</p>
-      <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
+    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className={`text-lg font-semibold tabular-nums ${toneClass[tone]}`}>{value}</span>
+      <span className="text-xs text-gray-500">{label}</span>
     </div>
   );
 }

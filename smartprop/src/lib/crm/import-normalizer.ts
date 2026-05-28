@@ -80,6 +80,9 @@ const fieldAliases = {
     'projectname',
     'listing',
     'listingtitle',
+    'location',
+    'address',
+    'propertyaddress',
   ],
   projectSlug: ['projectslug', 'project_slug', 'slug'],
   sourcePath: ['sourcepath', 'source_path', 'sourcepage', 'pagepath'],
@@ -171,6 +174,124 @@ function normalizeIsoDate(value: string) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+// OpenClaw FSBO/FRBO column codes — single letters/short tags used in their
+// inbound spreadsheets. Expanded into human-readable text in the lead message.
+const propertyTypeLabels: Record<string, string> = {
+  CO: 'Condo',
+  CT: 'Cluster Terrace',
+  TR: 'Terrace',
+  BU: 'Bungalow',
+  SD: 'Semi-Detached',
+  PH: 'Penthouse',
+  PW: 'Penthouse Walkup',
+  AP: 'Apartment',
+  WK: 'Walk-up',
+};
+
+function pickRaw(row: RawLeadRow, aliases: readonly string[]) {
+  const entries = Object.entries(row);
+  for (const alias of aliases) {
+    const found = entries.find(([key]) => keyOf(key) === alias);
+    if (found && found[1] !== null && found[1] !== undefined && String(found[1]).trim() !== '') {
+      return found[1];
+    }
+  }
+  return undefined;
+}
+
+// Excel stores dates as serial numbers (days since 1899-12-30 UTC, with the
+// 1900-leap-year bug baked in). Our XLSX parser reads raw cell values without
+// applying date styles, so values arrive as "42545" rather than a real Date.
+// Converts a value to a localized "01 Jan 2024" string, treating numeric
+// strings in the plausible Excel-date range as serials.
+function formatListingDate(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date) {
+    return value.toLocaleDateString('en-SG', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+  const str = String(value).trim();
+  if (!str) return null;
+
+  let parsed: Date;
+  if (/^\d+(\.\d+)?$/.test(str)) {
+    const serial = Number(str);
+    if (serial >= 20000 && serial <= 80000) {
+      parsed = new Date(Math.round((serial - 25569) * 86_400_000));
+    } else {
+      return null;
+    }
+  } else {
+    parsed = new Date(str);
+  }
+
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString('en-SG', {
+    timeZone: 'Asia/Singapore',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function buildOpenClawMessage(row: RawLeadRow, defaultSource: string): string {
+  const pt = pickRaw(row, ['pt', 'propertytype']);
+  const dt = pickRaw(row, ['dt', 'district']);
+  const location = pickRaw(row, ['location', 'address']);
+  const tnr = pickRaw(row, ['tnr', 'tenure']);
+  const land = pickRaw(row, ['land']);
+  const area = pickRaw(row, ['area']);
+  const rb = pickRaw(row, ['rb', 'roomsbathrooms']);
+  const psf = pickRaw(row, ['psf']);
+  const price = pickRaw(row, ['price', 'priceasking', 'pricesgd']);
+  const date = pickRaw(row, ['date', 'listingdate']);
+
+  if (!pt && !location && !rb && !price && !psf && !area && !land) {
+    return '';
+  }
+
+  const lines: string[] = [];
+  const tag = `[${defaultSource}]`;
+  const headerBits: string[] = [tag];
+  if (pt) {
+    const code = String(pt).toUpperCase().trim();
+    headerBits.push(propertyTypeLabels[code] || code);
+  }
+  if (dt) headerBits.push(`D${String(dt).trim()}`);
+  if (location) headerBits.push(String(location).trim());
+  lines.push(headerBits.join(' · '));
+
+  const specs: string[] = [];
+  if (area) specs.push(`${String(area).trim()} sqft`);
+  if (land) specs.push(`${String(land).trim()} sqft land`);
+  if (rb) specs.push(String(rb).trim());
+  if (tnr) {
+    const tnrStr = String(tnr).trim();
+    if (tnrStr.toUpperCase() === 'FH') specs.push('Freehold');
+    else specs.push(`${tnrStr}-yr leasehold`);
+  }
+  if (specs.length) lines.push(specs.join(' · '));
+
+  const priceBits: string[] = [];
+  if (price && String(price).trim() !== '-') priceBits.push(`Asking ${String(price).trim()}`);
+  if (psf && String(psf).trim() !== '-') priceBits.push(`${String(psf).trim()} psf`);
+  if (priceBits.length) lines.push(priceBits.join(' · '));
+
+  const listingDate = formatListingDate(date);
+  if (listingDate) lines.push(`Listed ${listingDate}.`);
+
+  return lines.join('\n');
+}
+
+// OpenClaw names often have noise jammed on the end: a backup phone
+// number ("MRS TAN 69660869"), a tag like "(LH)" for landlord, or both.
+// Strip both so the contact display stays clean.
+function cleanContactName(value: string): string {
+  return value
+    .replace(/\s+\+?\d[\d\s-]{5,}/g, '')
+    .replace(/\s*\([^)]*\)\s*$/g, '')
+    .trim();
+}
+
 export function normalizeCrmImportRows(rows: RawLeadRow[], options: NormalizeOptions = {}) {
   const valid: NormalizedCrmImportLead[] = [];
   const skipped: SkippedCrmImportLead[] = [];
@@ -178,7 +299,8 @@ export function normalizeCrmImportRows(rows: RawLeadRow[], options: NormalizeOpt
 
   rows.forEach((row, index) => {
     const rowNumber = index + 2;
-    const name = pick(row, fieldAliases.name) || '';
+    const rawName = pick(row, fieldAliases.name) || '';
+    const name = cleanContactName(rawName);
     const phone = normalizePhone(pick(row, fieldAliases.phone));
     const email = normalizeEmail(pick(row, fieldAliases.email));
 
@@ -196,7 +318,11 @@ export function normalizeCrmImportRows(rows: RawLeadRow[], options: NormalizeOpt
     const explicitProjectSlug = normalizeProjectSlug(pick(row, fieldAliases.projectSlug));
     const inferredProjectSlug = explicitProjectSlug || normalizeProjectSlug(propertyTitle);
     const source = pick(row, fieldAliases.source) || 'OpenClaw';
-    const message = pick(row, fieldAliases.message) || `Imported lead from ${source}.`;
+    const explicitMessage = pick(row, fieldAliases.message);
+    const message =
+      explicitMessage ||
+      buildOpenClawMessage(row, source) ||
+      `Imported lead from ${source}.`;
 
     valid.push({
       rowNumber,
@@ -205,7 +331,7 @@ export function normalizeCrmImportRows(rows: RawLeadRow[], options: NormalizeOpt
       email,
       message,
       propertyTitle,
-      projectSlug: inferredProjectSlug || defaultProjectSlug,
+      projectSlug: explicitProjectSlug || defaultProjectSlug || inferredProjectSlug,
       sourcePath: pick(row, fieldAliases.sourcePath) || 'openclaw://import',
       sourceUrl: pick(row, fieldAliases.sourceUrl) || null,
       status: normalizeStatus(pick(row, fieldAliases.status)),

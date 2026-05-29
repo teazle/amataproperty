@@ -196,14 +196,17 @@ export const Particles: React.FC<ParticlesProps> = ({
       }
       window.removeEventListener("resize", handleResize)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Canvas lifecycle is driven by refs and restarted only when color changes.
   }, [color])
 
   useEffect(() => {
     onMouseMove()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Mouse coordinates are the only external values needed for this ref update.
   }, [mousePosition.x, mousePosition.y])
 
   useEffect(() => {
     initCanvas()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Refresh is an explicit redraw trigger.
   }, [refresh])
 
   const resizeCanvas = () => {

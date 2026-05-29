@@ -54,7 +54,7 @@ const mockConversations = [
 ];
 
 // Mock AI service functions
-async function mockAIAnalysis(operation: string, delay: number = 100): Promise<any> {
+async function mockAIAnalysis(operation: string, delay: number = 100): Promise<Record<string, unknown>> {
   await new Promise(resolve => setTimeout(resolve, delay));
   
   switch (operation) {
@@ -104,7 +104,7 @@ async function testCircuitBreakerIntegration(): Promise<boolean> {
     console.log('   ✅ All circuit breaker operations completed successfully');
     return true;
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Circuit breaker integration test failed', error as Error);
     return false;
   }
@@ -153,7 +153,7 @@ async function testParallelConversationAnalysis(): Promise<boolean> {
     
     return true;
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Parallel conversation analysis test failed', error as Error);
     return false;
   }
@@ -192,7 +192,7 @@ async function testConfigurationIntegration(): Promise<boolean> {
     console.log('   ✅ All configuration constants validated');
     return true;
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Configuration integration test failed', error as Error);
     return false;
   }
@@ -230,7 +230,7 @@ async function testLoggingIntegration(): Promise<boolean> {
     console.log('   ✅ All logging methods executed successfully');
     return true;
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Logging integration test failed', error as Error);
     return false;
   }
@@ -269,7 +269,7 @@ async function testConcurrentLoad(): Promise<boolean> {
     
     return true;
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Concurrent load test failed', error as Error);
     return false;
   }

@@ -13,7 +13,7 @@ async function testMCPNoCloudflare() {
   
   let progressCount = 0;
   
-  const onProgress = (progress: any) => {
+  const onProgress = (progress: unknown) => {
     progressCount++;
     console.log(`📊 Progress ${progressCount}: ${progress.message}`);
     console.log(`   📄 Page: ${progress.currentPage}/${progress.totalPages}`);

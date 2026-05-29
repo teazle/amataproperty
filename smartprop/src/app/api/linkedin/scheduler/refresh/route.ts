@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { refreshLinkedInScheduler } from '@/lib/linkedin/scheduler';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/linkedin/scheduler/refresh
  * Manually refresh/restart the LinkedIn automation scheduler
  */
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     await refreshLinkedInScheduler();
     
@@ -13,10 +13,10 @@ export async function POST(request: NextRequest) {
       success: true,
       message: 'LinkedIn scheduler refreshed successfully'
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error refreshing LinkedIn scheduler:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to refresh scheduler' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to refresh scheduler' },
       { status: 500 }
     );
   }

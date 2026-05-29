@@ -7,16 +7,16 @@
 import Groq from 'groq-sdk';
 import { sendMessageWithTyping } from '../wa/waha';
 import {
-  getContextualDelay,
-  isTypingSimulationEnabled,
-  TimingContext
+ConversationContext as AdvancedConversationContext,
+analyzeConversationWithAdvancedAI
+} from './conversation-analyzer';
+import {
+getContextualDelay,
+isTypingSimulationEnabled,
+TimingContext
 } from './human-behavior';
 import { getActivePrompt } from './prompt-manager';
-import {
-  analyzeConversationWithAdvancedAI,
-  ConversationContext as AdvancedConversationContext
-} from './conversation-analyzer';
-import { cleanQuotes, hasQuotes } from './quote-cleaner';
+import { cleanQuotes,hasQuotes } from './quote-cleaner';
 
 // Lazy initialization
 let groq: Groq | null = null;
@@ -151,13 +151,13 @@ export function updateObjectivesStatus(context: ConversationContext): {
   const negativeSignals = ['no', 'not willing', 'don\'t co-broke', 'principal only', 'exclusive', 'cannot', 'won\'t'];
   const discussionSignals = ['depends', 'discuss', 'check', 'review', 'let me see'];
 
-  let lastUserMessage = '';
+  let _lastUserMessage = '';
 
   for (let i = 0; i < history.length; i++) {
     const text = history[i]?.message?.toLowerCase() || '';
 
     if (history[i]?.role === 'user') {
-      lastUserMessage = text;
+      _lastUserMessage = text;
       continue;
     }
 
@@ -423,7 +423,7 @@ export async function analyzeConversationWithContext(
 
   // Track conversation progress
   const determinePhase = (context: ConversationContext) => {
-    const history = context.conversationHistory;
+    const _history = context.conversationHistory;
     const lastMessage = context.agentMessage.toLowerCase();
 
     // Check for co-broking confirmation
@@ -537,7 +537,7 @@ async function callGroqAIWithContext(
       minute: '2-digit'
     };
     const currentDateTime = now.toLocaleString('en-SG', options);
-    const currentDay = now.toLocaleString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long' });
+    const _currentDay = now.toLocaleString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long' });
 
     // Format conversation history for AI
     const historyText = context.conversationHistory
@@ -600,7 +600,7 @@ Analyze and decide: Should we reply? What phase are we in?`,
     console.log('🤖 AI Decision:', decision);
 
     return decision;
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error analyzing conversation with AI:', error);
     return {
       shouldReply: false,
@@ -942,7 +942,7 @@ export async function sendAutoReply(
       console.log(`   Message ID: ${result.messageId || 'N/A'}`);
       return true;
     }
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error sending auto-reply:', error);
     return false;
   }

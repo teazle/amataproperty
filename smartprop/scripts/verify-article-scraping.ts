@@ -108,7 +108,7 @@ async function getArticleContent(articleId: string) {
   return data;
 }
 
-async function verifyWithBrowserMCP(article: any) {
+async function verifyWithBrowserMCP(article: unknown) {
   console.log('\n🔍 Verifying article with browser MCP...');
   
   const edgePropUrl = `https://www.edgeprop.sg${article.path}`;

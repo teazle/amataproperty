@@ -41,7 +41,7 @@ async function testThumbnailExtraction() {
     });
     
     // Mock chrome object
-    (window as any).chrome = {
+    (window as unknown).chrome = {
       runtime: {},
       loadTimes: function() {},
       csi: function() {},
@@ -50,7 +50,7 @@ async function testThumbnailExtraction() {
 
     // Mock permissions
     const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: any) => (
+    window.navigator.permissions.query = (parameters: unknown) => (
       parameters.name === 'notifications' ?
         Promise.resolve({ state: Notification.permission }) :
         originalQuery(parameters)
@@ -241,7 +241,7 @@ async function testThumbnailExtraction() {
     
     let validThumbnails = 0;
     
-    articles.forEach((article: any) => {
+    articles.forEach((article: unknown) => {
       console.log(`\n${article.index}. ${article.title}`);
       console.log(`   URL: ${article.href}`);
       console.log(`   Thumbnail: ${article.thumbnail}`);
@@ -250,7 +250,7 @@ async function testThumbnailExtraction() {
       console.log(`   Images in container: ${article.debugInfo.totalImagesInContainer}`);
       if (article.debugInfo.imagesInContainer.length > 0) {
         console.log(`   🔍 Images found:`);
-        article.debugInfo.imagesInContainer.forEach((img: any, i: number) => {
+        article.debugInfo.imagesInContainer.forEach((img: unknown, i: number) => {
           console.log(`      ${i + 1}. src: ${img.src}`);
           console.log(`         alt: ${img.alt}`);
           console.log(`         id: ${img.id}`);

@@ -219,7 +219,7 @@ function getGroqClient(): Groq {
      constructor(
        message: string,
        public readonly code: string,
-       public readonly context?: any
+       public readonly context?: unknown
      ) {
        super(message);
      }

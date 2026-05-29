@@ -3,12 +3,12 @@
  * Tests parallel processing, circuit breaker, and logging improvements
  */
 
-import { logger, measurePerformance } from './logger';
-import { coBrokingAnalysisBreaker, timeslotDetectionBreaker, responseGenerationBreaker } from './circuit-breaker';
+import { coBrokingAnalysisBreaker } from './circuit-breaker';
 import { AI_CONFIG } from './config';
+import { logger,measurePerformance } from './logger';
 
 // Mock AI operations for testing
-async function mockCoBrokingAnalysis(): Promise<any> {
+async function mockCoBrokingAnalysis(): Promise<unknown> {
   // Simulate AI processing time
   await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
   return {
@@ -18,7 +18,7 @@ async function mockCoBrokingAnalysis(): Promise<any> {
   };
 }
 
-async function mockTimeslotDetection(): Promise<any> {
+async function mockTimeslotDetection(): Promise<unknown> {
   // Simulate AI processing time
   await new Promise(resolve => setTimeout(resolve, Math.random() * 800 + 300));
   return {
@@ -28,14 +28,14 @@ async function mockTimeslotDetection(): Promise<any> {
   };
 }
 
-async function mockResponseGeneration(): Promise<string> {
+async function _mockResponseGeneration(): Promise<string> {
   // Simulate AI processing time
   await new Promise(resolve => setTimeout(resolve, Math.random() * 1200 + 800));
   return "Thank you for your interest in the property. I'd be happy to help you with more information.";
 }
 
 // Test sequential vs parallel processing
-async function testSequentialProcessing(): Promise<{ duration: number; results: any[] }> {
+async function testSequentialProcessing(): Promise<{ duration: number; results: unknown[] }> {
   logger.info('Testing sequential processing...');
   const startTime = Date.now();
   
@@ -48,7 +48,7 @@ async function testSequentialProcessing(): Promise<{ duration: number; results: 
   return { duration, results: [result1, result2] };
 }
 
-async function testParallelProcessing(): Promise<{ duration: number; results: any[] }> {
+async function testParallelProcessing(): Promise<{ duration: number; results: unknown[] }> {
   logger.info('Testing parallel processing...');
   const startTime = Date.now();
   
@@ -78,7 +78,7 @@ async function testCircuitBreaker(): Promise<void> {
   try {
     const result = await coBrokingAnalysisBreaker.execute(mockCoBrokingAnalysis);
     logger.info('Circuit breaker test - success case passed', { result });
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Circuit breaker test - unexpected error in success case', error as Error);
   }
   
@@ -140,7 +140,7 @@ export async function runPerformanceTests(): Promise<void> {
     
     logger.info('🎉 Performance Test Summary', summary);
     
-  } catch (error: any) {
+  } catch (error) {
     logger.error('Performance tests failed', error as Error);
     throw error;
   }

@@ -36,8 +36,8 @@ async function debugConversation() {
   console.log('- Conversation Phase:', outreachData.conversation_phase);
   console.log('- Auto Reply Count:', outreachData.auto_reply_count);
   console.log('- Reply Text:', outreachData.reply_text);
-  console.log('- Agent:', (outreachData.agents as any)?.name);
-  console.log('- Property:', (outreachData.listings as any)?.title);
+  console.log('- Agent:', (outreachData.agents as unknown)?.name);
+  console.log('- Property:', (outreachData.listings as unknown)?.title);
   console.log('');
 
   // Parse conversation history
@@ -48,7 +48,7 @@ async function debugConversation() {
       : []);
 
   console.log('💬 Conversation History:');
-  conversationHistory.forEach((msg: any, index: number) => {
+  conversationHistory.forEach((msg: unknown, index: number) => {
     console.log(`${index + 1}. [${msg.role}]: "${msg.message}"`);
   });
   console.log('');
@@ -56,7 +56,7 @@ async function debugConversation() {
   // Test AI analysis with the agent's latest message
   if (conversationHistory.length > 0) {
     // Find the last agent message
-    const agentMessages = conversationHistory.filter((msg: any) => msg.role === 'agent');
+    const agentMessages = conversationHistory.filter((msg: unknown) => msg.role === 'agent');
     const latestAgentMessage = agentMessages[agentMessages.length - 1];
     
     if (!latestAgentMessage) {
@@ -68,15 +68,15 @@ async function debugConversation() {
       agentMessage: latestAgentMessage.message,
       conversationHistory: conversationHistory, // Full history for context
       agentProfile: {
-        name: (outreachData.agents as any)?.name || 'Unknown Agent',
-        agency: (outreachData.agents as any)?.agency,
+        name: (outreachData.agents as unknown)?.name || 'Unknown Agent',
+        agency: (outreachData.agents as unknown)?.agency,
         experience: 'Unknown'
       },
       propertyContext: {
-        title: (outreachData.listings as any)?.title || 'Property',
-        price: (outreachData.listings as any)?.price || 0,
-        district: (outreachData.listings as any)?.district || 'Unknown',
-        propertyType: (outreachData.listings as any)?.property_type || 'Unknown'
+        title: (outreachData.listings as unknown)?.title || 'Property',
+        price: (outreachData.listings as unknown)?.price || 0,
+        district: (outreachData.listings as unknown)?.district || 'Unknown',
+        propertyType: (outreachData.listings as unknown)?.property_type || 'Unknown'
       },
       currentPhase: outreachData.conversation_phase || 'initial_request',
       daysElapsed: 1,

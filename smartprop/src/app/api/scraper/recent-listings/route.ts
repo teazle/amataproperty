@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(listingsData)}\n\n`));
 
-        } catch (error: any) {
+        } catch (error) {
     console.error('Error fetching recent listings:', error);
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`));
         }

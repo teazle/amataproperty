@@ -26,7 +26,7 @@ async function testCircuitBreaker() {
       return 'Success!';
     });
     console.log('   ✅ Successful operation:', result);
-  } catch (error: any) {
+  } catch (error) {
     console.log('   ❌ Unexpected failure:', (error as Error).message);
   }
 
@@ -37,7 +37,7 @@ async function testCircuitBreaker() {
       await testBreaker.execute(async () => {
         throw new Error(`Test failure ${i + 1}`);
       });
-    } catch (error: any) {
+    } catch (error) {
       failureCount++;
       console.log(`   ⚠️  Expected failure ${failureCount}: ${(error as Error).message}`);
     }
@@ -135,7 +135,7 @@ async function testErrorHandling() {
     await testBreaker.execute(async () => {
       throw new Error('Simulated AI service failure');
     });
-  } catch (error: any) {
+  } catch (error) {
     console.log('   ✅ Error caught gracefully:', (error as Error).message);
   }
   
@@ -144,7 +144,7 @@ async function testErrorHandling() {
     await testBreaker.execute(async () => {
       return 'This should be blocked';
     });
-  } catch (error: any) {
+  } catch (error) {
     console.log('   ✅ Circuit breaker blocked operation:', (error as Error).message);
   }
   
@@ -167,7 +167,7 @@ async function runAllTests() {
     results.logging = await testLogging();
     results.parallelProcessing = await testParallelProcessing();
     results.errorHandling = await testErrorHandling();
-  } catch (error: any) {
+  } catch (error) {
     console.error('\n❌ Test execution failed:', (error as Error).message);
   }
   

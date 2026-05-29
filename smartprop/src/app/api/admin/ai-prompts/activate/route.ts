@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
       prompt: activatedPrompt,
       message: 'AI prompt activated successfully'
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error activating prompt:', error);
     return NextResponse.json(
       { error: 'Failed to activate AI prompt' },

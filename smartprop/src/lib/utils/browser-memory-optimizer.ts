@@ -7,7 +7,15 @@
  * - Implement proper cleanup to prevent orphaned processes
  */
 
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser,BrowserContext,Page } from 'playwright';
+
+interface PerformanceWithMemory extends Performance {
+  memory?: {
+    jsHeapSizeLimit: number;
+    usedJSHeapSize: number;
+    totalJSHeapSize: number;
+  };
+}
 
 /**
  * Optimized Chromium launch arguments for memory efficiency
@@ -42,7 +50,7 @@ export const MEMORY_OPTIMIZED_CHROMIUM_ARGS = [
 export async function blockUnnecessaryResources(page: Page): Promise<void> {
   await page.route('**/*', (route) => {
     const resourceType = route.request().resourceType();
-    const url = route.request().url();
+    const _url = route.request().url();
     
     // Block resources that consume memory but aren't needed for scraping
     // Keep: document, script, xhr, fetch (needed for dynamic content)
@@ -68,7 +76,10 @@ export async function getPageMemoryMetrics(page: Page): Promise<{
   try {
     const metrics = await page.evaluate(() => {
       if ('memory' in performance) {
-        const mem = (performance as any).memory;
+        const mem = (performance as PerformanceWithMemory).memory;
+        if (!mem) {
+          return { jsHeapSize: 0, jsHeapUsed: 0, totalHeapSize: 0 };
+        }
         return {
           jsHeapSize: mem.jsHeapSizeLimit / 1024 / 1024, // MB
           jsHeapUsed: mem.usedJSHeapSize / 1024 / 1024, // MB
@@ -108,14 +119,15 @@ export async function shouldRestartBrowser(
 export async function requestPageGC(page: Page): Promise<void> {
   try {
     // Playwright 1.48+ has requestGC method
-    if ('requestGC' in page && typeof (page as any).requestGC === 'function') {
-      await (page as any).requestGC();
+    if (typeof page.requestGC === 'function') {
+      await page.requestGC();
     } else {
       // Fallback: trigger GC by evaluating a script that creates and releases memory
       await page.evaluate(() => {
         // Force garbage collection if available
-        if ('gc' in window && typeof (window as any).gc === 'function') {
-          (window as any).gc();
+        const windowWithGC = window as Window & { gc?: () => void };
+        if (typeof windowWithGC.gc === 'function') {
+          windowWithGC.gc();
         }
       });
     }
@@ -178,4 +190,3 @@ export const DEFAULT_MEMORY_CONFIG: MemoryOptimizationConfig = {
   periodicGC: false, // Disabled by default as it can impact performance
   gcIntervalMs: 60000,
 };
-

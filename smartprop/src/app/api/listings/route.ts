@@ -83,7 +83,7 @@ export async function GET(request: Request) {
       total,
       hasMore
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

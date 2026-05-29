@@ -5,8 +5,7 @@
  */
 
 import { spawn } from 'child_process';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { existsSync,writeFileSync } from 'fs';
 
 const CONFIG = {
   // EC2 Configuration

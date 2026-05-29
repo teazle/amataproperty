@@ -86,7 +86,7 @@ async function debugCloudflareDetailed() {
       
       // Look for any links that might be articles
       const allLinks = Array.from(document.querySelectorAll('a[href]')).filter(link => {
-        const href = link.getAttribute('href') || '';
+        const _href = link.getAttribute('href') || '';
         const text = link.textContent?.trim() || '';
         return text.length > 15 && !text.toLowerCase().includes('search');
       }).slice(0, 10).map(link => ({

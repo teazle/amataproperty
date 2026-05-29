@@ -3,12 +3,12 @@
  * Centralized state management for all app features
  */
 
-import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
-import { subscribeWithSelector } from 'zustand/middleware';
+import { createClient } from '@supabase/supabase-js';
 import { enableMapSet } from 'immer';
 import { useMemo } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { create } from 'zustand';
+import { subscribeWithSelector } from 'zustand/middleware';
+import { immer } from 'zustand/middleware/immer';
 
 // Enable Immer MapSet plugin
 enableMapSet();
@@ -349,7 +349,7 @@ export const useGlobalStore = create<GlobalStore>()(
             };
             state.lastUpdate = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error fetching listings:', error);
           // Set empty state on error
           set((state) => {
@@ -377,7 +377,7 @@ export const useGlobalStore = create<GlobalStore>()(
             state.listings.set(id, listing);
             state.lastUpdate = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error refreshing listing:', error);
         }
       },
@@ -538,7 +538,7 @@ export const useGlobalStore = create<GlobalStore>()(
             }
             state.lastUpdate = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error fetching agents:', error);
           // Set empty state on error
           set((state) => {
@@ -677,7 +677,7 @@ export const useGlobalStore = create<GlobalStore>()(
             });
             state.lastRun = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error starting scraper:', error);
         } finally {
           set((state) => {
@@ -697,7 +697,7 @@ export const useGlobalStore = create<GlobalStore>()(
               job.completed_at = new Date().toISOString();
             }
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error stopping scraper:', error);
         }
       },
@@ -760,7 +760,7 @@ export const useGlobalStore = create<GlobalStore>()(
 );
 
 // Helper functions for filtering
-const filterListings = (listings: Listing[], filters: ListingsState['filters']) => {
+const _filterListings = (listings: Listing[], filters: ListingsState['filters']) => {
   return listings.filter(listing => {
     // Search filter
     if (filters.searchTerm) {

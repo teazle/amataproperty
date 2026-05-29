@@ -2,14 +2,14 @@
  * API Route to Reload Scheduler
  */
 
-import { NextRequest, NextResponse } from 'next/server';
 import { reloadScheduler } from '@/lib/scheduler/scraper-scheduler';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/scheduler/reload
  * Reload all schedules from database
  */
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     await reloadScheduler();
     return NextResponse.json({ success: true, message: 'Scheduler reloaded successfully' });

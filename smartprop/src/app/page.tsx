@@ -1,22 +1,23 @@
 "use client";
 
-import Link from "next/link";
-import Image from "next/image";
-import { Button } from "@/components/ui/button";
 import { BorderBeam } from "@/components/ui/border-beam";
-import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect,useRef,useState } from "react";
 
 export default function Home() {
+  const adminLoginHref = "/login?next=/admin/dashboard";
   const buttonRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const sectionRef = useRef<HTMLElement | null>(null);
   const [frameWidth, setFrameWidth] = useState<number>(0);
   useEffect(() => {
-    const videoAspectRatio = 1.335187;
+    const _videoAspectRatio = 1.335187;
     const compute = () => {
       const section = sectionRef.current;
       if (!section) return;
       const width = section.clientWidth;
-      const height = section.clientHeight;
+      const _height = section.clientHeight;
       const maxWidth = 1620;
       // Allow media frame to be 135% of viewport width (like huly.io) up to maxWidth
       // This allows it to exceed viewport dimensions (centered overflow)
@@ -66,14 +67,14 @@ export default function Home() {
         glowContainer.style.opacity = '0';
       };
 
-      btn.addEventListener('pointerenter', onEnter as any);
-      btn.addEventListener('pointermove', onMove as any);
+      btn.addEventListener('pointerenter', onEnter);
+      btn.addEventListener('pointermove', onMove);
       btn.addEventListener('pointerleave', onLeave);
 
       cleanupFunctions.push(() => {
         cancelAnimationFrame(raf);
-        btn.removeEventListener('pointerenter', onEnter as any);
-        btn.removeEventListener('pointermove', onMove as any);
+        btn.removeEventListener('pointerenter', onEnter);
+        btn.removeEventListener('pointermove', onMove);
         btn.removeEventListener('pointerleave', onLeave);
       });
     });
@@ -94,12 +95,12 @@ export default function Home() {
             ViewProperty.ai
           </Link>
           <div className="ml-auto flex h-full items-center">
-            <Link href="/admin">
+            <Link href={adminLoginHref}>
               <Button variant="ghost" size="sm" className="text-sm text-white">
                 Admin
               </Button>
             </Link>
-            <Link href="/admin">
+            <Link href={adminLoginHref}>
               <Button size="sm" className="ml-4 text-sm">
                 Open System
               </Button>
@@ -121,7 +122,7 @@ export default function Home() {
                 playsInline
                 className="absolute inset-0 h-full w-full object-contain"
               >
-                <source src="/hero.mp4" type="video/mp4" />
+                <source src="/hero.mp4?v=admin-landing-20260528" type="video/mp4" />
               </video>
 
               {/* Overlay image positioned by ratios within the frame */}
@@ -160,7 +161,7 @@ export default function Home() {
             </p>
             <div style={{ marginTop: '30px' }}>
               <Link 
-                href="/admin"
+                href={adminLoginHref}
                 className="cta"
                 ref={(el) => { if (el) buttonRefs.current[0] = el; }}
               >

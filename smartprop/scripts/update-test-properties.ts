@@ -126,7 +126,7 @@ async function updateTestProperties() {
   
   console.log('📋 Updated test properties:');
   allTestProperties?.forEach((property, index) => {
-    const agent = property.agents as any;
+    const agent = property.agents as unknown;
     console.log(`${index + 1}. ${property.title}`);
     console.log(`   URL: ${property.url}`);
     console.log(`   Agent: ${agent?.name} (${agent?.phone})`);

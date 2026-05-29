@@ -1,26 +1,24 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { 
-  MessageSquare, 
-  Send, 
-  Settings, 
-  History, 
-  Activity, 
-  CheckCircle, 
-  XCircle,
-  Play,
-  Square,
-  RefreshCw,
-  Trash2
+import { Textarea } from '@/components/ui/textarea';
+import {
+Activity,
+CheckCircle,
+Play,
+RefreshCw,
+Send,
+Settings,
+Square,
+Trash2,
+XCircle
 } from 'lucide-react';
+import { useEffect,useRef,useState } from 'react';
 import { toast } from 'sonner';
 
 const DEFAULT_SCHEDULE_TIME = '09:00';
@@ -78,10 +76,10 @@ interface LinkedInStatus {
   today: {
     messagesSent: number;
     messagesLimit: number;
-    dailyStats: any;
+    dailyStats: unknown;
   };
   lastScanTime: string | null;
-  lockData: any;
+  lockData: unknown;
 }
 
 interface LinkedInMessage {
@@ -118,7 +116,7 @@ export function LinkedInDashboard() {
   useEffect(() => {
     loadStatus();
     loadHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   // Cleanup EventSource on unmount
@@ -137,14 +135,14 @@ export function LinkedInDashboard() {
   // Poll status every 5 seconds if running
   useEffect(() => {
     if (!isRunning) return;
-    
+
     const interval = setInterval(() => {
       loadStatus();
       loadHistory();
     }, 5000);
     
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [isRunning]);
 
   useEffect(() => {
@@ -254,9 +252,9 @@ export function LinkedInDashboard() {
         console.error('Failed to load history:', data.error);
         toast.error(data.error || 'Failed to load message history');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error loading history:', error);
-      toast.error(error.message || 'Failed to load message history');
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to load message history');
     } finally {
       setHistoryLoading(false);
     }
@@ -279,8 +277,8 @@ export function LinkedInDashboard() {
       } else {
         toast.error(data.error || 'Failed to delete message');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to delete message');
+    } catch (error) {
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to delete message');
     }
   };
 
@@ -302,8 +300,8 @@ export function LinkedInDashboard() {
       } else {
         toast.error(data.error || 'Failed to delete all messages');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to delete all messages');
+    } catch (error) {
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to delete all messages');
     }
   };
 
@@ -335,7 +333,7 @@ export function LinkedInDashboard() {
         console.error('Failed to load logs:', data.error);
         toast.error('Failed to load logs');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error loading logs:', error);
       toast.error('Failed to load logs. Please try refreshing manually.');
     } finally {
@@ -369,8 +367,8 @@ export function LinkedInDashboard() {
       } else {
         toast.error(data.error || 'Failed to start automation');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to start automation');
+    } catch (error) {
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to start automation');
     } finally {
       setStarting(false);
     }
@@ -391,8 +389,8 @@ export function LinkedInDashboard() {
         loadHistory();
         // SSE handles log updates automatically, no need to call loadLogs()
       }, 1000);
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to stop automation');
+    } catch (error) {
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to stop automation');
     } finally {
       setStopping(false);
     }
@@ -429,8 +427,8 @@ export function LinkedInDashboard() {
       } else {
         toast.error(data.error || 'Failed to save settings');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to save settings');
+    } catch (error) {
+      toast.error((error instanceof Error ? error.message : String(error)) || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -464,7 +462,7 @@ export function LinkedInDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm font-medium text-gray-500">Today's Messages</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">Today&apos;s Messages</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
@@ -932,4 +930,3 @@ export function LinkedInDashboard() {
     </div>
   );
 }
-

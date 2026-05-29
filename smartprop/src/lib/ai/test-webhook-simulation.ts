@@ -4,16 +4,54 @@
  * Tests AI system optimizations with realistic webhook scenarios
  */
 
-import { logger, measurePerformance } from './logger';
-import { AI_CONFIG, ERROR_MESSAGES } from './config';
-import { 
-  coBrokingAnalysisBreaker, 
-  timeslotDetectionBreaker, 
-  responseGenerationBreaker 
+import {
+coBrokingAnalysisBreaker,
+responseGenerationBreaker,
+timeslotDetectionBreaker
 } from './circuit-breaker';
+import { AI_CONFIG } from './config';
+import { logger,measurePerformance } from './logger';
+
+interface MockWebhookPayload {
+  id: string;
+  from: string;
+  body: string;
+  timestamp: number;
+  type: string;
+}
+
+interface MockCoBrokingAnalysis {
+  hasCoBrokingIntent: boolean;
+  confidence: number;
+  suggestedAgentType: string | null;
+}
+
+interface MockTimeslotAnalysis {
+  hasTimeslotRequest: boolean;
+  confidence: number;
+  suggestedTimes: string[];
+}
+
+interface MockGeneratedResponse {
+  response: string;
+  sentiment: string;
+  confidence: number;
+}
+
+interface MockResponseContext {
+  coBroking: MockCoBrokingAnalysis;
+  timeslot: MockTimeslotAnalysis;
+}
+
+interface MockWebhookProcessingResult {
+  messageId: string;
+  analysis: MockResponseContext;
+  response: MockGeneratedResponse;
+  processingTime: number;
+}
 
 // Mock WhatsApp webhook payloads
-const mockWebhookPayloads = [
+const mockWebhookPayloads: MockWebhookPayload[] = [
   {
     id: 'msg-001',
     from: '+1234567890',
@@ -52,7 +90,7 @@ const mockWebhookPayloads = [
 ];
 
 // Mock AI analysis functions
-async function mockCoBrokingAnalysis(message: string): Promise<any> {
+async function mockCoBrokingAnalysis(message: string): Promise<MockCoBrokingAnalysis> {
   await new Promise(resolve => setTimeout(resolve, 80 + Math.random() * 40));
   
   const coBrokingKeywords = ['agent', 'specialist', 'connect', 'broker', 'commercial'];
@@ -67,7 +105,7 @@ async function mockCoBrokingAnalysis(message: string): Promise<any> {
   };
 }
 
-async function mockTimeslotDetection(message: string): Promise<any> {
+async function mockTimeslotDetection(message: string): Promise<MockTimeslotAnalysis> {
   await new Promise(resolve => setTimeout(resolve, 60 + Math.random() * 30));
   
   const timeslotKeywords = ['schedule', 'viewing', 'appointment', 'tomorrow', 'next week', 'PM', 'AM'];
@@ -82,7 +120,7 @@ async function mockTimeslotDetection(message: string): Promise<any> {
   };
 }
 
-async function mockResponseGeneration(context: any): Promise<any> {
+async function mockResponseGeneration(context: MockResponseContext): Promise<MockGeneratedResponse> {
   await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 50));
   
   let response = 'Thank you for your message. ';
@@ -105,7 +143,10 @@ async function mockResponseGeneration(context: any): Promise<any> {
 }
 
 // Simulate processing a single webhook message with optimizations
-async function processWebhookMessage(payload: any): Promise<any> {
+async function processWebhookMessage(payload: MockWebhookPayload): Promise<{
+  duration: number;
+  result: MockWebhookProcessingResult;
+}> {
   logger.conversation.messageReceived(payload.body, {
     messageId: payload.id,
     from: payload.from,
@@ -257,7 +298,7 @@ async function webhookCircuitBreakerTest(): Promise<void> {
         await coBrokingAnalysisBreaker.execute(() => mockCoBrokingAnalysis('test'));
         successCount++;
       }
-    } catch (error: any) {
+    } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage.includes('Circuit breaker')) {
         blockedCount++;
@@ -339,7 +380,7 @@ async function runWebhookSimulationTests(): Promise<void> {
       }
     });
     
-  } catch (error: any) {
+  } catch (error) {
     console.log('\n❌ Webhook simulation tests failed');
     logger.error('Webhook simulation test failed', error as Error);
     throw error;

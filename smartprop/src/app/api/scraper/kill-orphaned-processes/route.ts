@@ -5,12 +5,12 @@
  * and allows killing them from the frontend.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { execSync, exec } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
 import { createClient } from '@supabase/supabase-js';
+import { exec,execSync } from 'child_process';
+import fs from 'fs';
+import { NextRequest,NextResponse } from 'next/server';
+import path from 'path';
+import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
@@ -306,7 +306,7 @@ async function killOrphanedProcesses(pidList?: number[]): Promise<{ killed: numb
   return { killed, errors };
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const processes = await getAllChromiumProcesses();
     const orphaned = processes.filter(p => !p.isActive);

@@ -3,15 +3,15 @@
  * Provides easy-to-use hooks for components to subscribe to real-time updates
  */
 
-import { useEffect } from 'react';
 import { useGlobalStore } from '@/lib/stores/global-store';
+import { useEffect } from 'react';
 
 /**
  * Hook to subscribe to real-time listings updates
  * Automatically subscribes on mount and unsubscribes on unmount
  */
 export function useRealtimeListings() {
-  const { subscribeToListings, unsubscribeFromListings } = useGlobalStore();
+  const { subscribeToListings, unsubscribeFromListings: _unsubscribeFromListings } = useGlobalStore();
   
   useEffect(() => {
     const unsubscribe = subscribeToListings();
@@ -24,7 +24,7 @@ export function useRealtimeListings() {
  * Automatically subscribes on mount and unsubscribes on unmount
  */
 export function useRealtimeAgents() {
-  const { subscribeToAgents, unsubscribeFromAgents } = useGlobalStore();
+  const { subscribeToAgents, unsubscribeFromAgents: _unsubscribeFromAgents } = useGlobalStore();
   
   useEffect(() => {
     const unsubscribe = subscribeToAgents();

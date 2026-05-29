@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @next/next/no-img-element -- Admin article previews render arbitrary scraped image hosts. */
+
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -20,6 +22,14 @@ interface Article {
   path?: string;
 }
 
+type ArticleImage = string | {
+  url?: string;
+  src?: string;
+  alt?: string;
+  caption?: string;
+  paragraph_index?: number | null;
+};
+
 interface FullContent {
   paragraphs?: string[];
   text_content?: string;
@@ -27,13 +37,7 @@ interface FullContent {
   word_count?: number;
   main_image_url?: string;
   main_image_caption?: string;
-  images?: Array<{
-    url?: string;
-    src?: string;
-    alt?: string;
-    caption?: string;
-    paragraph_index?: number;
-  }>;
+  images?: ArticleImage[];
   links?: Array<{
     url: string;
     text?: string;
@@ -48,20 +52,20 @@ export default function ArticleDetailPage() {
   const [fullContent, setFullContent] = useState<FullContent | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchArticleDetail = async () => {
-    try {
-      const response = await fetch(`/api/articles/${params.id}`);
-      const data = await response.json();
-      setArticle(data.article);
-      setFullContent(data.fullContent);
-    } catch (error) {
-      console.error('Failed to fetch article:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchArticleDetail = async () => {
+      try {
+        const response = await fetch(`/api/articles/${params.id}`);
+        const data = await response.json();
+        setArticle(data.article);
+        setFullContent(data.fullContent);
+      } catch (error) {
+        console.error('Failed to fetch article:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchArticleDetail();
   }, [params.id]);
 
@@ -70,8 +74,8 @@ export default function ArticleDetailPage() {
 
   // Check if thumbnail is same as first image to avoid duplication
   const images = Array.isArray(fullContent?.images) ? fullContent.images : [];
-  const firstImages = images.filter((img: any) => img.paragraph_index === 0);
-  const thumbnailIsFirstImage = article.thumbnail && firstImages.some((img: any) => {
+  const firstImages = images.filter((img) => typeof img !== 'string' && img.paragraph_index === 0);
+  const thumbnailIsFirstImage = article.thumbnail && firstImages.some((img) => {
     const imgUrl = typeof img === 'string' ? img : img.url || img.src;
     return imgUrl === article.thumbnail;
   });
@@ -148,10 +152,10 @@ export default function ArticleDetailPage() {
                   const images = Array.isArray(fullContent.images) ? fullContent.images : [];
                   
                   // Group images by paragraph_index
-                  const imagesByParaIndex: Record<number, any[]> = {};
-                  images.forEach((img: any) => {
-                    const paraIdx = img.paragraph_index;
-                    if (paraIdx !== undefined && paraIdx >= 0) {
+                  const imagesByParaIndex: Record<number, ArticleImage[]> = {};
+                  images.forEach((img) => {
+                    const paraIdx = typeof img === 'string' ? undefined : img.paragraph_index;
+                    if (paraIdx !== undefined && paraIdx !== null && paraIdx >= 0) {
                       if (!imagesByParaIndex[paraIdx]) {
                         imagesByParaIndex[paraIdx] = [];
                       }
@@ -181,7 +185,7 @@ export default function ArticleDetailPage() {
                     return (
                       <div key={idx}>
                         {paraElement}
-                        {imagesAfterThisPara.map((img: any, imgIdx: number) => {
+                        {imagesAfterThisPara.map((img, imgIdx: number) => {
                           const imgUrl = typeof img === 'string' ? img : img.url || img.src;
                           const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
                           const imgCaption = typeof img === 'string' ? '' : (img.caption || '');
@@ -220,13 +224,13 @@ export default function ArticleDetailPage() {
 
               {/* Display images that don't have a paragraph_index (fallback for older scrapes) */}
               {fullContent.images && Array.isArray(fullContent.images) && 
-               fullContent.images.some((img: any) => img.paragraph_index === undefined || img.paragraph_index === null) && (
+               fullContent.images.some((img) => typeof img === 'string' || img.paragraph_index === undefined || img.paragraph_index === null) && (
                 <div className="mt-8 pt-8 border-t">
                   <h3 className="text-xl font-semibold mb-4">Additional Images</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {fullContent.images
-                      .filter((img: any) => img.paragraph_index === undefined || img.paragraph_index === null)
-                      .map((img: any, idx: number) => {
+                      .filter((img) => typeof img === 'string' || img.paragraph_index === undefined || img.paragraph_index === null)
+                      .map((img, idx: number) => {
                         const imgUrl = typeof img === 'string' ? img : img.url || img.src;
                         const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
                         const imgCaption = typeof img === 'string' ? '' : (img.caption || '');

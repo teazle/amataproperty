@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in send manual message API:', error);
     return NextResponse.json(
       { error: 'Internal server error' },

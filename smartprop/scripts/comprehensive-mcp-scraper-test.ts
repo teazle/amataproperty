@@ -1,13 +1,13 @@
-import { scrapeArticleContent } from '../src/lib/scraper/edgeprop-content-scraper';
 import { createHash } from 'crypto';
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync,mkdirSync,writeFileSync } from 'fs';
 import { join } from 'path';
+import { scrapeArticleContent } from '../src/lib/scraper/edgeprop-content-scraper';
 
 interface TestResult {
   testId: string;
   timestamp: string;
   originalUrl: string;
-  scrapedArticle: any;
+  scrapedArticle: unknown;
   contentHash: string;
   originalContentHash?: string;
   comparisonResults: ComparisonResult;
@@ -43,7 +43,7 @@ class MCPScraperTester {
   /**
    * Step 1: Scrape Test Execution
    */
-  async executeScrapeTest(articlePath: string): Promise<any> {
+  async executeScrapeTest(articlePath: string): Promise<unknown> {
     console.log('🧪 STEP 1: SCRAPE TEST EXECUTION');
     console.log('='.repeat(60));
     
@@ -85,7 +85,7 @@ class MCPScraperTester {
   /**
    * Step 2 & 3: Comparison Process and Verification Protocol
    */
-  async performComparison(originalUrl: string, scrapedArticle: any): Promise<ComparisonResult> {
+  async performComparison(originalUrl: string, scrapedArticle: unknown): Promise<ComparisonResult> {
     console.log('\n🔍 STEP 2 & 3: COMPARISON PROCESS & VERIFICATION');
     console.log('='.repeat(60));
     
@@ -165,9 +165,9 @@ class MCPScraperTester {
    * Step 5: Generate Test Report
    */
   generateTestReport(
-    originalUrl: string, 
-    scrapedArticle: any, 
-    comparisonResult: ComparisonResult, 
+    originalUrl: string,
+    scrapedArticle: unknown,
+    comparisonResult: ComparisonResult,
     discrepancies: string[]
   ): TestResult {
     console.log('\n📋 STEP 5: GENERATING TEST REPORT');
@@ -203,7 +203,7 @@ class MCPScraperTester {
   /**
    * Step 6: Quality Assurance Checks
    */
-  performQualityAssurance(scrapedArticle: any): boolean {
+  performQualityAssurance(scrapedArticle: unknown): boolean {
     console.log('\n🛡️  STEP 6: QUALITY ASSURANCE');
     console.log('='.repeat(60));
     
@@ -236,7 +236,7 @@ class MCPScraperTester {
   }
 
   // Helper methods
-  private generateContentHash(article: any): string {
+  private generateContentHash(article: unknown): string {
     const contentString = JSON.stringify({
       title: article.title,
       text_content: article.text_content,
@@ -259,7 +259,7 @@ class MCPScraperTester {
     return Boolean(date && date !== '01 Jan 1970' && date.length > 0);
   }
 
-  private calculateContentCompleteness(article: any): number {
+  private calculateContentCompleteness(article: unknown): number {
     const textLength = article.text_content?.length || 0;
     const paragraphCount = article.paragraphs?.length || 0;
     const wordCount = article.word_count || 0;
@@ -271,15 +271,15 @@ class MCPScraperTester {
     return 40;
   }
 
-  private validateImages(images: any[]): boolean {
+  private validateImages(images: unknown[]): boolean {
     return images && images.length > 0;
   }
 
-  private validateLinks(links: any[]): boolean {
+  private validateLinks(links: unknown[]): boolean {
     return links && links.length > 10; // Expect reasonable number of links
   }
 
-  private assessContentCompleteness(article: any): number {
+  private assessContentCompleteness(article: unknown): number {
     let score = 0;
     
     // Title (20 points)

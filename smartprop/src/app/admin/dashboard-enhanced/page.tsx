@@ -5,37 +5,30 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ServiceStatus } from '@/components/ServiceStatus';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { toast } from 'sonner';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  Home, 
-  MessageSquare, 
-  Target, 
-  CheckCircle, 
-  XCircle, 
-  Clock,
-  Activity,
-  BarChart3,
-  PieChart,
-  RefreshCw,
-  Zap,
-  Database,
-  AlertCircle,
-  ArrowUpRight,
-  ArrowDownRight
-} from 'lucide-react';
-import { useGlobalStore } from '@/lib/stores/global-store';
 import { useRealtimeData } from '@/hooks/useRealtimeSync';
 import { useConversationSelectors } from '@/lib/stores/conversation-store';
-import { useNotificationsSelectors } from '@/lib/stores/global-store';
-import { ServiceStatus } from '@/components/ServiceStatus';
+import { useGlobalStore,useNotificationsSelectors } from '@/lib/stores/global-store';
+import {
+ArrowDownRight,
+ArrowUpRight,
+BarChart3,
+CheckCircle,
+Clock,
+Database,
+Home,
+MessageSquare,
+PieChart,
+RefreshCw,
+Target,
+Users,
+XCircle,
+Zap
+} from 'lucide-react';
+import { useCallback,useEffect,useState } from 'react';
 
 interface DashboardStats {
   listings: {
@@ -94,6 +87,26 @@ export default function EnhancedDashboard() {
     addNotification 
   } = useGlobalStore();
 
+  const calculateStats = useCallback(() => {
+    // This would normally fetch from your APIs
+    // For now, we'll use the conversation stats and simulate others
+    setStats(prevStats => ({
+      ...prevStats,
+      conversations: {
+        total: conversationStats.total,
+        active: conversationStats.active,
+        completed: conversationStats.completed,
+        coBrokingConfirmed: conversationStats.coBrokingWilling,
+      },
+      coBroking: {
+        successRate: conversationStats.total > 0 ? conversationStats.coBrokingWilling / conversationStats.total : 0,
+        totalAgreements: conversationStats.coBrokingWilling,
+        pendingDiscussions: conversationStats.total - conversationStats.completed,
+        dealbreakers: conversationStats.coBrokingNotWilling,
+      },
+    }));
+  }, [conversationStats]);
+
   // Initialize lastUpdate on client side only
   useEffect(() => {
     setLastUpdate(new Date());
@@ -117,7 +130,7 @@ export default function EnhancedDashboard() {
           title: 'Dashboard Updated',
           message: 'All data refreshed successfully',
         });
-      } catch (error: any) {
+      } catch (error) {
         addNotification({
           type: 'error',
           title: 'Update Failed',
@@ -130,7 +143,7 @@ export default function EnhancedDashboard() {
     };
 
     fetchAllData();
-  }, [fetchListings, fetchAgents, addNotification]);
+  }, [fetchListings, fetchAgents, addNotification, calculateStats]);
 
   // Subscribe to real-time updates
   useRealtimeData();
@@ -143,27 +156,7 @@ export default function EnhancedDashboard() {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [conversations]);
-
-  const calculateStats = () => {
-    // This would normally fetch from your APIs
-    // For now, we'll use the conversation stats and simulate others
-    setStats(prevStats => ({
-      ...prevStats,
-      conversations: {
-        total: conversationStats.total,
-        active: conversationStats.active,
-        completed: conversationStats.completed,
-        coBrokingConfirmed: conversationStats.coBrokingWilling,
-      },
-      coBroking: {
-        successRate: conversationStats.total > 0 ? conversationStats.coBrokingWilling / conversationStats.total : 0,
-        totalAgreements: conversationStats.coBrokingWilling,
-        pendingDiscussions: conversationStats.total - conversationStats.completed,
-        dealbreakers: conversationStats.coBrokingNotWilling,
-      },
-    }));
-  };
+  }, [conversations, calculateStats]);
 
   const getTrendIcon = (current: number, previous: number) => {
     if (current > previous) {
@@ -174,7 +167,7 @@ export default function EnhancedDashboard() {
     return <Clock className="h-4 w-4 text-gray-500" />;
   };
 
-  const getTrendColor = (current: number, previous: number) => {
+  const _getTrendColor = (current: number, previous: number) => {
     if (current > previous) return 'text-green-600';
     if (current < previous) return 'text-red-600';
     return 'text-gray-600';

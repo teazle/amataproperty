@@ -1,15 +1,15 @@
-import { spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs';
 import {
-  getLockFilePath,
-  readLockFile,
-  isProcessRunning,
-  deleteLockFile,
-  getLockAgeMs,
-  getLinkedInMaxRunMs,
-  isLinkedInLockExpired
+deleteLockFile,
+getLinkedInMaxRunMs,
+getLockAgeMs,
+getLockFilePath,
+isLinkedInLockExpired,
+isProcessRunning,
+readLockFile
 } from '@/lib/linkedin/storage';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 export interface AutomationOptions {
   dryRun?: boolean;
@@ -22,6 +22,10 @@ const STOP_GRACE_MS = 5000;
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function terminateLinkedInProcess(
@@ -37,12 +41,12 @@ export async function terminateLinkedInProcess(
   try {
     process.kill(-pid, 'SIGTERM');
     signals.push(`SIGTERM sent to process group ${pid}`);
-  } catch (groupError: any) {
+  } catch (groupError) {
     try {
       process.kill(pid, 'SIGTERM');
       signals.push(`SIGTERM sent to PID ${pid}`);
-    } catch (pidError: any) {
-      return `failed to send SIGTERM to ${pid}: ${pidError.message || groupError.message}`;
+    } catch (pidError) {
+      return `failed to send SIGTERM to ${pid}: ${getErrorMessage(pidError) || getErrorMessage(groupError)}`;
     }
   }
 
@@ -58,8 +62,8 @@ export async function terminateLinkedInProcess(
     try {
       process.kill(pid, 'SIGKILL');
       signals.push(`SIGKILL sent to PID ${pid}`);
-    } catch (error: any) {
-      signals.push(`failed to force kill ${pid}: ${error.message}`);
+    } catch (error) {
+      signals.push(`failed to force kill ${pid}: ${getErrorMessage(error)}`);
     }
   }
 
@@ -67,7 +71,7 @@ export async function terminateLinkedInProcess(
 }
 
 export async function startLinkedInAutomation(options: AutomationOptions = {}): Promise<number> {
-  const lockFile = getLockFilePath();
+  const _lockFile = getLockFilePath();
   const lockData = readLockFile();
 
   // Clean up stale lock files
@@ -181,7 +185,7 @@ export async function startLinkedInAutomation(options: AutomationOptions = {}): 
   });
 
   // Handle spawn errors
-  child.on('error', (error: any) => {
+  child.on('error', (error: NodeJS.ErrnoException) => {
     console.error(`❌ Failed to spawn LinkedIn automation: ${error.message}`);
     console.error(`   Command: ${command}`);
     console.error(`   Args: ${commandArgs.join(' ')}`);

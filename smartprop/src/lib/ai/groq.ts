@@ -141,7 +141,7 @@ Return ONLY the JSON, no markdown, no explanation.`,
     console.log('✅ AI parsed viewing slots:', JSON.stringify(parsed, null, 2));
     
     return parsed;
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error parsing with Groq AI:', error);
     return null;
   }

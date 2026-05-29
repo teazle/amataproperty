@@ -4,7 +4,7 @@ import { join } from 'path';
 interface ComparisonData {
   testId: string;
   originalUrl: string;
-  scrapedArticle: any;
+  scrapedArticle: unknown;
   timestamp: string;
 }
 
@@ -359,7 +359,7 @@ class BrowserComparisonTool {
                     <div class="content-section">
                         <h3>🖼️ Extracted Images (${comparisonData.scrapedArticle.images.length})</h3>
                         <div class="images-grid">
-                            ${comparisonData.scrapedArticle.images.slice(0, 12).map((img: any) => `
+                            ${comparisonData.scrapedArticle.images.slice(0, 12).map((img: unknown) => `
                                 <div class="image-item">
                                     <img src="${img.src}" alt="${img.alt || 'Image'}" onerror="this.style.display='none'">
                                     <div class="image-caption">${img.alt || 'No caption'}</div>
@@ -373,7 +373,7 @@ class BrowserComparisonTool {
                     <div class="content-section">
                         <h3>🔗 Extracted Links (${comparisonData.scrapedArticle.links.length})</h3>
                         <div class="links-list">
-                            ${comparisonData.scrapedArticle.links.slice(0, 20).map((link: any) => `
+                            ${comparisonData.scrapedArticle.links.slice(0, 20).map((link: unknown) => `
                                 <div class="link-item">
                                     <a href="${link.href}" target="_blank">${link.text || link.href}</a>
                                 </div>

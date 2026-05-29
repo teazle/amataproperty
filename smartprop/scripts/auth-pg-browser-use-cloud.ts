@@ -12,14 +12,14 @@ type BrowserUseBrowser = {
 
 type CdpResponse = {
   id?: number;
-  result?: any;
+  result?: unknown;
   error?: { message?: string; code?: number };
 };
 
 class CdpClient {
   private id = 0;
   private pending = new Map<number, {
-    resolve: (value: any) => void;
+    resolve: (value: unknown) => void;
     reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
@@ -72,7 +72,7 @@ class CdpClient {
     });
   }
 
-  send(method: string, params: Record<string, unknown> = {}, sessionId?: string, timeoutMs = 120_000): Promise<any> {
+  send(method: string, params: Record<string, unknown> = {}, sessionId?: string, timeoutMs = 120_000): Promise<unknown> {
     const id = ++this.id;
     const payload: Record<string, unknown> = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
@@ -301,7 +301,7 @@ async function verifyLoggedIn(cdp: CdpClient, sessionId: string): Promise<boolea
   );
 }
 
-function normalizeCookie(cookie: Record<string, any>) {
+function normalizeCookie(cookie: Record<string, unknown>) {
   const sameSite = ['Strict', 'Lax', 'None'].includes(cookie.sameSite) ? cookie.sameSite : undefined;
   const normalized: Record<string, unknown> = {
     name: cookie.name,
@@ -320,14 +320,14 @@ async function saveStorageState(cdp: CdpClient, sessionId: string, statePath: st
   const cookieResult = await cdp.send('Storage.getCookies');
   const allCookies = Array.isArray(cookieResult.cookies) ? cookieResult.cookies : [];
   const cookies = allCookies
-    .filter((cookie: Record<string, any>) => String(cookie.domain || '').includes('propertyguru'))
+    .filter((cookie: Record<string, unknown>) => String(cookie.domain || '').includes('propertyguru'))
     .map(normalizeCookie);
 
   const localStorage = await evaluate<Array<{ name: string; value: string }>>(cdp, sessionId, `
     (() => Object.entries(localStorage).map(([name, value]) => ({ name, value })))()
   `).catch(() => []);
 
-  if (!cookies.some((cookie: Record<string, any>) => cookie.name === 'PG_U')) {
+  if (!cookies.some((cookie: Record<string, unknown>) => cookie.name === 'PG_U')) {
     throw new Error('PropertyGuru session cookie PG_U was not present after login');
   }
 

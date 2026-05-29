@@ -4,12 +4,12 @@
  * Tests the complete conversation flow with performance monitoring
  */
 
-import { logger, measurePerformance } from './logger';
 import { CircuitBreaker } from './circuit-breaker';
 import { AI_CONFIG } from './config';
+import { logger } from './logger';
 
 // Mock AI analysis function for testing
-async function mockAIAnalysis(prompt: string): Promise<any> {
+async function _mockAIAnalysis(prompt: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (Math.random() > 0.1) { // 90% success rate
@@ -26,7 +26,7 @@ async function mockAIAnalysis(prompt: string): Promise<any> {
 }
 
 // Mock conversation data for testing
-const mockConversation = {
+const _mockConversation = {
   id: 'test-conversation-123',
   messages: [
     {
@@ -73,7 +73,7 @@ async function testCircuitBreakerFunctionality(): Promise<boolean> {
           return `Success ${i + 1}`;
         });
         console.log(`   Operation ${i + 1}: SUCCESS`);
-      } catch (error: any) {
+      } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.log(`   Operation ${i + 1}: FAILED - ${errorMessage}`);
       }
@@ -86,7 +86,7 @@ async function testCircuitBreakerFunctionality(): Promise<boolean> {
         await testBreaker.execute(async () => {
           throw new Error(`Simulated failure ${i + 1}`);
         });
-      } catch (error: any) {
+      } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.log(`   Failure ${i + 1}: ${errorMessage}`);
       }
@@ -105,13 +105,13 @@ async function testCircuitBreakerFunctionality(): Promise<boolean> {
       });
       console.log(`   Recovery: ${result}`);
       console.log(`   New State: ${testBreaker.getState()}`);
-    } catch (error: any) {
+    } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.log(`   Recovery failed: ${errorMessage}`);
     }
 
     return true;
-  } catch (error: any) {
+  } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Circuit breaker test failed:', errorMessage);
     return false;
@@ -138,7 +138,7 @@ async function testMockAIAnalysis(): Promise<boolean> {
     console.log(`⏱️ Processing time: ${mockAnalysis.processingTime}ms`);
 
     return mockAnalysis && typeof mockAnalysis.coBrokingAnalysis !== 'undefined';
-  } catch (error: any) {
+  } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.log(`❌ Mock AI Analysis test failed: ${errorMessage}`);
     return false;
@@ -168,7 +168,7 @@ async function testParallelProcessingSimulation(): Promise<boolean> {
       
       console.log(`✅ Parallel simulation ${i + 1}: ${duration}ms`);
       return { success: true, duration };
-    } catch (error: any) {
+    } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const duration = Date.now() - startTime;
       results.push({
@@ -219,7 +219,7 @@ async function testConfigurationConstants(): Promise<boolean> {
     });
 
     return validations.every(v => v.valid);
-  } catch (error: any) {
+  } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('❌ Configuration test failed:', errorMessage);
     return false;
@@ -242,7 +242,7 @@ async function testStructuredLogging(): Promise<boolean> {
 
     console.log('✅ Structured logging tests completed');
     return true;
-  } catch (error: any) {
+  } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.log(`❌ Structured logging test failed: ${errorMessage}`);
     return false;
@@ -277,7 +277,7 @@ async function runIntegrationTests(): Promise<void> {
     // Test Structured Logging
     testResults.logging = await testStructuredLogging();
     
-  } catch (error: any) {
+  } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('\n❌ Integration test failed:', errorMessage);
   }

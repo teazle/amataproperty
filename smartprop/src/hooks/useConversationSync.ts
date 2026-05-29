@@ -3,9 +3,9 @@
  * Syncs WAHA webhook updates with Zustand store
  */
 
-import { useEffect, useRef } from 'react';
-import { useConversationStore, subscribeToConversationUpdates } from '@/lib/stores/conversation-store';
+import { useConversationStore } from '@/lib/stores/conversation-store';
 import { supabaseClient as supabase } from '@/lib/supabase-client';
+import { useEffect,useRef } from 'react';
 
 export function useConversationSync() {
   const { fetchConversations, processIncomingMessage, processOutgoingMessage } = useConversationStore();

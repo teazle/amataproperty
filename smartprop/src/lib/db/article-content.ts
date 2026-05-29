@@ -79,11 +79,11 @@ export async function upsertArticleContent(content: ArticleContent): Promise<voi
       reading_time_minutes: content.reading_time_minutes,
       scraped_at: content.scraped_at.toISOString(),
       // Save images and other metadata (handle both string[] and object[] formats)
-      html_content: (content as any).html_content || null,
-      images: (content as any).images || null,
-      main_image_url: (content as any).main_image_url || content.main_image_url || null,
-      main_image_caption: (content as any).main_image_caption || content.main_image_caption || null,
-      tags: (content as any).tags || null
+      html_content: content.html_content || null,
+      images: content.images || null,
+      main_image_url: content.main_image_url || null,
+      main_image_caption: content.main_image_caption || null,
+      tags: content.tags || null
     }, {
       onConflict: 'article_id'
     });

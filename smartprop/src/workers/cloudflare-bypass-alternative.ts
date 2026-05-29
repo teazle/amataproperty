@@ -25,7 +25,7 @@ export async function waitForCloudflareAutoResolve(
       // Get current page state
       const pageText = await page.textContent('body').catch(() => '') || '';
       const pageLength = pageText.length;
-      const currentUrl = page.url();
+      const _currentUrl = page.url();
 
       // Check for Cloudflare indicators
       const hasCloudflare =
@@ -92,10 +92,11 @@ async function triggerCloudflareCompletion(page: Page): Promise<void> {
       });
 
       // Method 3: Trigger any pending JavaScript
-      if (typeof (window as any).cf !== 'undefined') {
+      const windowWithCloudflare = window as Window & { cf?: () => void };
+      if (typeof windowWithCloudflare.cf === 'function') {
         // Cloudflare's challenge object might exist
         try {
-          (window as any).cf();
+          windowWithCloudflare.cf();
         } catch (e) {
           // Ignore
         }

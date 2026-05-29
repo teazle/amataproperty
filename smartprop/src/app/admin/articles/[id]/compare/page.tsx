@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @next/next/no-img-element -- Admin comparison previews render arbitrary scraped image hosts. */
+
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -19,6 +21,14 @@ interface Article {
   path?: string;
 }
 
+type ArticleImage = string | {
+  url?: string;
+  src?: string;
+  alt?: string;
+  caption?: string;
+  paragraph_index?: number | null;
+};
+
 interface FullContent {
   paragraphs?: string[];
   text_content?: string;
@@ -26,13 +36,7 @@ interface FullContent {
   word_count?: number;
   main_image_url?: string;
   main_image_caption?: string;
-  images?: Array<{
-    url?: string;
-    src?: string;
-    alt?: string;
-    caption?: string;
-    paragraph_index?: number;
-  }>;
+  images?: ArticleImage[];
   links?: Array<{
     url: string;
     text?: string;
@@ -48,20 +52,20 @@ export default function ArticleComparePage() {
   const [loading, setLoading] = useState(true);
   const [showOriginal, setShowOriginal] = useState(true);
 
-  const fetchArticleDetail = async () => {
-    try {
-      const response = await fetch(`/api/articles/${params.id}`);
-      const data = await response.json();
-      setArticle(data.article);
-      setFullContent(data.fullContent);
-    } catch (error) {
-      console.error('Failed to fetch article:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchArticleDetail = async () => {
+      try {
+        const response = await fetch(`/api/articles/${params.id}`);
+        const data = await response.json();
+        setArticle(data.article);
+        setFullContent(data.fullContent);
+      } catch (error) {
+        console.error('Failed to fetch article:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchArticleDetail();
   }, [params.id]);
 
@@ -214,7 +218,7 @@ export default function ArticleComparePage() {
                       </p>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {fullContent.images.map((img: any, idx: number) => {
+                      {fullContent.images.map((img, idx: number) => {
                         const imgUrl = typeof img === 'string' ? img : img.url || img.src;
                         const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
                         const imgCaption = typeof img === 'string' ? '' : (img.caption || '');
@@ -244,7 +248,7 @@ export default function ArticleComparePage() {
                             <div className="text-xs text-gray-500 bg-gray-100 p-2 rounded">
                               <strong>Debug Info:</strong><br/>
                               URL: {imgUrl}<br/>
-                              Paragraph Index: {typeof img === 'object' ? img.paragraph_index : 'N/A'}<br/>
+                              Paragraph Index: {typeof img === 'object' && img !== null ? img.paragraph_index : 'N/A'}<br/>
                               Type: {typeof img}
                             </div>
                           </figure>

@@ -1,5 +1,5 @@
-import { NextRequest } from 'next/server';
 import fs from 'fs';
+import { NextRequest } from 'next/server';
 import path from 'path';
 
 /**
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
         try {
           // Find the latest log file for the platform
           const logDir = '/tmp';
-          const logPattern = platform === 'edgeprop' ? 'ep-scraper-*.log' : 'pg-scraper-*.log';
+          const _logPattern = platform === 'edgeprop' ? 'ep-scraper-*.log' : 'pg-scraper-*.log';
           
           // Get all matching log files
           const logFiles = fs.readdirSync(logDir)
@@ -134,7 +134,7 @@ export async function GET(request: NextRequest) {
           // Note: We don't send heartbeat on every poll to reduce noise
           // The connection stays alive via the SSE protocol itself
 
-        } catch (error: any) {
+        } catch (error) {
           console.error('Error reading scraper logs:', error);
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({
             type: 'error',

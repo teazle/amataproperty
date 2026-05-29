@@ -181,7 +181,7 @@ export async function scrapeArticleContent(
       // Get main image - look for article images (not avatars or icons)
       const mainImageEl = Array.from(document.querySelectorAll('img')).find(img => {
         const src = img.src || '';
-        const alt = img.alt || '';
+        const _alt = img.alt || '';
         return src && 
                !src.includes('avatar') && 
                !src.includes('icon') && 

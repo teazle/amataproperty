@@ -3,11 +3,20 @@
  * Manages scheduled scraper jobs using node-cron
  */
 
-import cron from 'node-cron';
-import type { ScheduledTask } from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
+import type { ScheduledTask } from 'node-cron';
+import cron from 'node-cron';
 // Import startScrapeJob dynamically to avoid circular dependencies
 // We'll import it when needed in the executeJob method
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorMessageIncludes(error: unknown, terms: string[]): boolean {
+  const message = getErrorMessage(error);
+  return terms.some((term) => message.includes(term));
+}
 
 // Create Supabase client lazily to ensure env vars are loaded
 function getSupabaseClient() {
@@ -112,16 +121,16 @@ class ScraperScheduler {
             console.warn('[Scheduler] Rate limit hit when loading schedules. Will retry later or use manual reload.');
             console.warn('[Scheduler] Scheduler initialized with empty schedules. Use /api/scheduler/reload to load schedules manually.');
           } else {
-            console.error('[Scheduler] Error loading schedules:', error.message || error);
+          console.error('[Scheduler] Error loading schedules:', getErrorMessage(error) || error);
           }
           // Don't throw - allow graceful degradation
           schedules = [];
         } else {
           schedules = (data || []) as ScheduledJob[];
         }
-      } catch (error: any) {
+      } catch (error) {
         // Check if it's a rate limit error
-        if (error?.message?.includes('rate limit') || error?.message?.includes('quota') || error?.message?.includes('exceeded')) {
+        if (errorMessageIncludes(error, ['rate limit', 'quota', 'exceeded'])) {
           console.warn('[Scheduler] Rate limit hit. Will initialize with empty schedules.');
           console.warn('[Scheduler] Use /api/scheduler/reload to load schedules manually once rate limits reset.');
         } else {
@@ -219,9 +228,9 @@ class ScraperScheduler {
           .from('scheduled_jobs')
           .update({ next_run_at: nextRun.toISOString() })
           .eq('id', schedule.id);
-      } catch (dbError: any) {
+      } catch (dbError) {
         // If rate limited, log but continue
-        if (dbError?.message?.includes('rate limit') || dbError?.message?.includes('quota')) {
+        if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
           console.warn(`[Scheduler] Rate limit hit updating next_run_at for ${schedule.id}. Schedule will still work.`);
         } else {
           console.error(`[Scheduler] Failed to update next_run_at for ${schedule.id}:`, dbError);
@@ -262,9 +271,9 @@ class ScraperScheduler {
           .from('scheduled_jobs')
           .update({ last_run_at: startTime.toISOString() })
           .eq('id', schedule.id);
-      } catch (dbError: any) {
+      } catch (dbError) {
         // If rate limited, log but continue
-        if (dbError?.message?.includes('rate limit') || dbError?.message?.includes('quota')) {
+        if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
           console.warn(`[Scheduler] Rate limit hit updating last_run_at for ${schedule.id}. Continuing execution.`);
         } else {
           throw dbError;
@@ -316,9 +325,9 @@ class ScraperScheduler {
             next_run_at: nextRun.toISOString(),
           })
           .eq('id', schedule.id);
-      } catch (dbError: any) {
+      } catch (dbError) {
         // If rate limited, log but don't fail the job
-        if (dbError?.message?.includes('rate limit') || dbError?.message?.includes('quota')) {
+        if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
           console.warn(`[Scheduler] Rate limit hit updating success status for ${schedule.id}. Job completed successfully.`);
         } else {
           throw dbError;
@@ -341,9 +350,9 @@ class ScraperScheduler {
             next_run_at: nextRun.toISOString(),
           })
           .eq('id', schedule.id);
-      } catch (dbError: any) {
+      } catch (dbError) {
         // If rate limited, log but don't fail again
-        if (dbError?.message?.includes('rate limit') || dbError?.message?.includes('quota')) {
+        if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
           console.warn(`[Scheduler] Rate limit hit updating failed status for ${schedule.id}. Error was: ${errorMessage}`);
         } else {
           console.error(`[Scheduler] Failed to update error status for ${schedule.id}:`, dbError);
@@ -359,7 +368,7 @@ class ScraperScheduler {
     console.log('[Scheduler] Reloading schedules...');
 
     // Stop all existing jobs
-    for (const [scheduleId, job] of this.jobs.entries()) {
+    for (const [_scheduleId, job] of this.jobs.entries()) {
       job.stop();
     }
     this.jobs.clear();
@@ -422,9 +431,9 @@ class ScraperScheduler {
       try {
         const supabase = getSupabaseClient();
         await supabase.from('scheduled_jobs').update(update).eq('id', scheduleId);
-      } catch (dbError: any) {
+      } catch (dbError) {
         // If rate limited, log but don't throw
-        if (dbError?.message?.includes('rate limit') || dbError?.message?.includes('quota')) {
+        if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
           console.warn(`[Scheduler] Rate limit hit updating job status for ${scheduleId}.`);
         } else {
           throw dbError;

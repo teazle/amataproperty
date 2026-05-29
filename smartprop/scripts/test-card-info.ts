@@ -1,10 +1,10 @@
 import { config } from 'dotenv';
 config();
 
-import { chromium } from 'playwright';
-import path from 'path';
 import fs from 'fs';
-import { CHROME_UA, humanPause } from '../src/workers/stealth';
+import path from 'path';
+import { chromium } from 'playwright';
+import { CHROME_UA,humanPause } from '../src/workers/stealth';
 
 async function testCardInfo() {
   console.log('🔍 Testing card information extraction...');
@@ -67,7 +67,7 @@ async function testCardInfo() {
     console.log(`🏠 Testing extraction for ${propertyNames.length} properties:`);
     
     for (let i = 0; i < propertyNames.length; i++) {
-      const { heading, text: propertyName } = propertyNames[i];
+      const { heading: _heading, text: propertyName } = propertyNames[i];
       console.log(`\n--- Property ${i + 1}: ${propertyName} ---`);
       
       // Find the card container using the property name

@@ -1,6 +1,6 @@
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import * as db from '@/lib/db/articles';
-import { upsertArticleContent } from '@/lib/db/article-content';
+import { chromium, Browser, BrowserContext, Frame, Page } from 'playwright';
+import * as _db from '@/lib/db/articles';
+import { upsertArticleContent as _upsertArticleContent } from '@/lib/db/article-content';
 
 export interface MCPArticle {
   nid: string;
@@ -258,7 +258,7 @@ async function handleCloudflareIframes(page: Page): Promise<boolean> {
         return true;
       }
       
-    } catch (error: unknown) {
+    } catch (error) {
       console.log(`   ❌ Error interacting with iframe: ${error}`);
     }
   }
@@ -269,7 +269,7 @@ async function handleCloudflareIframes(page: Page): Promise<boolean> {
 /**
  * Interact with challenge elements in iframe
  */
-async function interactWithChallengeElements(frame: any): Promise<boolean> {
+async function interactWithChallengeElements(frame: Frame | Page): Promise<boolean> {
   console.log(`🎯 Attempting to interact with challenge elements...`);
   
   // Enhanced selector list for Cloudflare challenges
@@ -361,7 +361,7 @@ async function interactWithChallengeElements(frame: any): Promise<boolean> {
         console.log(`   ⚠️ Click failed: ${clickError}`);
       }
       
-    } catch (error: unknown) {
+    } catch (error) {
       console.log(`   ⚠️ Selector ${selector} failed: ${error}`);
     }
   }
@@ -534,7 +534,7 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
     });
     
     // Enhanced chrome object mock
-    (window as any).chrome = {
+    (window as unknown as Window & Record<string, unknown>).chrome = {
       runtime: {
         onConnect: undefined,
         onMessage: undefined,
@@ -550,9 +550,9 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
     
     // Mock permissions API
     const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: any) => (
+    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
       parameters.name === 'notifications' ?
-        Promise.resolve({ state: 'default' } as any) :
+        Promise.resolve({ state: 'default' } as unknown as PermissionStatus) :
         originalQuery(parameters)
     );
     
@@ -621,24 +621,24 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
     });
     
     // Remove automation indicators
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-    delete (window as any).__webdriver_evaluate;
-    delete (window as any).__webdriver_script_function;
-    delete (window as any).__webdriver_script_func;
-    delete (window as any).__webdriver_script_fn;
-    delete (window as any).__fxdriver_evaluate;
-    delete (window as any).__driver_unwrapped;
-    delete (window as any).__webdriver_unwrapped;
-    delete (window as any).__driver_evaluate;
-    delete (window as any).__selenium_evaluate;
-    delete (window as any).__selenium_unwrapped;
-    delete (window as any).__fxdriver_unwrapped;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+    delete (window as unknown as Window & Record<string, unknown>).__webdriver_evaluate;
+    delete (window as unknown as Window & Record<string, unknown>).__webdriver_script_function;
+    delete (window as unknown as Window & Record<string, unknown>).__webdriver_script_func;
+    delete (window as unknown as Window & Record<string, unknown>).__webdriver_script_fn;
+    delete (window as unknown as Window & Record<string, unknown>).__fxdriver_evaluate;
+    delete (window as unknown as Window & Record<string, unknown>).__driver_unwrapped;
+    delete (window as unknown as Window & Record<string, unknown>).__webdriver_unwrapped;
+    delete (window as unknown as Window & Record<string, unknown>).__driver_evaluate;
+    delete (window as unknown as Window & Record<string, unknown>).__selenium_evaluate;
+    delete (window as unknown as Window & Record<string, unknown>).__selenium_unwrapped;
+    delete (window as unknown as Window & Record<string, unknown>).__fxdriver_unwrapped;
     
     // Mock getBattery
     if ('getBattery' in navigator) {
-      (navigator as any).getBattery = () => Promise.resolve({
+      (navigator as unknown as Navigator & Record<string, unknown>).getBattery = () => Promise.resolve({
         charging: true,
         chargingTime: 0,
         dischargingTime: Infinity,
@@ -647,8 +647,8 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
     }
     
     // Fix EdgeProp's __name function
-    if (typeof (window as any).__name === 'undefined') {
-      (window as any).__name = function() { return ''; };
+    if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+      (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
     }
     
     // Mock connection API
@@ -662,7 +662,7 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
     });
     
     // Override Date.prototype.getTimezoneOffset
-    const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+    const _originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
     Date.prototype.getTimezoneOffset = function() {
       return -480; // Singapore timezone offset
     };
@@ -685,9 +685,9 @@ async function createEnhancedBrowser(): Promise<{ browser: Browser, context: Bro
 export async function scrapeEdgePropEnhanced(
   maxPages: number,
   onProgress: MCPProgressCallback,
-  sessionId?: string,
-  saveImmediately: boolean = false,
-  maxArticles?: number
+  _sessionId?: string,
+  _saveImmediately: boolean = false,
+  _maxArticles?: number
 ): Promise<MCPArticle[]> {
   console.log('🚀 Starting Enhanced EdgeProp scraper with advanced Cloudflare bypass...');
   
@@ -746,7 +746,7 @@ export async function scrapeEdgePropEnhanced(
         // Rest of the scraping logic would go here...
         // For now, this is the enhanced framework
         
-      } catch (error: unknown) {
+      } catch (error) {
         console.error(`❌ Failed to process page ${pageNum}:`, error);
         articlesFailed++;
       }

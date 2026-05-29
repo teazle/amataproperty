@@ -22,16 +22,16 @@ export async function POST(request: NextRequest) {
       pid,
       dryRun
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error starting LinkedIn automation:', error);
-    if (error.message?.includes('already running')) {
+    if ((error instanceof Error ? error.message : String(error))?.includes('already running')) {
       return NextResponse.json(
-        { error: error.message },
+        { error: (error instanceof Error ? error.message : String(error)) },
         { status: 409 }
       );
     }
     return NextResponse.json(
-      { error: error.message || 'Failed to start LinkedIn automation' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to start LinkedIn automation' },
       { status: 500 }
     );
   }

@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString()
     }, { status: 200 });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error processing outreach:', error);
     return NextResponse.json(
       { 

@@ -1,10 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { NextRequest,NextResponse } from 'next/server';
 
 // Health check endpoint for load balancer
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const startTime = Date.now();
-  const checks: Record<string, any> = {};
+  const checks: Record<string, unknown> = {};
   let overallStatus = 'healthy';
 
   try {
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
         process.env.SUPABASE_SERVICE_ROLE!
       );
       
-      const { data, error } = await supabase
+      const { data: _data, error } = await supabase
         .from('listings')
         .select('id')
         .limit(1);

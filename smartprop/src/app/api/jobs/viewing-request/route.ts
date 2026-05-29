@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     const results = await sendViewingRequests(limit);
 
     return NextResponse.json(results);
-  } catch (error: any) {
+  } catch (error) {
     console.error('[API] Error in viewing request job:', error);
     return NextResponse.json(
       { 
@@ -77,7 +77,7 @@ export async function GET() {
       stats,
       message: `${stats.pending} listings waiting for viewing requests`,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching viewing request:', error);
     return NextResponse.json(
       { 

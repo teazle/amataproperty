@@ -54,7 +54,7 @@ export async function GET() {
     }
 
     // Transform the data to match our interface
-    const transformedData = (data || []).map((item: any) => ({
+    const transformedData = (data || []).map((item: Record<string, unknown>) => ({
       ...item,
       agents: item.agents || null, // agents is already an object from the JOIN
       outreach: item.outreach || []
@@ -66,7 +66,7 @@ export async function GET() {
       data: transformedData 
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

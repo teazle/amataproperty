@@ -9,6 +9,17 @@ let initializationAttempts = 0;
 const MAX_INIT_ATTEMPTS = 5;
 const INIT_RETRY_DELAY_MS = 5000; // 5 seconds
 
+function getErrorDetails(error: unknown): { message: string; stack?: string; name?: string } {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    };
+  }
+  return { message: String(error) };
+}
+
 /**
  * Get scheduler status for health checks
  */
@@ -100,12 +111,13 @@ export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<
         try {
           const pid = await startLinkedInAutomation({ dryRun: false, reason: 'scheduled run' });
           console.log(`✅ LinkedIn automation process started successfully (PID: ${pid})`);
-        } catch (error: any) {
+        } catch (error) {
           console.error('❌ Failed to start scheduled LinkedIn automation:', error);
+          const errorDetails = getErrorDetails(error);
           console.error('   Error details:', {
-            message: error?.message,
-            stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
-            name: error?.name
+            message: errorDetails.message,
+            stack: errorDetails.stack?.split('\n').slice(0, 5).join('\n'),
+            name: errorDetails.name
           });
         }
       },
@@ -121,9 +133,9 @@ export async function refreshLinkedInScheduler(retryCount: number = 0): Promise<
     // Note: scheduledTask.start() doesn't throw, so if we get here, the task is scheduled
     // The task will run according to the cron schedule
     console.log(`✅ Scheduled LinkedIn automation started: ${schedule} (${settings?.timezone || 'Asia/Singapore'})`);
-  } catch (error: any) {
+  } catch (error) {
     initializationAttempts++;
-    const errorMsg = error?.message || String(error);
+    const errorMsg = getErrorDetails(error).message;
     console.error(`❌ Unable to refresh LinkedIn scheduler (attempt ${initializationAttempts}):`, errorMsg);
 
     // Retry on database/connection errors

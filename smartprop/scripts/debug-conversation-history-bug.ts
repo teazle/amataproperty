@@ -56,7 +56,7 @@ async function debugConversationHistoryBug() {
     }
     
     console.log('Conversation History:');
-    conversationHistory?.forEach((msg: any, msgIndex: number) => {
+    conversationHistory?.forEach((msg: unknown, msgIndex: number) => {
       console.log(`  ${msgIndex + 1}. ${msg.role}: ${typeof msg.message === 'string' ? msg.message.substring(0, 100) : JSON.stringify(msg.message).substring(0, 100)}...`);
       
       // Check if message contains decision object properties

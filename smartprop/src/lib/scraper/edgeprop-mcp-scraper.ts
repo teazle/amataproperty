@@ -5,7 +5,9 @@
 
 import * as db from '@/lib/db/articles';
 import { upsertArticleContent } from '@/lib/db/article-content';
+import type { ArticleContent } from '@/lib/scraper/edgeprop-content-scraper';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, createFlaresolverrSession } from '@/workers/flaresolverr';
+import type { ConsoleMessage } from 'playwright';
 import path from 'path';
 // Removed browser-incompatible imports
 // import { cleanArticleParagraphs, sanitizeHtmlContent, extractCleanTextContent } from '@/lib/utils/content-parser';
@@ -47,6 +49,44 @@ export interface MCPProgress {
   status: 'running' | 'completed' | 'stopped' | 'error';
   message: string;
   logMessage?: string; // Optional log message for console display
+}
+
+type ArticleLinkCandidate = {
+  href: string;
+  title: string;
+  category: string;
+  imgSrc: string;
+  index: number;
+};
+
+type ArticleExtractionData = Partial<MCPArticle> & {
+  extractionSuccess?: boolean;
+  usedSelector?: string;
+};
+
+function toArticleContent(article: MCPArticle): ArticleContent {
+  return {
+    nid: article.nid,
+    path: article.path,
+    title: article.title,
+    author: article.author,
+    published_date: new Date().toISOString(),
+    main_image_url: article.main_image_url || '',
+    main_image_caption: article.main_image_caption,
+    html_content: article.html_content || '',
+    text_content: article.text_content,
+    paragraphs: article.paragraphs,
+    images: (article.images || []).map((image) => image.url),
+    links: article.links || [],
+    tags: article.tags || [],
+    word_count: article.word_count,
+    reading_time_minutes: article.reading_time_minutes,
+    scraped_at: article.scraped_at,
+  };
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export type MCPProgressCallback = (progress: MCPProgress) => void;
@@ -145,7 +185,7 @@ export async function scrapeEdgePropMCP(
     } catch (e) {
       // Property already defined, try to delete and redefine
       try {
-        delete (navigator as any).webdriver;
+        Reflect.deleteProperty(navigator as unknown as Record<string, unknown>, 'webdriver');
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined,
           configurable: true,
@@ -210,9 +250,9 @@ export async function scrapeEdgePropMCP(
     });
 
     // Remove automation indicators
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    delete (window as unknown as Window & Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
 
     // webdriver is already defined above, skip duplicate definition
 
@@ -227,8 +267,8 @@ export async function scrapeEdgePropMCP(
     });
 
     // Override getBattery if it exists (TypeScript-safe check)
-    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
-      (navigator as any).getBattery = () => Promise.resolve({
+    if ('getBattery' in navigator && typeof (navigator as unknown as Navigator & Record<string, unknown>).getBattery === 'function') {
+      (navigator as unknown as Navigator & Record<string, unknown>).getBattery = () => Promise.resolve({
         charging: true,
         chargingTime: 0,
         dischargingTime: Infinity,
@@ -237,17 +277,17 @@ export async function scrapeEdgePropMCP(
     }
 
     // Fix __name error that EdgeProp's JavaScript expects
-    if (typeof (window as any).__name === 'undefined') {
-      (window as any).__name = function() { return ''; };
+    if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+      (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
     }
   });
 
   const page = await context.newPage();
 
   // Listen to console events to capture logs from page.evaluate()
-  page.on('console', (msg: any) => {
-    const logType = msg.type();
-    const args = msg.args();
+  page.on('console', (msg: ConsoleMessage) => {
+    const _logType = msg.type();
+    const _args = msg.args();
     const text = msg.text();
 
     // Log all important messages including debug info - be more permissive for debugging
@@ -265,7 +305,7 @@ export async function scrapeEdgePropMCP(
   });
 
   // Listen to page errors
-  page.on('pageerror', (error: any) => {
+  page.on('pageerror', (error: Error) => {
     console.error(`[Page Error] ${error.message}`);
   });
 
@@ -407,7 +447,7 @@ export async function scrapeEdgePropMCP(
               throw new Error('Navigation failed: No content loaded');
             }
           }
-        } catch (navError: any) {
+        } catch (navError) {
           navRetryCount++;
           if (navRetryCount < maxNavRetries) {
             console.log(`   ⚠️ Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
@@ -470,14 +510,14 @@ export async function scrapeEdgePropMCP(
         await page.waitForTimeout(1000);
 
         console.log(`Fast loading completed for page ${pageNum}`);
-      } catch (error: unknown) {
+      } catch (error) {
         console.error(`Scrolling failed for page ${pageNum}:`, error);
         // Continue anyway - scrolling is not critical
       }
 
       // Extract articles from the page
       console.log('🔍 Starting article extraction...');
-      const articles = await page.evaluate(() => {
+      const articles = await page.evaluate<MCPArticle[]>(() => {
         console.log('📄 Page title:', document.title);
         console.log('📄 Page URL:', window.location.href);
 
@@ -532,7 +572,7 @@ export async function scrapeEdgePropMCP(
         }
 
         // Extract unique article hrefs from the containers (limit to 20 per page)
-        const uniqueHrefs = new Map<string, any>();
+        const uniqueHrefs = new Map<string, ArticleLinkCandidate>();
 
         // Process all containers but only take first 20
         for (let index = 0; index < articleContainers.length && uniqueHrefs.size < 20; index++) {
@@ -680,7 +720,7 @@ export async function scrapeEdgePropMCP(
           console.log('   All links on page:', document.querySelectorAll('a').length);
         }
 
-        const extracted: any[] = [];
+        const extracted: MCPArticle[] = [];
 
         articleLinks.forEach((articleData, index) => {
           const { href, title, category, imgSrc } = articleData;
@@ -702,8 +742,16 @@ export async function scrapeEdgePropMCP(
                 author: 'Unknown',
                 created: new Date().toISOString(),
               category: category ? [category] : ['Property News'],
-                description: title.substring(0, 200)
-              });
+	                description: title.substring(0, 200),
+	                created_on: new Date().toISOString(),
+	                text_content: '',
+	                paragraphs: [],
+	                links: [],
+	                images: [],
+	                word_count: 0,
+	                reading_time_minutes: 0,
+	                scraped_at: new Date()
+	              });
             console.log(`✅ Added article: ${title.substring(0, 60)}...`);
           }
         });
@@ -858,7 +906,7 @@ export async function scrapeEdgePropMCP(
                     throw new Error('Navigation failed: No content loaded');
                   }
                 }
-              } catch (navError: any) {
+              } catch (navError) {
                 navRetryCount++;
                 if (navRetryCount < maxNavRetries && !articleTimedOut) {
                   console.log(`   ⚠️  Navigation error (attempt ${navRetryCount}/${maxNavRetries}), retrying...`);
@@ -1019,7 +1067,7 @@ export async function scrapeEdgePropMCP(
                 window.scrollTo({ top: 500, behavior: 'auto' });
               });
               await articlePage.waitForTimeout(300);
-            } catch (e: unknown) {
+            } catch (e) {
               console.log(`⚠️ Content container not found, proceeding anyway...`);
             }
 
@@ -1028,13 +1076,13 @@ export async function scrapeEdgePropMCP(
               throw new Error('Page closed or timed out before extraction');
             }
 
-            const articleData = await articlePage.evaluate((articleTitle: string) => {
+            const articleData = await articlePage.evaluate<ArticleExtractionData, string>((articleTitle: string) => {
               // FIRST: EdgeProp's JavaScript tries to call __name() as a function, so provide a no-op function
               try {
-                if (typeof (window as any).__name === 'undefined') {
-                  (window as any).__name = function() { return ''; };
+                if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+                  (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
                 }
-              } catch (e: any) {
+              } catch (e) {
                 // Ignore if we can't set it
               }
 
@@ -1043,7 +1091,7 @@ export async function scrapeEdgePropMCP(
               // Isolate from page's JavaScript by using IIFE and catch errors
               try {
                 // Already handled __name workaround at the top
-              } catch (e: any) {
+              } catch (e) {
                 // Ignore if we can't set it
               }
 
@@ -1191,7 +1239,7 @@ export async function scrapeEdgePropMCP(
 	                    compactLower.includes('industrialubitechparkenterprise') ||
 	                    (text.length > 90 && concatenatedWords >= 1 && !/[.!?]["')\]]?$/.test(text));
 	                };
-	                const trimTrailingNavigationParagraphs = (items: string[]): string[] => {
+		        const trimTrailingNavigationParagraphs = (items: string[]): string[] => {
 	                  const cleaned = [...items];
 	                  while (cleaned.length > 0 && isTrailingNavigationParagraph(cleaned[cleaned.length - 1])) {
 	                    cleaned.pop();
@@ -1224,7 +1272,7 @@ export async function scrapeEdgePropMCP(
               console.log('🔍 Starting article data extraction...');
 
               // Mark as success as soon as we have paragraphs
-              const checkSuccess = () => {
+	          const checkSuccess = () => {
                 if (paragraphs.length > 0 && textContent.length > 100) {
                   extractionSuccess = true;
                 }
@@ -1255,7 +1303,7 @@ export async function scrapeEdgePropMCP(
                     console.log(`   Element has ${element.textContent?.length || 0} characters`);
                     break;
                   }
-                } catch (e: any) {
+                } catch (e) {
                   console.log(`❌ Selector failed: ${selector}`);
                 }
               }
@@ -1324,7 +1372,7 @@ export async function scrapeEdgePropMCP(
                           break;
                         }
                       }
-                    } catch (e: any) {
+                    } catch (e) {
                       // Ignore JSON parsing errors
                     }
                   }
@@ -1469,7 +1517,7 @@ export async function scrapeEdgePropMCP(
                         break;
                       }
                     }
-                  } catch (e: any) {
+                  } catch (e) {
                     // Ignore JSON parsing errors
                   }
                 }
@@ -1590,7 +1638,7 @@ export async function scrapeEdgePropMCP(
                          !text.toLowerCase().includes('read also') &&
                          el.children.length <= 8; // Can have some inline children
                 });
-              paragraphElements = paragraphElements.concat(articleDivs as any);
+              paragraphElements = paragraphElements.concat(articleDivs);
               console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
               }
 
@@ -2118,8 +2166,8 @@ export async function scrapeEdgePropMCP(
                 word_count: wordCount,
                 reading_time_minutes: readingTime
               };
-                } catch (error: any) {
-                  console.error('Error in article extraction:', error?.message || error);
+                } catch (error) {
+	                  console.error('Error in article extraction:', getErrorMessage(error));
                   // Return partial data if we have any (preserve progress)
                   const hasPartialData = paragraphs.length > 0 || textContent.length > 0;
                   return {
@@ -2156,7 +2204,7 @@ export async function scrapeEdgePropMCP(
             console.log(`   - paragraphs count: ${articleData?.paragraphs?.length || 0}`);
             console.log(`   - images count: ${articleData?.images?.length || 0}`);
             if (articleData?.images && articleData.images.length > 0) {
-              console.log(`   - First image URL: ${(articleData.images[0] as any)?.url?.substring(0, 80) || 'N/A'}`);
+              console.log(`   - First image URL: ${articleData.images[0]?.url?.substring(0, 80) || 'N/A'}`);
             }
             console.log(`   - main_image_url: ${articleData?.main_image_url ? articleData.main_image_url.substring(0, 80) + '...' : 'Not found'}`);
             console.log(`   - tags count: ${articleData?.tags?.length || 0}`);
@@ -2201,20 +2249,20 @@ export async function scrapeEdgePropMCP(
               console.log(`✅ Extraction successful! Creating fullArticle object...`);
               const fullArticle: MCPArticle = {
                 ...article,
-                author: articleData.author,
+                author: articleData.author || article.author,
                 created: articleData.created || article.created,
-                category: articleData.category,
+                category: articleData.category || article.category,
                 description: articleData.description || article.description,
                 html_content: articleData.html_content,
-                text_content: articleData.text_content,
-                paragraphs: articleData.paragraphs,
-                links: articleData.links,
+                text_content: articleData.text_content || '',
+                paragraphs: articleData.paragraphs || [],
+                links: articleData.links || [],
                 images: articleData.images || [],
                 main_image_url: articleData.main_image_url,
                 main_image_caption: articleData.main_image_caption,
                 tags: articleData.tags,
-                word_count: articleData.word_count,
-                reading_time_minutes: articleData.reading_time_minutes,
+                word_count: articleData.word_count || 0,
+                reading_time_minutes: articleData.reading_time_minutes || 0,
                 scraped_at: new Date()
               };
 
@@ -2247,7 +2295,7 @@ export async function scrapeEdgePropMCP(
                       reading_time_minutes: fullArticle.reading_time_minutes,
                       published_date: new Date().toISOString()
                     };
-                    await upsertArticleContent({ ...fullArticle, ...contentData } as any);
+                    await upsertArticleContent(toArticleContent({ ...fullArticle, ...contentData }));
                     console.log(`✅ Saved full content with ${fullArticle.images?.length || 0} images for: ${article.title}`);
                   }
 
@@ -2263,7 +2311,7 @@ export async function scrapeEdgePropMCP(
                     message: `✅ Saved: ${article.title.substring(0, 50)}...`
                   });
 
-                } catch (saveError: any) {
+                } catch (saveError) {
                   console.error(`❌ Failed to save article ${article.title}:`, saveError);
                 }
               }
@@ -2273,7 +2321,7 @@ export async function scrapeEdgePropMCP(
               console.log(`   - Reason: extractionSuccess=${articleData?.extractionSuccess}, text_content_length=${articleData?.text_content?.length || 0}`);
             }
 
-          } catch (error: any) {
+          } catch (error) {
             articlesFailed++;
             console.error(`Failed to scrape article ${article.title}:`, error);
           } finally {
@@ -2307,7 +2355,7 @@ export async function scrapeEdgePropMCP(
 
     return allArticles;
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Scraper error:', error);
     onProgress({
       currentPage: 0,
@@ -2317,7 +2365,7 @@ export async function scrapeEdgePropMCP(
       articlesScraped: allArticles.length,
       articlesFailed,
       status: 'error',
-      message: `Scraper failed: ${error.message}`
+      message: `Scraper failed: ${getErrorMessage(error)}`
     });
     throw error;
   } finally {
@@ -2344,7 +2392,7 @@ export async function scrapeEdgePropMCP(
       // Ignore errors removing listeners
     }
   }
-  } catch (outerError: any) {
+  } catch (outerError) {
     // Handle any errors from the outer try block (browser initialization, etc.)
     console.error('❌ Outer scraper error:', outerError);
     browserClosed = true;
@@ -2469,17 +2517,17 @@ export async function scrapeSingleArticleMCP(
         window.scrollTo({ top: 500, behavior: 'smooth' });
       });
       await page.waitForTimeout(1000);
-    } catch (e: unknown) {
+    } catch (e) {
       console.log(`⚠️ Content container not found, proceeding anyway...`);
     }
 
     // Extract article data using the same logic as scrapeEdgePropMCP
-    const articleData = await page.evaluate(() => {
+    const articleData = await page.evaluate<ArticleExtractionData>(() => {
       try {
-        if (typeof (window as any).__name === 'undefined') {
-          (window as any).__name = function() { return ''; };
+        if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+          (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
         }
-      } catch (e: any) {}
+      } catch (e) {}
 
       return (function() {
         const cleanParagraphs = (rawParagraphs: string[]): string[] => {
@@ -2598,7 +2646,7 @@ export async function scrapeSingleArticleMCP(
 	            compactLower.includes('industrialubitechparkenterprise') ||
 	            (text.length > 90 && concatenatedWords >= 1 && !/[.!?]["')\]]?$/.test(text));
 	        };
-	        const trimTrailingNavigationParagraphs = (items: string[]): string[] => {
+	        const _trimTrailingNavigationParagraphs = (items: string[]): string[] => {
 	          const cleaned = [...items];
 	          while (cleaned.length > 0 && isTrailingNavigationParagraph(cleaned[cleaned.length - 1])) {
 	            cleaned.pop();
@@ -2618,7 +2666,7 @@ export async function scrapeSingleArticleMCP(
         let links: Array<{text: string; url: string; type: 'internal' | 'external'}> = [];
         const images: Array<{url: string; alt?: string; caption?: string; paragraph_index?: number}> = [];
         let mainImageUrl = '';
-        let mainImageCaption = '';
+        const mainImageCaption = '';
         let tags: string[] = [];
         let htmlContent = '';
         let wordCount = 0;
@@ -2628,7 +2676,7 @@ export async function scrapeSingleArticleMCP(
         try {
           console.log('🔍 Starting article data extraction...');
 
-          const checkSuccess = () => {
+          const _checkSuccess = () => {
             if (paragraphs.length > 0 && textContent.length > 100) {
               extractionSuccess = true;
             }
@@ -2659,7 +2707,7 @@ export async function scrapeSingleArticleMCP(
                 console.log(`   Element has ${element.textContent?.length || 0} characters`);
                 break;
               }
-            } catch (e: any) {
+            } catch (e) {
               console.log(`❌ Selector failed: ${selector}`);
             }
           }
@@ -2730,7 +2778,7 @@ export async function scrapeSingleArticleMCP(
                       break;
                     }
                   }
-                } catch (e: any) {
+                } catch (e) {
                   // Ignore JSON parsing errors
                 }
               }
@@ -2878,7 +2926,7 @@ export async function scrapeSingleArticleMCP(
                      !text.toLowerCase().includes('read also') &&
                      el.children.length <= 8;
             });
-            paragraphElements = paragraphElements.concat(articleDivs as any);
+            paragraphElements = paragraphElements.concat(articleDivs);
             console.log(`Added ${articleDivs.length} content divs to paragraphElements`);
           }
 
@@ -3147,7 +3195,7 @@ export async function scrapeSingleArticleMCP(
             word_count: wordCount,
             reading_time_minutes: readingTime
           };
-        } catch (error: any) {
+        } catch (error) {
           console.log('Error in extraction:', error);
           return {
             extractionSuccess: false,
@@ -3170,7 +3218,7 @@ export async function scrapeSingleArticleMCP(
           };
         }
       })();
-    }).catch((error: any) => {
+    }).catch((error: unknown) => {
       console.log('Error in page.evaluate:', error);
       return {
         extractionSuccess: false,
@@ -3256,11 +3304,11 @@ export async function scrapeSingleArticleMCP(
       author: articleData.author || 'Unknown',
       created: articleData.created || new Date().toISOString(),
       category: articleData.category || ['Property News'],
-      description: articleData.description || articleData.text_content?.substring(0, 200),
+      description: articleData.description || articleData.text_content?.substring(0, 200) || '',
       created_on: new Date().toISOString(),
       keywords: articleData.tags || [],
-      text_content: articleData.text_content,
-      paragraphs: articleData.paragraphs,
+      text_content: articleData.text_content || '',
+      paragraphs: articleData.paragraphs || [],
       links: articleData.links || [],
       images: articleData.images || [],
       main_image_url: articleData.main_image_url,
@@ -3299,10 +3347,10 @@ export async function scrapeSingleArticleMCP(
             reading_time_minutes: article.reading_time_minutes,
             published_date: new Date().toISOString()
           };
-          await upsertArticleContent({ ...article, ...contentData } as any);
+          await upsertArticleContent(toArticleContent({ ...article, ...contentData }));
           console.log(`✅ Saved full content for: ${article.title}`);
         }
-      } catch (saveError: any) {
+      } catch (saveError) {
         console.error(`❌ Failed to save article: ${saveError}`);
       }
     }
@@ -3320,7 +3368,7 @@ export async function scrapeSingleArticleMCP(
 
     return article;
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Single article scrape failed:', error);
     onProgress?.({
       currentPage: 1,
@@ -3330,7 +3378,7 @@ export async function scrapeSingleArticleMCP(
       articlesScraped: 0,
       articlesFailed: 1,
       status: 'error',
-      message: `Failed to scrape article: ${error.message}`
+      message: `Failed to scrape article: ${getErrorMessage(error)}`
     });
     return null;
   } finally {

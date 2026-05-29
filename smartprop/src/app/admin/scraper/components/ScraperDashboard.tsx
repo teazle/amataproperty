@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { Button } from '@/components/ui/button';
+import { useEffect,useRef,useState } from 'react';
+import { toast } from 'sonner';
+import { diagnoseStuckJobs,forceFixStuckJob,forceResetStuckJobs,getDistrictMetadata,syncCompletedJobs } from '../actions';
+import type { AuthStatus } from '../types';
 import { AuthStatusCard } from './AuthStatusCard';
+import { ChromiumProcessManager } from './ChromiumProcessManager';
 import { DataQualityDashboard } from './DataQualityDashboard';
-import { ScraperConfigForm } from './ScraperConfigForm';
+import { HistoryTable } from './HistoryTable';
 import { LiveProgressPanel } from './LiveProgressPanel';
 import { RecentListingsPreview } from './RecentListingsPreview';
-import { HistoryTable } from './HistoryTable';
 import { ScheduledJobsSection } from './ScheduledJobsSection';
-import { ChromiumProcessManager } from './ChromiumProcessManager';
-import { getDistrictMetadata, forceResetStuckJobs, diagnoseStuckJobs, forceFixStuckJob, syncCompletedJobs } from '../actions';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import type { AuthStatus } from '../types';
+import { ScraperConfigForm } from './ScraperConfigForm';
 
 interface Job {
   id?: string;
@@ -66,6 +66,20 @@ interface JobHistory {
   };
 }
 
+interface StuckJobInfo {
+  id: string;
+  platform: string;
+  status: string;
+  isProcessRunning?: boolean;
+  hasLockFile?: boolean;
+  sqlFix?: string;
+}
+
+type ScraperStatusEvent =
+  | { status: 'active'; job: Job }
+  | { status: 'idle' }
+  | { status: 'error'; error?: string };
+
 interface ScraperDashboardProps {
   initialActiveJob: Job | null;
   initialJobHistory: JobHistory[];
@@ -84,12 +98,12 @@ export function ScraperDashboard({
   const [activeJob, setActiveJob] = useState(initialActiveJob);
   const [completedJob, setCompletedJob] = useState<Job | null>(null); // Keep completed job for log review
   const [authStatus, setAuthStatus] = useState(initialAuthStatus);
-  const [qualityMetrics, setQualityMetrics] = useState(initialQualityMetrics);
+  const [qualityMetrics, _setQualityMetrics] = useState(initialQualityMetrics);
   const [districts, setDistricts] = useState(initialDistricts || []);
   const [lastJobId, setLastJobId] = useState<string | null | undefined>(initialActiveJob?.id);
   const [isResetting, setIsResetting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [stuckJobInfo, setStuckJobInfo] = useState<any[] | null>(null);
+  const [stuckJobInfo, setStuckJobInfo] = useState<StuckJobInfo[] | null>(null);
 
   const handleForceReset = async () => {
     if (!confirm('Are you sure you want to force reset all stuck jobs? This will mark all active jobs as failed and clear lock files. Use this if you cannot start a new scrape.')) {
@@ -112,17 +126,18 @@ export function ScraperDashboard({
         }, 2000);
       } else {
         const errorMsg = result.error || 'Failed to reset stuck jobs';
+        const stuckJobs = Array.isArray(result.stuckJobs) ? result.stuckJobs as StuckJobInfo[] : undefined;
         toast.error(errorMsg, {
           duration: 10000, // Show for 10 seconds
-          description: result.stuckJobs ? `Stuck job IDs: ${result.stuckJobs.map((j: any) => j.id).join(', ')}` : undefined
+          description: stuckJobs ? `Stuck job IDs: ${stuckJobs.map((j) => j.id).join(', ')}` : undefined
         });
         console.error('Force reset failed:', result);
 
         // If there are stuck jobs, fetch diagnostic info
-        if (result.stuckJobs && result.stuckJobs.length > 0) {
+        if (stuckJobs && stuckJobs.length > 0) {
           const diagnostic = await diagnoseStuckJobs();
           if (diagnostic.success) {
-            setStuckJobInfo(diagnostic.stuckJobs);
+            setStuckJobInfo(diagnostic.stuckJobs as StuckJobInfo[]);
           }
         }
 
@@ -169,8 +184,9 @@ export function ScraperDashboard({
         // Refresh stuck job info
         const diagnostic = await diagnoseStuckJobs();
         if (diagnostic.success) {
-          setStuckJobInfo(diagnostic.stuckJobs);
-          if (diagnostic.stuckJobs.length === 0) {
+          const diagnosticJobs = diagnostic.stuckJobs as StuckJobInfo[];
+          setStuckJobInfo(diagnosticJobs);
+          if (diagnosticJobs.length === 0) {
             // No more stuck jobs, reload page
             setTimeout(() => window.location.reload(), 1000);
           }
@@ -215,7 +231,7 @@ export function ScraperDashboard({
 
         eventSource.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data);
+            const data = JSON.parse(event.data) as ScraperStatusEvent;
 
             if (data.status === 'active' && data.job) {
               // Always update active job with latest data from SSE
@@ -324,7 +340,7 @@ export function ScraperDashboard({
                 ⚠️ {stuckJobInfo.length} Stuck Job(s) Detected
               </h3>
               <div className="space-y-2">
-                {stuckJobInfo.map((job: any) => (
+                {stuckJobInfo.map((job) => (
                   <div key={job.id} className="bg-white rounded p-3 border border-red-200">
                     <div className="flex items-center justify-between">
                       <div>

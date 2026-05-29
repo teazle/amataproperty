@@ -1,19 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { DistrictSelector } from './DistrictSelector';
-import {
-  createScheduledJob,
-  updateScheduledJob,
-  type ScheduledJob,
-  getDistrictMetadata,
-} from '../actions';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
+import { useEffect,useState } from 'react';
 import { toast } from 'sonner';
+import {
+createScheduledJob,
+getDistrictMetadata,
+updateScheduledJob,
+type ScheduledJob,
+} from '../actions';
+import { DistrictSelector, type District } from './DistrictSelector';
 // Note: cron validation is done server-side via API
 import { X } from 'lucide-react';
 
@@ -31,7 +30,7 @@ export function ScheduledJobForm({ job, onClose, onSuccess }: ScheduledJobFormPr
   const [timezone, setTimezone] = useState(job?.timezone || 'Asia/Singapore');
   const [pages, setPages] = useState(job?.config.pages || 5);
   const [districts, setDistricts] = useState<string[]>(job?.config.districts || []);
-  const [districtsList, setDistrictsList] = useState<any[]>([]);
+  const [districtsList, setDistrictsList] = useState<District[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [cronError, setCronError] = useState<string | null>(null);
   const [nextRunPreview, setNextRunPreview] = useState<string | null>(null);
@@ -57,7 +56,11 @@ export function ScheduledJobForm({ job, onClose, onSuccess }: ScheduledJobFormPr
       try {
         // Call API to validate and get next run time
         const response = await fetch(`/api/scheduler/validate?expression=${encodeURIComponent(cronExpression)}&timezone=${encodeURIComponent(timezone)}`);
-        const data = await response.json();
+        const data = await response.json() as {
+          valid?: boolean;
+          nextRun?: string;
+          error?: string;
+        };
         
         if (data.valid) {
           setCronError(null);
@@ -236,7 +239,7 @@ export function ScheduledJobForm({ job, onClose, onSuccess }: ScheduledJobFormPr
             </p>
           )}
           <p className="text-xs text-muted-foreground mt-1">
-            Format: second minute hour day month day-of-week (e.g., "0 10 * * *" for 10am daily)
+            Format: second minute hour day month day-of-week (e.g., &quot;0 10 * * *&quot; for 10am daily)
           </p>
         </div>
 
@@ -265,4 +268,3 @@ export function ScheduledJobForm({ job, onClose, onSuccess }: ScheduledJobFormPr
     </form>
   );
 }
-

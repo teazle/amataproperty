@@ -49,7 +49,7 @@ async function debugUrlPatterns() {
     console.log(`\n🔗 Found ${allLinks.length} total links with text:`);
     
     // Group by URL patterns
-    const patterns = new Map<string, any[]>();
+    const patterns = new Map<string, unknown[]>();
     
     allLinks.forEach(link => {
       const href = link.href || '';
@@ -134,7 +134,7 @@ async function debugUrlPatterns() {
         'div[class*="jsx-"]'
       ];
       
-      const results: any[] = [];
+      const results: unknown[] = [];
       
       containerSelectors.forEach(selector => {
         const elements = document.querySelectorAll(selector);

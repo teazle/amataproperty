@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { createClient } from '@supabase/supabase-js';
 import { sendTemplate } from '@/lib/wa/send';
+import { createClient } from '@supabase/supabase-js';
+import { NextRequest,NextResponse } from 'next/server';
+import { PDFDocument,rgb,StandardFonts } from 'pdf-lib';
 
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in /api/sign/submit:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -123,7 +123,7 @@ async function generateAgreementPDF(data: {
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-  const { width, height } = page.getSize();
+  const { width: _width, height } = page.getSize();
   const margin = 50;
   let yPosition = height - margin;
 
@@ -216,7 +216,7 @@ async function generateAgreementPDF(data: {
  */
 async function storePDF(pdfBuffer: Buffer, filename: string): Promise<string> {
   // Upload to Supabase Storage
-  const { data, error } = await supabase.storage
+  const { data: _data, error } = await supabase.storage
     .from('agreements')
     .upload(filename, pdfBuffer, {
       contentType: 'application/pdf',

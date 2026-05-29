@@ -6,7 +6,7 @@
 
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { type ArticleContent as _ArticleContent } from './edgeprop-content-scraper';
-import { cleanArticleParagraphs, sanitizeHtmlContent, extractCleanTextContent } from '@/lib/utils/content-parser';
+import { cleanArticleParagraphs, sanitizeHtmlContent as _sanitizeHtmlContent, extractCleanTextContent as _extractCleanTextContent } from '@/lib/utils/content-parser';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA } from '@/workers/flaresolverr';
 
 export interface UnifiedArticle {
@@ -43,10 +43,10 @@ export interface UnifiedArticle {
 
 export interface CapturedApiData {
   total?: number;
-  results?: any[];
-  response?: any[] | { results?: any[] };
-  data?: any[];
-  articles?: any[];
+  results?: unknown[];
+  response?: unknown[] | { results?: unknown[] };
+  data?: unknown[];
+  articles?: unknown[];
   url?: string;
   timestamp?: number;
   discovery_method?: 'api' | 'dom' | 'unknown';
@@ -79,7 +79,7 @@ export async function scrapeEdgePropUnified(
   shouldStop = false;
   const allArticles: UnifiedArticle[] = [];
   const seenIds = new Set<string>();
-  let capturedData: CapturedApiData | any[] | null = null;
+  let capturedData: CapturedApiData | unknown[] | null = null;
   let currentPage: Page | null = null;
   let context: BrowserContext | null = null;
   let articlesFailed = 0;
@@ -272,7 +272,7 @@ export async function scrapeEdgePropUnified(
             console.log('⚠️ No valid articles found in API response');
           }
           
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('❌ Failed to parse API response:', error instanceof Error ? error.message : String(error));
           console.log('📄 Response URL:', url);
           console.log('📄 Content-Type:', contentType);
@@ -310,7 +310,7 @@ export async function scrapeEdgePropUnified(
           timeout: 30000 // 30 second timeout
         }
       );
-    } catch (error: unknown) {
+    } catch (error) {
       console.error('Navigation failed:', error);
       onProgress({
         currentPage: 0,
@@ -499,7 +499,7 @@ export async function scrapeEdgePropUnified(
             console.log(`📖 Opening article: ${fullUrl}`);
             // Try multiple navigation strategies for better reliability
             let navigationSuccess = false;
-            let lastError = null;
+            let _lastError = null;
             
             // Strategy 1: networkidle with longer timeout
             try {
@@ -508,8 +508,8 @@ export async function scrapeEdgePropUnified(
                 timeout: 45000 
               });
               navigationSuccess = true;
-            } catch (error: unknown) {
-              lastError = error;
+            } catch (error) {
+              _lastError = error;
               console.log(`⚠️ Networkidle failed, trying domcontentloaded...`);
             }
             
@@ -522,8 +522,8 @@ export async function scrapeEdgePropUnified(
                 });
                 navigationSuccess = true;
                 console.log(`✅ DOM content loaded successfully`);
-              } catch (error: unknown) {
-                lastError = error;
+              } catch (error) {
+                _lastError = error;
                 console.log(`⚠️ Load event failed`);
               }
             }
@@ -537,8 +537,8 @@ export async function scrapeEdgePropUnified(
                 });
                 navigationSuccess = true;
                 console.log(`✅ Page load completed`);
-              } catch (error: unknown) {
-                lastError = error;
+              } catch (error) {
+                _lastError = error;
                 console.log(`❌ All navigation strategies failed`);
                 throw error;
               }
@@ -1202,7 +1202,7 @@ export async function scrapeEdgePropUnified(
             // Respectful delay between articles
             await new Promise(resolve => setTimeout(resolve, 2000));
             
-          } catch (error: unknown) {
+          } catch (error) {
             // Ensure articlePage is closed even on error
             if (articlePage) {
               await articlePage.close().catch(() => {});
@@ -1376,7 +1376,7 @@ export async function scrapeEdgePropUnified(
               imgSrc: string;
             }> = [];
             
-            articleElements.forEach((el, index) => {
+            articleElements.forEach((el, _index) => {
               let title = '';
               let href = '';
               let imgSrc = '';
@@ -1414,7 +1414,7 @@ export async function scrapeEdgePropUnified(
               // Only add if we have a valid title and href
               if (title && href && href.includes('/property-news/')) {
                 // Extract the path part for our database
-                const path = href.replace('https://www.edgeprop.sg/', '');
+                const _path = href.replace('https://www.edgeprop.sg/', '');
                 
                 extracted.push({
                   title: title,
@@ -1436,7 +1436,7 @@ export async function scrapeEdgePropUnified(
           } else {
             console.log('No articles found in DOM');
           }
-        } catch (error: unknown) {
+        } catch (error) {
           console.log('DOM extraction failed:', error);
         }
         

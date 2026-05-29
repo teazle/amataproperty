@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
-import path from 'path';
+import { NextRequest,NextResponse } from 'next/server';
 
 const LOG_FILE_PATH = '/tmp/linkedin-automation.log';
 
@@ -31,10 +30,10 @@ export async function GET(request: NextRequest) {
     let logContent: string;
     try {
       logContent = fs.readFileSync(LOG_FILE_PATH, 'utf-8');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error reading log file:', error);
       return NextResponse.json(
-        { error: `Failed to read log file: ${error.message}` },
+        { error: `Failed to read log file: ${(error instanceof Error ? error.message : String(error))}` },
         { status: 500 }
       );
     }
@@ -61,10 +60,10 @@ export async function GET(request: NextRequest) {
       fileSize: stats.size,
       lastModified: stats.mtime.toISOString()
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error getting LinkedIn logs:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to get logs' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to get logs' },
       { status: 500 }
     );
   }

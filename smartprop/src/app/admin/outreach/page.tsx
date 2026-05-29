@@ -1,21 +1,21 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Textarea } from '@/components/ui/textarea';
+import { Dialog,DialogContent,DialogDescription,DialogHeader,DialogTitle,DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { useEffect,useMemo,useRef,useState } from 'react';
 // import { Separator } from '@/components/ui/separator';
-import { toast } from 'sonner';
 import { supabaseClient as supabase } from '@/lib/supabase-client';
-import { Search, Send, Pause, Play, RotateCcw, Download, MessageSquare, Clock, Users, Target, Loader2 } from 'lucide-react';
+import { Clock,Download,Loader2,MessageSquare,Pause,Play,RotateCcw,Search,Send,Target,Users } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface ConversationMessage {
   role: 'agent' | 'user';
@@ -46,7 +46,7 @@ interface ListingWithOutreach {
     email?: string;
     agency?: string;
     cea_reg_no?: string;
-  };
+  } | null;
   outreach?: Array<{
     id: string;
   status: string;
@@ -99,7 +99,7 @@ export default function OutreachPage() {
   }, [viewingConversationId, savedScrollPosition]);
 
   // Handle scroll position saving
-  const handleScroll = () => {
+  const _handleScroll = () => {
     if (dialogScrollRef.current) {
       setSavedScrollPosition(dialogScrollRef.current.scrollTop);
     }
@@ -187,9 +187,9 @@ export default function OutreachPage() {
       console.log('Sample listing:', data?.[0]);
 
       // Transform the data to match our interface
-      const transformedData = (data || []).map((item: any) => ({
+      const transformedData = (data || []).map((item) => ({
         ...item,
-        agents: item.agents || null, // agents is already an object from the JOIN
+        agents: Array.isArray(item.agents) ? item.agents[0] || null : item.agents || null,
         outreach: item.outreach || []
       }));
       

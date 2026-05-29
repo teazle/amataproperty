@@ -23,10 +23,10 @@ import { chromium, type Page, type BrowserContextOptions, type Browser, type Bro
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
-import { CHROME_UA, humanPause } from './stealth.js';
+import _os from 'os';
+import { CHROME_UA as _CHROME_UA, humanPause } from './stealth.js';
 import { upsertAgentAndListing } from './upsert.js';
-import { execSync, exec, spawn } from 'child_process';
+import { execSync as _execSync, exec, spawn } from 'child_process';
 import { supabase } from './supa.js';
 import {
   solveCloudflareWithFlaresolverr,
@@ -405,15 +405,17 @@ async function scrapePropertyGuruByDistrict() {
         process.kill(lockData.pid, 0);
         processRunning = true;
         console.log(`   ✓ Process ${lockData.pid} is running`);
-      } catch (error: any) {
+      } catch (error) {
         // ESRCH means process doesn't exist
-        if (error.code === 'ESRCH') {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
           processRunning = false;
           console.log(`   ✗ Process ${lockData.pid} is NOT running (ESRCH)`);
         } else {
           // Other error, assume process might be running
           processRunning = true;
-          console.log(`   ⚠ Process check error (assuming running): ${error.code || error.message}`);
+          const errorInfo = error instanceof Error ? error.message : String(error);
+          const errorCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+          console.log(`   ⚠ Process check error (assuming running): ${errorCode || errorInfo}`);
         }
       }
     } else {
@@ -626,7 +628,7 @@ async function scrapePropertyGuruByDistrict() {
 
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
   // Declare browser variable early so it can be accessed in error handlers
-  let browser: any = null;
+  let browser: Browser | null = null;
 
   // CRITICAL: Handle uncaught exceptions - close browser before crashing
   process.on('uncaughtException', async (error) => {
@@ -931,8 +933,8 @@ async function scrapePropertyGuruByDistrict() {
     });
 
     // Override getBattery
-    if ('getBattery' in navigator && typeof (navigator as any).getBattery === 'function') {
-      (navigator as any).getBattery = () => Promise.resolve({
+    if ('getBattery' in navigator && typeof (navigator as unknown as Navigator & Record<string, unknown>).getBattery === 'function') {
+      (navigator as unknown as Navigator & Record<string, unknown>).getBattery = () => Promise.resolve({
         charging: true,
         chargingTime: 0,
         dischargingTime: Infinity,
@@ -949,7 +951,7 @@ async function scrapePropertyGuruByDistrict() {
 
   // Track cookie saves to avoid excessive file I/O
   let listingsSinceLastCookieSave = 0;
-  const COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
+  const _COOKIE_SAVE_INTERVAL = 5; // Save cookies every 5 listings
 
   // Loop through each district
   for (const district of districts) {
@@ -1580,7 +1582,7 @@ async function scrapePropertyGuruByDistrict() {
     fs.writeFileSync(lockFile, JSON.stringify(jobStatus, null, 2));
   }
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Fatal error during scraping:', error);
     // Update lock file and database on error (lock file will be removed in finally block)
     jobStatus.status = 'failed';

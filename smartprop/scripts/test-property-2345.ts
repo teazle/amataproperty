@@ -42,9 +42,9 @@ function generateWeekdaySlots(): Array<{
   
   // Get current date in Singapore timezone
   const now = new Date();
-  const currentDay = now.toLocaleString('en-SG', { 
-    timeZone: 'Asia/Singapore', 
-    weekday: 'long' 
+  const _currentDay = now.toLocaleString('en-SG', {
+    timeZone: 'Asia/Singapore',
+    weekday: 'long'
   });
   
   // Start from next Monday (or today if it's Monday and early)
@@ -201,4 +201,3 @@ setupTestProperty().catch(error => {
   console.error('❌ Unexpected error:', error);
   process.exit(1);
 });
-

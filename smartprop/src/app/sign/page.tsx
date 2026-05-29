@@ -52,7 +52,7 @@ function SignFormContent() {
         window.open(result.summaryUrl, '_blank');
       }
       
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error submitting agreement:', error);
       toast.error('Failed to submit agreement. Please try again.');
     } finally {

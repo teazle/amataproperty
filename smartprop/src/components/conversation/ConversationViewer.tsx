@@ -5,15 +5,14 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { MessageSquare, Clock, Users, Target, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
-import { useConversationSelectors, subscribeToConversation } from '@/lib/stores/conversation-store';
-import { ConversationMessage, CoBrokingStatus } from '@/lib/stores/conversation-store';
+import { CoBrokingStatus,ConversationMessage,subscribeToConversation,useConversationSelectors } from '@/lib/stores/conversation-store';
+import { AlertCircle,CheckCircle,Clock,MessageSquare,Target,Users,XCircle } from 'lucide-react';
+import { useEffect,useState } from 'react';
 
 interface ConversationViewerProps {
   conversationId: string;
@@ -22,7 +21,7 @@ interface ConversationViewerProps {
 
 export function ConversationViewer({ conversationId, onClose }: ConversationViewerProps) {
   const [conversation, setConversation] = useState(useConversationSelectors.useConversation(conversationId));
-  const [isLive, setIsLive] = useState(true);
+  const [isLive, _setIsLive] = useState(true);
 
   // Subscribe to real-time updates for this conversation
   useEffect(() => {

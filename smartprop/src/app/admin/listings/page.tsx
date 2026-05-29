@@ -1,14 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Phone, Mail, Copy, Home, MapPin, Search, Bed, Bath, Edit, Trash2 } from 'lucide-react';
 import EditListingModal from '@/components/EditListingModal';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
+import { Bath,Bed,Copy,Edit,Home,Mail,MapPin,Phone,Search,Trash2 } from 'lucide-react';
+import React,{ useEffect,useState } from 'react';
 // Using API endpoint instead of direct Supabase calls
 
 interface ViewingSlot {
@@ -129,7 +129,7 @@ export default function ListingsPage() {
       console.log('Successfully fetched listings:', result.listings?.length || 0);
       
       // Transform the data to handle agents properly
-      const transformedData = (result.listings || []).map((listing: any) => ({
+      const transformedData = (result.listings || []).map((listing: Listing & { agents?: Listing['agents'] | Listing['agents'][] }) => ({
         ...listing,
         agents: Array.isArray(listing.agents) ? listing.agents[0] : listing.agents
       }));
@@ -414,7 +414,7 @@ export default function ListingsPage() {
   };
 
   // Helper function to format viewing timeslots with actual dates
-  const formatViewingTimeslots = (listing: Listing): string => {
+  const _formatViewingTimeslots = (listing: Listing): string => {
     // If structured data exists, always use it to display actual dates
     if (listing.viewing_timeslots_structured && 
         listing.viewing_timeslots_structured.available && 
@@ -1147,7 +1147,7 @@ export default function ListingsPage() {
             
             <div className="mb-6">
               <p className="text-gray-700">
-                Are you sure you want to delete the listing <strong>"{deletingListing.title}"</strong>?
+                Are you sure you want to delete the listing <strong>&quot;{deletingListing.title}&quot;</strong>?
               </p>
               <p className="text-sm text-gray-500 mt-2">
                 This will permanently remove the listing and all associated data.

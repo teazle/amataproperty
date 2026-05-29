@@ -11,7 +11,7 @@ async function testUnifiedScraper() {
   console.log('🧪 Testing EdgeProp Unified Scraper with API intercept fixes...\n');
   
   let progressCount = 0;
-  const progressCallback = (progress: any) => {
+  const progressCallback = (progress: unknown) => {
     progressCount++;
     console.log(`[${progressCount}] ${progress.message}`);
     console.log(`   Status: ${progress.status}`);

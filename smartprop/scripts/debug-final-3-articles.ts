@@ -104,9 +104,9 @@ async function debugFinal3Articles() {
       },
     });
     
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+    delete (window as unknown).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    delete (window as unknown).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    delete (window as unknown).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
   });
 
   const page = await context.newPage();

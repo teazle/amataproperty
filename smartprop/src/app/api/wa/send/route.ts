@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { sendWhatsAppMessage, sendViewingRequest, sendCoBrokingInquiry } from '@/lib/wa/waha';
+import { sendCoBrokingInquiry,sendWhatsAppMessage } from '@/lib/wa/waha';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/wa/send
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(result);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in /api/wa/send:', error);
     return NextResponse.json(
       { error: 'Internal server error' },

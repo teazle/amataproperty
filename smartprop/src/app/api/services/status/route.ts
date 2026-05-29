@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { execSync } from 'child_process';
+import { NextRequest,NextResponse } from 'next/server';
 
 interface ServiceStatus {
   flaresolverr: {
@@ -50,7 +50,7 @@ async function checkFlareSolverr(): Promise<ServiceStatus['flaresolverr']> {
     
     if (response.ok) {
       try {
-        const data = await response.json();
+        const _data = await response.json();
         // If we get a valid response (even if empty), FlareSolverr is online and ready
         return {
           online: true,
@@ -70,7 +70,7 @@ async function checkFlareSolverr(): Promise<ServiceStatus['flaresolverr']> {
         error: `HTTP ${response.status}`,
       };
     }
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       return {
         online: false,
@@ -149,7 +149,7 @@ async function checkWAHA(): Promise<ServiceStatus['waha']> {
           error: `Session check failed: HTTP ${sessionResponse.status}`,
         };
       }
-    } catch (sessionError: unknown) {
+    } catch (sessionError) {
       clearTimeout(sessionTimeoutId);
       if (sessionError instanceof Error && sessionError.name === 'AbortError') {
         return {
@@ -164,7 +164,7 @@ async function checkWAHA(): Promise<ServiceStatus['waha']> {
         error: sessionError instanceof Error ? sessionError.message : 'Unknown error',
       };
     }
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       return {
         online: false,
@@ -206,7 +206,7 @@ function checkWorker(): ServiceStatus['worker'] {
       up: totalCount > 0,
       processCount: totalCount,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     return {
       up: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -245,7 +245,7 @@ function countChromiumProcesses(): ServiceStatus['chromium'] {
     return {
       processCount,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     return {
       processCount: 0,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -257,7 +257,7 @@ function countChromiumProcesses(): ServiceStatus['chromium'] {
  * GET /api/services/status
  * Returns status of all important services
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check all services in parallel
     const [flaresolverr, waha, worker, chromium] = await Promise.all([
@@ -275,7 +275,7 @@ export async function GET(request: NextRequest) {
     };
     
     return NextResponse.json(status, { status: 200 });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error checking service status:', error);
     return NextResponse.json(
       {

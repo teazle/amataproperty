@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @next/next/no-img-element -- Scraper thumbnails are dynamic external article assets. */
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/card';
@@ -1160,4 +1162,3 @@ export default function ArticleScraperClient({
     </Tabs>
   );
 }
-

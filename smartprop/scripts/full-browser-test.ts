@@ -60,7 +60,7 @@ async function scrapeOneArticle() {
   const sessionId = await createScrapeSession();
   console.log(`   Session ID: ${sessionId}\n`);
   
-  let scrapedArticle: any = null;
+  let scrapedArticle: unknown = null;
   
   await scrapeEdgePropMCP(
     1, // 1 page
@@ -126,7 +126,7 @@ async function getArticleContent(articleId: string) {
   return data;
 }
 
-async function verifyWithBrowser(article: any) {
+async function verifyWithBrowser(article: unknown) {
   console.log('🔍 Step 3: Verifying with browser (this will open a browser window)...\n');
   
   const edgePropUrl = `https://www.edgeprop.sg${article.path}`;

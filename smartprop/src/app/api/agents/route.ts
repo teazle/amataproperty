@@ -28,7 +28,7 @@ export async function GET() {
     }
 
     return NextResponse.json({ agents: data || [] });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

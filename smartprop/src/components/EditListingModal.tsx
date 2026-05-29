@@ -148,7 +148,7 @@ export default function EditListingModal({ listing, isOpen, onClose, onSave }: E
 
     setIsLoading(true);
     try {
-      const updateData: any = {
+      const updateData: Record<string, string | number> = {
         // Only include fields that have values
         ...(formData.title && { title: formData.title }),
         ...(formData.price && { price: parseInt(formData.price) }),
@@ -190,7 +190,7 @@ export default function EditListingModal({ listing, isOpen, onClose, onSave }: E
       toast.success('Listing updated successfully');
       onSave(result.listing);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error updating listing:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to update listing');
     } finally {

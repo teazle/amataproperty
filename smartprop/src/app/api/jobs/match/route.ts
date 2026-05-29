@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { withAdvisoryLock, advisoryUnlock } from '@/jobs/lock';
+import { advisoryUnlock,withAdvisoryLock } from '@/jobs/lock';
 import { runMatchingJob } from '@/jobs/match';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/jobs/match
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
       lockKey: 10101
     }, { status: 200 });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in matcher job endpoint:', error);
     return NextResponse.json(
       { 
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
  * 
  * Releases advisory lock key 10101 to allow new jobs to run
  */
-export async function DELETE(request: NextRequest) {
+export async function DELETE(_request: NextRequest) {
   try {
     console.log('Received request to stop matching job');
 
@@ -97,7 +97,7 @@ export async function DELETE(request: NextRequest) {
       }, { status: 200 });
     }
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error stopping matcher job:', error);
     return NextResponse.json(
       { 

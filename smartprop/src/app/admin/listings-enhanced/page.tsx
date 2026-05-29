@@ -5,21 +5,18 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
-import { toast } from 'sonner';
-import { Search, Download, RefreshCw, Eye, MessageSquare, Calendar, DollarSign, MapPin, Home, Phone, Mail, Copy, Edit } from 'lucide-react';
-import { useListingsSelectors, useGlobalStore } from '@/lib/stores/global-store';
-import { useNotificationsSelectors } from '@/lib/stores/global-store';
-import { useRealtimeListings } from '@/hooks/useRealtimeSync';
 import EditListingModal from '@/components/EditListingModal';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
+import { useRealtimeListings } from '@/hooks/useRealtimeSync';
+import { useGlobalStore,useListingsSelectors,useNotificationsSelectors } from '@/lib/stores/global-store';
+import { Copy,Download,Edit,Home,Mail,MapPin,Phone,RefreshCw,Search } from 'lucide-react';
+import React,{ useEffect,useState } from 'react';
+import { toast } from 'sonner';
 
 // Listing interface (same as original page)
 interface Listing {
@@ -98,7 +95,7 @@ const priceBands = [
 ];
 
 export default function EnhancedListingsPage() {
-  const [selectedListingId, setSelectedListingId] = useState<string | null>(null);
+  const [_selectedListingId, _setSelectedListingId] = useState<string | null>(null);
   const [editingListing, setEditingListing] = useState<Listing | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   
@@ -284,7 +281,7 @@ export default function EnhancedListingsPage() {
     setEditingListing(null);
   };
 
-  const getStatusColor = (status: string) => {
+  const _getStatusColor = (status: string) => {
     switch (status) {
       case 'received':
         return 'bg-green-100 text-green-800';
@@ -299,7 +296,7 @@ export default function EnhancedListingsPage() {
     }
   };
 
-  const getPortalColor = (portal: string) => {
+  const _getPortalColor = (portal: string) => {
     switch (portal) {
       case 'propertyguru':
         return 'bg-blue-100 text-blue-800';

@@ -9,6 +9,17 @@ import { Card } from '@/components/ui/card';
 
 const localizer = momentLocalizer(moment);
 
+const PROPERTY_COLORS = [
+  '#3b82f6', // blue
+  '#10b981', // green
+  '#f59e0b', // amber
+  '#8b5cf6', // purple
+  '#ec4899', // pink
+  '#14b8a6', // teal
+  '#f97316', // orange
+  '#06b6d4', // cyan
+];
+
 export interface ViewingSlot {
   id: string;
   listingId: string;
@@ -32,26 +43,14 @@ export function ViewingCalendar({ slots, onSelectSlot }: ViewingCalendarProps) {
   const [view, setView] = useState<View>('week');
   const [date, setDate] = useState(new Date());
 
-  // Color palette for different properties
-  const propertyColors = [
-    '#3b82f6', // blue
-    '#10b981', // green
-    '#f59e0b', // amber
-    '#8b5cf6', // purple
-    '#ec4899', // pink
-    '#14b8a6', // teal
-    '#f97316', // orange
-    '#06b6d4', // cyan
-  ];
-
   // Generate consistent color for each property
   const getPropertyColor = useCallback((listingId: string) => {
     let hash = 0;
     for (let i = 0; i < listingId.length; i++) {
       hash = listingId.charCodeAt(i) + ((hash << 5) - hash);
     }
-    return propertyColors[Math.abs(hash) % propertyColors.length];
-  }, [propertyColors]);
+    return PROPERTY_COLORS[Math.abs(hash) % PROPERTY_COLORS.length];
+  }, []);
 
   // Custom event styling
   const eventStyleGetter = useCallback((event: ViewingSlot) => {
@@ -131,4 +130,3 @@ export function ViewingCalendar({ slots, onSelectSlot }: ViewingCalendarProps) {
     </div>
   );
 }
-

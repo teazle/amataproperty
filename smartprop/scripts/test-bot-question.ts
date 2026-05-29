@@ -5,10 +5,10 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { analyzeConversationWithAdvancedContext } from '../src/lib/ai/conversation';
-import type { ConversationContext, ConversationMessage } from '../src/lib/ai/conversation';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import type { ConversationContext,ConversationMessage } from '../src/lib/ai/conversation';
+import { analyzeConversationWithAdvancedContext } from '../src/lib/ai/conversation';
 
 // Load environment variables
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -22,7 +22,7 @@ if (!supabaseUrl || !supabaseServiceRole) {
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceRole, {
+const _supabase = createClient(supabaseUrl, supabaseServiceRole, {
   auth: {
     autoRefreshToken: false,
     persistSession: false

@@ -115,7 +115,7 @@ async function testCombinedScraper() {
   }
 }
 
-function printComparison(unified: any, combined: any) {
+function printComparison(unified: unknown, combined: unknown) {
   console.log('\n' + '='.repeat(80));
   console.log('📊 SCRAPER COMPARISON RESULTS');
   console.log('='.repeat(80));

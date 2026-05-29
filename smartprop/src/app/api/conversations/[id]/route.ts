@@ -83,7 +83,7 @@ export async function GET(
 
     return NextResponse.json({ conversation });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in conversation API:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -119,7 +119,7 @@ export async function PUT(
 
     return NextResponse.json({ conversation: data });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in conversation PUT API:', error);
     return NextResponse.json(
       { error: 'Internal server error' },

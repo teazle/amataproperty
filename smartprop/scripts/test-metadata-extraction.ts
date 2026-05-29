@@ -5,9 +5,9 @@ import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scrap
 async function testMetadataExtraction() {
   console.log('🧪 Testing Metadata Extraction from EdgeProp Unified Scraper...\n');
 
-  let capturedArticles: any[] = [];
+  let capturedArticles: unknown[] = [];
 
-  const onProgress = (progress: any) => {
+  const onProgress = (progress: unknown) => {
     console.log(`[${progress.step}] ${progress.message}`);
     console.log(`   Status: ${progress.status}`);
     console.log(`   Page: ${progress.page}/${progress.totalPages}`);

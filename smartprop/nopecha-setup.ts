@@ -49,7 +49,7 @@ async function openNopeCHASetup() {
   console.log(`🔒 Using enhanced stealth mode${dynamicUserAgent ? ' with dynamic user agent' : ''}`);
   
   // Build plugins array (same as LinkedIn automation)
-  const pluginList: any[] = [
+  const pluginList: unknown[] = [
     ...plugins.recommended({
       humanize: {
         click: { delay: { min: 200, max: 600 } },
@@ -64,8 +64,8 @@ async function openNopeCHASetup() {
     try {
       pluginList.push(plugins.polyfill.userAgent({ userAgent: dynamicUserAgent }));
       console.log('   ✅ Dynamic user agent plugin enabled');
-    } catch (e: any) {
-      console.warn(`   ⚠️  Could not add user agent plugin: ${e.message}`);
+    } catch (e) {
+      console.warn(`   ⚠️  Could not add user agent plugin: ${(e instanceof Error ? e.message : String(e))}`);
     }
   }
   
@@ -79,8 +79,8 @@ async function openNopeCHASetup() {
       }
     }));
     console.log('   ✅ Fingerprint plugin enabled');
-  } catch (e: any) {
-    console.warn(`   ⚠️  Fingerprint plugin not available: ${e.message}`);
+  } catch (e) {
+    console.warn(`   ⚠️  Fingerprint plugin not available: ${(e instanceof Error ? e.message : String(e))}`);
   }
 
   // Use persistent context which handles extensions better
@@ -154,8 +154,8 @@ async function openNopeCHASetup() {
       console.log('   💡 Look for "NopeCHA: CAPTCHA Solver" in the list');
     }
     await extensionsPage.close();
-  } catch (e: any) {
-    console.warn(`   ⚠️  Could not verify extension: ${e.message}`);
+  } catch (e) {
+    console.warn(`   ⚠️  Could not verify extension: ${(e instanceof Error ? e.message : String(e))}`);
   }
   
   // Get API key from environment if available

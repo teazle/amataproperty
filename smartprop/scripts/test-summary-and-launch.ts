@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
 import { exec } from 'child_process';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 interface TestSummary {
   testId: string;

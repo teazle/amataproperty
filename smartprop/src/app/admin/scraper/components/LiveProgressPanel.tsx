@@ -234,7 +234,7 @@ export function LiveProgressPanel({ job, isCompleted = false, onJobStopped }: Li
         eventSourceRef.current = null;
       }
     };
-  }, [showLogs, job.platform]);
+  }, [showLogs, job.platform, isCompleted]);
 
   // Auto-scroll to bottom when logs change (only if user hasn't scrolled up)
   useEffect(() => {
@@ -425,4 +425,3 @@ export function LiveProgressPanel({ job, isCompleted = false, onJobStopped }: Li
     </Card>
   );
 }
-

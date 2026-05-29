@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
       hasMore: conversations.length === limit,
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in conversations API:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -205,7 +205,7 @@ export async function POST(request: NextRequest) {
         );
     }
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error creating conversation:', error);
     return NextResponse.json(
       { error: 'Internal server error' },

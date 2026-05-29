@@ -20,7 +20,7 @@ async function cleanupOrphanedAgents() {
 
   try {
     // Find agents without any listings
-    const { data: orphanedAgents, error: findError } = await supabase
+    const { data: _orphanedAgents, error: _findError } = await supabase
       .from('agents')
       .select('id, name, phone, source')
       .is('id', null) // This won't work, need a different approach

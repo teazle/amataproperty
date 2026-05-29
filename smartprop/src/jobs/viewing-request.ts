@@ -5,9 +5,9 @@
  * for newly scraped listings that haven't been contacted yet.
  */
 
-import { getSupabaseClient } from '@/workers/supa';
 import { sendViewingRequest } from '@/lib/wa/waha';
-import { tryAdvisoryLock, advisoryUnlock } from './lock';
+import { getSupabaseClient } from '@/workers/supa';
+import { advisoryUnlock,tryAdvisoryLock } from './lock';
 
 const JOB_NAME = 'viewing-request';
 const _LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes
@@ -107,7 +107,7 @@ export async function sendViewingRequests(limit: number = 10): Promise<{
 
         const { name: agentName, phone: agentPhone } = listing.agents;
         const propertyTitle = listing.title || 'Property';
-        const propertyUrl = listing.url;
+        const _propertyUrl = listing.url;
 
         console.log(`📤 [${JOB_NAME}] Sending request for: ${propertyTitle}`);
         console.log(`   👤 Agent: ${agentName} (${agentPhone})`);

@@ -17,9 +17,15 @@ import { scrapeEdgePropSimple } from '@/lib/scraper/edgeprop-simple-scraper';
 import { scrapeEdgePropCombined } from '@/lib/scraper/edgeprop-combined-scraper';
 import * as db from '@/lib/db/articles';
 import { upsertArticleContent } from '@/lib/db/article-content';
+import type { Article } from '@/lib/db/articles';
+import type { ArticleContent } from '@/lib/scraper/edgeprop-content-scraper';
 
 // Store active scraping session
 let isScraperRunning = false;
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -61,7 +67,7 @@ export async function GET(request: NextRequest) {
 
     sessionId = await Promise.race([sessionPromise, timeoutPromise]) as string;
     console.log('Scrape session created:', sessionId);
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Failed to create scrape session:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown database error';
     console.error('Error details:', errorMessage);
@@ -91,8 +97,8 @@ export async function GET(request: NextRequest) {
         if (!isClosed) {
           try {
             controller.enqueue(encoder.encode(data));
-          } catch (error: any) {
-            if (error.message?.includes('closed') || error.name === 'InvalidStateError') {
+          } catch (error) {
+            if (error instanceof Error && (error.message.includes('closed') || error.name === 'InvalidStateError')) {
               console.log('⚠️ Controller closed, stopping updates');
               isClosed = true;
             } else {
@@ -197,10 +203,10 @@ export async function GET(request: NextRequest) {
             }, sessionId);
 
         // No timeout needed since articles are saved immediately
-        let scrapedArticles: any[] = [];
+        let scrapedArticles: Article[] = [];
         try {
-          scrapedArticles = await scraperPromise as any[];
-        } catch (scraperError: any) {
+          scrapedArticles = await scraperPromise as Article[];
+        } catch (scraperError) {
           console.error('Scraper error:', scraperError);
           // Only send error if controller is still open
           if (!isClosed) {
@@ -213,7 +219,7 @@ export async function GET(request: NextRequest) {
                 articlesScraped: 0,
                 articlesFailed: 0,
                 status: 'error',
-                message: `Scraper failed: ${scraperError?.message || 'Unknown error'}`,
+                message: `Scraper failed: ${getErrorMessage(scraperError)}`,
                 sessionId
               })}\n\n`;
               safeEnqueue(errorData);
@@ -225,7 +231,7 @@ export async function GET(request: NextRequest) {
             }
           }
           if (sessionId) {
-            await db.completeScrapeSession(sessionId, 'error', scraperError?.message || 'Unknown error').catch(err =>
+            await db.completeScrapeSession(sessionId, 'error', getErrorMessage(scraperError)).catch(err =>
               console.error('Failed to complete session:', err)
             );
           }
@@ -265,10 +271,10 @@ export async function GET(request: NextRequest) {
                 if ((method === 'combined') && scrapedArticles[0] && ('text_content' in scrapedArticles[0])) {
                   console.log('📄 API: Saving full article content...');
                   let contentSaved = 0;
-                  for (const article of scrapedArticles) {
+                  for (const article of scrapedArticles as Array<Article & Partial<ArticleContent>>) {
                     if ('text_content' in article && article.text_content) {
                       try {
-                        await upsertArticleContent(article);
+                        await upsertArticleContent(article as ArticleContent);
                         contentSaved++;
                       } catch (contentError) {
                         console.error(`❌ API: Failed to save content for article ${article.nid}:`, contentError);
@@ -291,7 +297,7 @@ export async function GET(request: NextRequest) {
                 })}\n\n`;
                 safeEnqueue(completionData);
 
-              } catch (dbError: any) {
+              } catch (dbError) {
                 console.error('Database save error:', dbError);
                 if (!isClosed) {
                   try {
@@ -303,7 +309,7 @@ export async function GET(request: NextRequest) {
                       articlesScraped: 0,
                       articlesFailed: scrapedArticles.length,
                       status: 'error',
-                      message: `Scraping completed but failed to save to database: ${dbError?.message || 'Unknown error'}`,
+                      message: `Scraping completed but failed to save to database: ${getErrorMessage(dbError)}`,
                       sessionId
                     })}\n\n`;
                     safeEnqueue(errorData);
@@ -346,7 +352,7 @@ export async function GET(request: NextRequest) {
           }
         }
         isScraperRunning = false;
-      } catch (error: unknown) {
+      } catch (error) {
         console.error('Scraping error:', error);
 
         // Mark session as failed
@@ -371,7 +377,7 @@ export async function GET(request: NextRequest) {
             controller.close();
             isClosed = true;
             console.log(`🔒 API: Controller closed (error) for session ${sessionId}`);
-          } catch (enqueueError: unknown) {
+          } catch (enqueueError) {
             console.error('Failed to send error message (controller already closed):', enqueueError);
             isClosed = true;
             // Controller is already closed, nothing more to do

@@ -7,7 +7,6 @@ import { config } from 'dotenv';
 config();
 
 import * as path from 'path';
-import * as fs from 'fs';
 
 // Set test environment variables
 process.env.PG_MAX_PAGES = '1';

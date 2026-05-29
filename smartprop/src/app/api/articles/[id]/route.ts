@@ -24,7 +24,7 @@ export async function GET(
     const fullContent = await getArticleContent(id);
 
     return NextResponse.json({ article, fullContent });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching article:', error);
     return NextResponse.json(
       { error: 'Failed to fetch article' },

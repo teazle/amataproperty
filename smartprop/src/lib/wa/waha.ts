@@ -26,6 +26,12 @@ interface PresenceResponse {
 
 type PresenceState = 'composing' | 'recording' | 'paused' | 'available';
 
+interface WAHASessionData {
+  status?: string;
+  me?: { id?: string };
+  engine?: { state?: string };
+}
+
 const DEFAULT_WAHA_URL = 'http://localhost:3030';
 
 function getWAHAConfig() {
@@ -40,7 +46,7 @@ function normalizeChatId(to: string): string {
   return trimmed.includes('@') ? trimmed : `${trimmed.replace(/[^\d]/g, '')}@c.us`;
 }
 
-function isWAHASessionReady(sessionData: any): boolean {
+function isWAHASessionReady(sessionData: WAHASessionData | null): boolean {
   return sessionData?.status === 'WORKING' ||
     Boolean(sessionData?.me?.id && sessionData?.engine?.state === 'CONNECTED');
 }
@@ -142,7 +148,7 @@ export async function sendWhatsAppMessage(
       console.warn(`⚠️  WAHA session status check failed: ${statusResponse.status} - continuing anyway`);
       // Continue anyway - let the send attempt fail if session is not ready
     }
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.warn(`⚠️  WAHA session status check timed out - continuing anyway`);
     } else {
@@ -197,7 +203,7 @@ export async function sendWhatsAppMessage(
       messageId: data.id,
       messageText: text,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error sending WhatsApp message:', error);
     return {
       success: false,
@@ -239,7 +245,7 @@ export function generateViewingRequestMessage(
   agentName: string,
   propertyTitle: string
 ): string {
-  const buyerAgentName = process.env.BUYER_AGENT_NAME || 'Jeremy';
+  const _buyerAgentName = process.env.BUYER_AGENT_NAME || 'Jeremy';
   
   // Extract first name only for graceful greeting
   const firstName = agentName.split(' ')[0];
@@ -377,7 +383,7 @@ export async function sendPresence(
     return {
       success: true,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error sending presence:', error);
     return {
       success: false,
@@ -427,7 +433,7 @@ export async function sendMessageWithTyping(
     
     // Send the actual message
     return await sendWhatsAppMessage(to, text);
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error in sendMessageWithTyping:', error);
     // Fallback: send message immediately
     return await sendWhatsAppMessage(to, text);

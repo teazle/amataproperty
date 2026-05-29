@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest,NextResponse } from 'next/server';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://pfdsmpfgwbbeijdzevpu.supabase.co';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmZHNtcGZnd2JiZWlqZHpldnB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3MDM5MjgsImV4cCI6MjA3NTI3OTkyOH0.5Jtac-IeAqv_4dswX0BhFB571dP2bh5xG0zl-jrmFHY';
@@ -211,7 +211,7 @@ export async function PUT(
         if (existingAgent) {
           // Use existing agent and update it
           agentId = existingAgent.id;
-          const { data: updatedAgent, error: agentError } = await supabase
+          const { data: _updatedAgent, error: agentError } = await supabase
             .from('agents')
             .update(agentUpdates)
             .eq('id', agentId)
@@ -327,7 +327,7 @@ export async function PUT(
       message: 'No updates provided'
     });
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -404,7 +404,7 @@ export async function GET(
 
     return NextResponse.json({ listing: data });
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
@@ -466,7 +466,7 @@ export async function DELETE(
       message: `Listing "${listing.title}" deleted successfully`
     });
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Unexpected error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },

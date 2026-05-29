@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
+import { NextRequest,NextResponse } from 'next/server';
 import path from 'path';
 
 /**
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
 
     // Find the latest log file for the platform
     const logDir = '/tmp';
-    const logPattern = platform === 'edgeprop' ? 'ep-scraper-*.log' : 'pg-scraper-*.log';
+    const _logPattern = platform === 'edgeprop' ? 'ep-scraper-*.log' : 'pg-scraper-*.log';
     
     // Get all matching log files
     const logFiles = fs.readdirSync(logDir)

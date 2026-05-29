@@ -74,7 +74,7 @@ async function stopCloudBrowser(id: string | undefined) {
   await browserUseFetch(`/browsers/${id}`, 'PATCH', { action: 'stop' }).catch(() => {});
 }
 
-async function isAuthenticatedLinkedInPage(page: any): Promise<boolean> {
+async function isAuthenticatedLinkedInPage(page: unknown): Promise<boolean> {
   const url = page.url();
   const loginFormCount = await page
     .locator('input[name="session_key"], input[name="session_password"], .login-form, form[action*="login"]')
@@ -88,13 +88,13 @@ async function isAuthenticatedLinkedInPage(page: any): Promise<boolean> {
   return !loginUrl && loginFormCount === 0 && hasShell > 0;
 }
 
-async function verifyUrl(page: any, url: string): Promise<boolean> {
+async function verifyUrl(page: unknown, url: string): Promise<boolean> {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(2500);
   return isAuthenticatedLinkedInPage(page);
 }
 
-async function getPageSummary(page: any): Promise<{ url: string; title: string; text: string; hasLoginForm: boolean }> {
+async function getPageSummary(page: unknown): Promise<{ url: string; title: string; text: string; hasLoginForm: boolean }> {
   return page.evaluate(() => ({
     url: location.href,
     title: document.title,
@@ -110,7 +110,7 @@ async function getPageSummary(page: any): Promise<{ url: string; title: string; 
   }));
 }
 
-async function fillVisibleInput(page: any, selector: string, value: string): Promise<boolean> {
+async function fillVisibleInput(page: unknown, selector: string, value: string): Promise<boolean> {
   const locator = page.locator(selector).first();
   const count = await locator.count().catch(() => 0);
   if (count === 0) return false;
@@ -122,7 +122,7 @@ async function fillVisibleInput(page: any, selector: string, value: string): Pro
   return true;
 }
 
-async function tryCredentialLogin(page: any): Promise<'already_authenticated' | 'submitted' | 'missing_credentials' | 'no_form'> {
+async function tryCredentialLogin(page: unknown): Promise<'already_authenticated' | 'submitted' | 'missing_credentials' | 'no_form'> {
   if (await isAuthenticatedLinkedInPage(page)) {
     return 'already_authenticated';
   }

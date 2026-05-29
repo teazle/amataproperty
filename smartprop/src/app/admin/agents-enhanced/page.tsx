@@ -5,31 +5,30 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardHeader,CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { 
-  Download, 
-  RefreshCw, 
-  Users, 
-  MessageSquare, 
-  TrendingUp,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Target,
-  BarChart3,
-  Phone,
-  Mail
-} from 'lucide-react';
-import { useAgentsSelectors, useGlobalStore } from '@/lib/stores/global-store';
-import { useNotificationsSelectors } from '@/lib/stores/global-store';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
 import { useRealtimeAgents } from '@/hooks/useRealtimeSync';
+import { useAgentsSelectors,useGlobalStore,useNotificationsSelectors } from '@/lib/stores/global-store';
+import {
+BarChart3,
+CheckCircle,
+Clock,
+Download,
+Mail,
+MessageSquare,
+Phone,
+RefreshCw,
+Target,
+TrendingUp,
+Users,
+XCircle
+} from 'lucide-react';
+import { useEffect,useState } from 'react';
 
 interface AgentWithStats {
   id: string;
@@ -56,7 +55,7 @@ interface AgentWithStats {
 
 export default function EnhancedAgentsPage() {
   const [viewMode, setViewMode] = useState<'list' | 'analytics'>('list');
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [_selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   
   // Zustand selectors
   const agentsFromStore = useAgentsSelectors.useFilteredAgents();
@@ -75,7 +74,7 @@ export default function EnhancedAgentsPage() {
   // Fetch agents on mount
   useEffect(() => {
     fetchAgents();
-  }, []); // Only run once on mount
+  }, [fetchAgents]);
 
   // Subscribe to real-time updates
   useRealtimeAgents();

@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
-import { parseViewingTimeslotsWithAI } from '@/lib/ai/groq';
+import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
@@ -161,7 +160,7 @@ export async function GET() {
     }
 
     return NextResponse.json({ events });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching viewing calendar:', error);
     return NextResponse.json(
       { error: 'Failed to fetch viewing calendar' },

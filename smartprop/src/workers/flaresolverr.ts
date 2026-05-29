@@ -9,6 +9,43 @@
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://localhost:8191/v1';
 let flaresolverrSession: string | null = null;
 
+interface PlaywrightCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'None' | 'Lax' | 'Strict';
+}
+
+interface CookieContext {
+  cookies(): Promise<PlaywrightCookie[]>;
+  clearCookies(): Promise<void>;
+  addCookies(cookies: PlaywrightCookie[]): Promise<void>;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorName(error: unknown): string {
+  return error instanceof Error ? error.name : '';
+}
+
+function getErrorCode(error: unknown): unknown {
+  return error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+}
+
+function getObjectMessage(value: unknown): string {
+  if (value && typeof value === 'object' && 'message' in value) {
+    const message = (value as { message?: unknown }).message;
+    return typeof message === 'string' ? message : '';
+  }
+  return '';
+}
+
 /**
  * Reset the Flaresolverr session (useful for retries)
  */
@@ -128,18 +165,18 @@ export async function createFlaresolverrSession(): Promise<string | null> {
         return null; // Will create session on-demand
       }
       return null;
-    } catch (fetchError: any) {
+    } catch (fetchError) {
       clearTimeout(timeoutId);
 
       // Handle AbortError (timeout)
-      if (fetchError?.name === 'AbortError' || fetchError?.message?.includes('aborted')) {
+      if (getErrorName(fetchError) === 'AbortError' || getErrorMessage(fetchError).includes('aborted')) {
         console.log(`   ⚠️  Flaresolverr session creation aborted (timeout). Continuing without session...`);
         return null;
       }
 
       // Handle network errors
-      if (fetchError?.code === 'ECONNREFUSED' || fetchError?.code === 'ETIMEDOUT') {
-        console.log(`   ⚠️  Flaresolverr connection error: ${fetchError.message}. Is Flaresolverr running?`);
+      if (getErrorCode(fetchError) === 'ECONNREFUSED' || getErrorCode(fetchError) === 'ETIMEDOUT') {
+        console.log(`   ⚠️  Flaresolverr connection error: ${getErrorMessage(fetchError)}. Is Flaresolverr running?`);
         return null;
       }
 
@@ -181,7 +218,7 @@ export async function solveCloudflareWithFlaresolverr(
       console.log(`   🔗 Using provided Flaresolverr session: ${session}`);
     }
 
-    const requestBody: any = {
+    const requestBody: Record<string, unknown> = {
       cmd: 'request.get',
       url: url,
       // Allow tougher challenges: give Flaresolverr up to maxTimeout
@@ -215,7 +252,7 @@ export async function solveCloudflareWithFlaresolverr(
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
-        let errorJson: any = null;
+        let errorJson: unknown = null;
         try {
           errorJson = JSON.parse(errorText);
         } catch {
@@ -223,8 +260,9 @@ export async function solveCloudflareWithFlaresolverr(
         }
 
         // If timeout error, log but don't fail completely
-        if (errorJson?.message?.includes('Timeout') ||
-            errorJson?.message?.includes('timeout') ||
+        const errorMessage = getObjectMessage(errorJson);
+        if (errorMessage.includes('Timeout') ||
+            errorMessage.includes('timeout') ||
             errorText.includes('timeout') ||
             response.status === 408) {
           console.log(`   ⚠️  Flaresolverr timed out (Cloudflare challenge too aggressive). Continuing without Flaresolverr...`);
@@ -250,22 +288,22 @@ export async function solveCloudflareWithFlaresolverr(
         console.log(`   ⚠️  Flaresolverr response error: ${data.message || 'Unknown error'}`);
         return null;
       }
-    } catch (fetchError: any) {
+    } catch (fetchError) {
       clearTimeout(timeoutId);
 
       // Handle AbortError (timeout)
-      if (fetchError?.name === 'AbortError' || fetchError?.message?.includes('aborted')) {
+      if (getErrorName(fetchError) === 'AbortError' || getErrorMessage(fetchError).includes('aborted')) {
         console.log(`   ⚠️  Flaresolverr request aborted (timeout). Continuing without Flaresolverr...`);
         return null;
       }
 
       // Handle network errors
-      if (fetchError?.code === 'ECONNREFUSED' || fetchError?.code === 'ETIMEDOUT') {
-        console.log(`   ⚠️  Flaresolverr connection error: ${fetchError.message}. Continuing without Flaresolverr...`);
+      if (getErrorCode(fetchError) === 'ECONNREFUSED' || getErrorCode(fetchError) === 'ETIMEDOUT') {
+        console.log(`   ⚠️  Flaresolverr connection error: ${getErrorMessage(fetchError)}. Continuing without Flaresolverr...`);
         return null;
       }
 
-      console.log(`   ⚠️  Flaresolverr fetch error: ${fetchError?.message || fetchError}`);
+      console.log(`   ⚠️  Flaresolverr fetch error: ${getErrorMessage(fetchError)}`);
       return null;
     }
   } catch (error) {
@@ -279,7 +317,7 @@ export async function solveCloudflareWithFlaresolverr(
  * Preserves login cookies while replacing Cloudflare cookies
  */
 export async function applyFlaresolverrToContext(
-  context: any,
+  context: CookieContext,
   flaresolverrResult: FlaresolverrResult,
   defaultDomain?: string // Optional: default domain for cookies (e.g., '.propertyguru.com.sg' or '.edgeprop.sg')
 ): Promise<void> {
@@ -306,7 +344,7 @@ export async function applyFlaresolverrToContext(
   ];
 
   // Filter out Cloudflare cookies but keep login cookies
-  const preservedCookies = existingCookies.filter((cookie: any) => {
+  const preservedCookies = existingCookies.filter((cookie) => {
     const cookieName = cookie.name.toLowerCase();
     // Remove Cloudflare cookies
     if (cloudflareCookieNames.some(cfName => cookieName.includes(cfName.toLowerCase()))) {
@@ -333,7 +371,7 @@ export async function applyFlaresolverrToContext(
   // Apply cookies from Flaresolverr (these will overwrite Cloudflare cookies)
   // IMPORTANT: Preserve original domain from Flaresolverr - don't override unless missing
   // Some cookies might be domain-specific (www.propertyguru.com.sg vs .propertyguru.com.sg)
-  const flaresolverrCookies = flaresolverrResult.cookies.map((cookie: any) => {
+  const flaresolverrCookies: PlaywrightCookie[] = flaresolverrResult.cookies.map((cookie) => {
     // Use original domain if present, otherwise use default
     let domain = cookie.domain;
     if (!domain) {
@@ -362,16 +400,16 @@ export async function applyFlaresolverrToContext(
   try {
     await context.addCookies(flaresolverrCookies);
     // Silent success - since we're calling Flaresolverr on every listing, verbose logging is too noisy
-  } catch (cookieError: any) {
-    console.log(`   ⚠️  Error applying some cookies: ${cookieError.message}`);
+  } catch (cookieError) {
+    console.log(`   ⚠️  Error applying some cookies: ${getErrorMessage(cookieError)}`);
     // Try applying cookies one by one to see which ones fail
     let successCount = 0;
     for (const cookie of flaresolverrCookies) {
       try {
         await context.addCookies([cookie]);
         successCount++;
-      } catch (err: any) {
-        console.log(`      ❌ Failed to apply ${cookie.name}: ${err.message}`);
+      } catch (err) {
+        console.log(`      ❌ Failed to apply ${cookie.name}: ${getErrorMessage(err)}`);
       }
     }
     console.log(`   ✅ Applied ${successCount}/${flaresolverrCookies.length} cookies`);
@@ -383,7 +421,7 @@ export async function applyFlaresolverrToContext(
 
   // Only verify and log if Cloudflare cookies are missing (this is important to know)
   const verifyCookies = await context.cookies();
-  const cfCookies = verifyCookies.filter((c: any) =>
+  const cfCookies = verifyCookies.filter((c) =>
     ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
   );
 
@@ -397,13 +435,13 @@ export async function applyFlaresolverrToContext(
  * Check if Cloudflare cookies are expired or about to expire
  * Returns true if cookies need refresh (expired or expiring within 5 minutes)
  */
-export async function shouldRefreshCloudflareCookies(context: any): Promise<boolean> {
+export async function shouldRefreshCloudflareCookies(context: CookieContext): Promise<boolean> {
   try {
     const cookies = await context.cookies();
     const cloudflareCookieNames = ['__cf_bm', 'cf_clearance', '__cfduid'];
 
     // Check if we have any Cloudflare cookies
-    const cfCookies = cookies.filter((cookie: any) =>
+    const cfCookies = cookies.filter((cookie) =>
       cloudflareCookieNames.some(cfName => cookie.name.toLowerCase().includes(cfName.toLowerCase()))
     );
 

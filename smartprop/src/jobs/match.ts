@@ -231,7 +231,7 @@ export async function processOutreachMessages(
 
   if (options.dryRun) {
     console.log(`[dry-run] Would process ${queuedOutreach.length} queued outreach messages`);
-    const previews = queuedOutreach.map((outreach: any) => ({
+    const previews = queuedOutreach.map((outreach) => ({
       outreachId: outreach.id,
       agentName: outreach.agents.name,
       phone: outreach.agents.phone,

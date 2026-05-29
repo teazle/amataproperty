@@ -31,9 +31,9 @@ async function testDatabaseSave() {
   const sessionId = sessionData.id;
   console.log(`✅ Created session: ${sessionId}\n`);
 
-  let capturedArticles: any[] = [];
+  let _capturedArticles: unknown[] = [];
 
-  const onProgress = (progress: any) => {
+  const onProgress = (progress: unknown) => {
     console.log(`[${progress.step}] ${progress.message}`);
     console.log(`   Status: ${progress.status}`);
     console.log(`   Page: ${progress.page}/${progress.totalPages}`);
@@ -52,7 +52,7 @@ async function testDatabaseSave() {
     );
 
     if (result && result.length > 0) {
-      capturedArticles = result;
+      _capturedArticles = result;
       
       console.log('✅ Scraper completed successfully!\n');
       

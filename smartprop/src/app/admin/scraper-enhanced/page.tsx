@@ -5,31 +5,28 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { toast } from 'sonner';
-import { 
-  Play, 
-  Pause, 
-  Square, 
-  RefreshCw, 
-  Activity, 
-  TrendingUp, 
-  AlertCircle, 
-  CheckCircle,
-  Clock,
-  Database,
-  Zap
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
+import { useGlobalStore,useNotificationsSelectors,useScraperSelectors } from '@/lib/stores/global-store';
+import {
+Activity,
+AlertCircle,
+CheckCircle,
+Clock,
+Database,
+Play,
+RefreshCw,
+Square,
+TrendingUp,
+Zap
 } from 'lucide-react';
-import { useScraperSelectors, useGlobalStore } from '@/lib/stores/global-store';
-import { useNotificationsSelectors } from '@/lib/stores/global-store';
+import { useEffect,useState } from 'react';
 
 export default function EnhancedScraperPage() {
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [_selectedJobId, setSelectedJobId] = useState<string | null>(null);
   
   // Zustand selectors
   const jobs = useScraperSelectors.useJobs();

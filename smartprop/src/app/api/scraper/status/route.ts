@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { buildScraperStatusPayload } from '@/lib/scraper/runtime-state';
+import { buildScraperStatusPayload,type DbClient } from '@/lib/scraper/runtime-state';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
@@ -36,12 +36,12 @@ export async function GET(request: NextRequest) {
             lastCleanupTime = now;
           }
 
-          const statusData = await buildScraperStatusPayload(supabase, {
+          const statusData = await buildScraperStatusPayload(supabase as unknown as DbClient, {
             reconcile: shouldRunCleanup,
           });
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(statusData)}\n\n`));
 
-        } catch (error: any) {
+        } catch (error) {
           console.error('Error sending status:', error);
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: 'error', error: String(error) })}\n\n`));
         }

@@ -9,7 +9,7 @@ async function testImprovedScraper() {
   console.log('  - Clean Category Extraction');
   console.log('  - Better Author Extraction\n');
 
-  const onProgress = (progress: any) => {
+  const onProgress = (_progress: unknown) => {
     // Minimal progress output for cleaner results
   };
 

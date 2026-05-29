@@ -9,7 +9,7 @@ config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
 import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
-import { CHROME_UA, humanPause } from './stealth';
+import { CHROME_UA as _CHROME_UA, humanPause } from './stealth';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, resetFlaresolverrSession } from './flaresolverr';
 import { waitForCloudflareAutoResolve } from './cloudflare-bypass-alternative';
 import { checkFlaresolverr, getBrowserRuntimeStatus, inspectAuthState, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health';
@@ -386,7 +386,6 @@ async function authenticateEdgeProp() {
 
       // Variables to track dialog state (declared outside try-catch for access later)
       let dialogVisible = false;
-      let buttonClicked = false;
 
       try {
         // Look for the popup text - it appears after login button is clicked
@@ -446,9 +445,6 @@ async function authenticateEdgeProp() {
           // Wait longer for the dialog to fully render and be interactive
           await humanPause(3000, 4000);
 
-          // Click the LOGIN button using the exact selector
-          buttonClicked = false;
-
           try {
             console.log('🔍 Looking for LOGIN button in dialog...');
             // The dialog button is uppercase "LOGIN", so we need to match it exactly
@@ -460,13 +456,11 @@ async function authenticateEdgeProp() {
               await dialogLoginButton.waitFor({ state: 'visible', timeout: 5000 });
               await dialogLoginButton.click();
               console.log('✅ Clicked LOGIN button in multi-session dialog (via dialog context)!');
-              buttonClicked = true;
             } catch (e) {
               // Fallback: Use getByText with uppercase LOGIN
               console.log('⚠️  Dialog context method failed, trying direct LOGIN text...');
               await page.getByText('LOGIN', { exact: true }).click();
               console.log('✅ Clicked LOGIN button in multi-session dialog (via direct text)!');
-              buttonClicked = true;
             }
 
             // Wait for login to complete after clicking - use smart detection instead of long waits
@@ -564,7 +558,7 @@ async function authenticateEdgeProp() {
           console.log('✅ Login appears successful (session cookie found)');
           loginSuccess = true;
         } else {
-          // Check if page has any user-specific content
+          // Check if page has unknown user-specific content
           const pageText = await page.textContent('body').catch(() => '') || '';
           if (pageText.includes('Bookmarks') || pageText.includes('Logout') || pageText.includes('Profile')) {
             console.log('✅ Login appears successful (user-specific content found on page)');

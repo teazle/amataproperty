@@ -4,16 +4,16 @@
  * Compares before/after performance metrics
  */
 
-import { logger, measurePerformance } from './logger';
-import { AI_CONFIG } from './config';
-import { 
-  coBrokingAnalysisBreaker, 
-  timeslotDetectionBreaker, 
-  responseGenerationBreaker 
+import {
+coBrokingAnalysisBreaker,
+responseGenerationBreaker,
+timeslotDetectionBreaker
 } from './circuit-breaker';
+import { AI_CONFIG } from './config';
+import { logger,measurePerformance } from './logger';
 
 // Mock AI operations with configurable delays
-async function mockAIOperation(operation: string, baseDelay: number = 100): Promise<any> {
+async function mockAIOperation(operation: string, baseDelay: number = 100): Promise<Record<string, unknown>> {
   const delay = baseDelay + Math.random() * 50; // Add some variance
   await new Promise(resolve => setTimeout(resolve, delay));
   
@@ -26,7 +26,7 @@ async function mockAIOperation(operation: string, baseDelay: number = 100): Prom
 }
 
 // Simulate old sequential processing (before optimization)
-async function sequentialProcessing(iterations: number = 5): Promise<{ totalTime: number; results: any[] }> {
+async function sequentialProcessing(iterations: number = 5): Promise<{ totalTime: number; results: unknown[] }> {
   const startTime = Date.now();
   const results = [];
   
@@ -49,7 +49,7 @@ async function sequentialProcessing(iterations: number = 5): Promise<{ totalTime
 }
 
 // Simulate new parallel processing with circuit breakers (after optimization)
-async function parallelProcessingWithCircuitBreakers(iterations: number = 5): Promise<{ totalTime: number; results: any[] }> {
+async function parallelProcessingWithCircuitBreakers(iterations: number = 5): Promise<{ totalTime: number; results: unknown[] }> {
   const startTime = Date.now();
   const results = [];
   
@@ -74,11 +74,11 @@ async function parallelProcessingWithCircuitBreakers(iterations: number = 5): Pr
 }
 
 // Test memory usage and performance under different loads
-async function loadTestComparison(): Promise<Record<string, any>> {
+async function loadTestComparison(): Promise<Record<string, unknown>> {
   console.log('\n🚀 Running Load Test Comparison...');
   
   const testSizes = [1, 5, 10, 20];
-  const results: Record<string, any> = {};
+  const results: Record<string, unknown> = {};
   
   for (const size of testSizes) {
     console.log(`\n📊 Testing with ${size} iterations...`);
@@ -205,9 +205,9 @@ async function configurationPerformanceTest(): Promise<void> {
   // Test direct constant access
   const directAccessResult = await measurePerformance('direct-config-access', async () => {
     for (let i = 0; i < iterations; i++) {
-      const model = AI_CONFIG.MODEL;
-      const temp = AI_CONFIG.TEMPERATURE;
-      const maxTokens = AI_CONFIG.MAX_TOKENS.CO_BROKING_ANALYSIS;
+      const _model = AI_CONFIG.MODEL;
+      const _temp = AI_CONFIG.TEMPERATURE;
+      const _maxTokens = AI_CONFIG.MAX_TOKENS.CO_BROKING_ANALYSIS;
     }
   });
   
@@ -269,7 +269,7 @@ async function runPerformanceBenchmarks(): Promise<void> {
       }
     });
     
-  } catch (error: any) {
+  } catch (error) {
     console.log('\n❌ Benchmark execution failed');
     logger.error('Performance benchmark failed', error as Error);
     throw error;

@@ -98,7 +98,7 @@ export async function upsertAgentAndListing(data: UpsertData): Promise<{
       agent_id: agent.id,
       listing_id: listing.id,
     }
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error in upsertAgentAndListing:', error)
     throw error
   }
@@ -136,7 +136,7 @@ export async function upsertAgent(agentData: AgentData): Promise<string> {
     }
 
     return agent.id
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error in upsertAgent:', error)
     throw error
   }
@@ -174,7 +174,7 @@ export async function upsertListing(listingData: ListingData): Promise<string> {
     }
 
     return listing.id
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error in upsertListing:', error)
     throw error
   }

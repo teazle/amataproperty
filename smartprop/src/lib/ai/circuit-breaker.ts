@@ -51,7 +51,7 @@ class CircuitBreaker {
       logger.circuitBreaker.operationSuccess(this.config.name, 'AI operation', duration);
       
       return result;
-    } catch (error: unknown) {
+    } catch (error) {
       this.onFailure();
       throw error;
     }

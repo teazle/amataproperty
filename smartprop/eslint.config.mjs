@@ -19,8 +19,27 @@ const eslintConfig = [
       "build/**",
       "browser-data-nopecha/**",
       "extensions/**",
+      "public/luxe-realty/**",
       "next-env.d.ts",
     ],
+  },
+  {
+    files: ["**/*.js", "**/*.cjs", "scripts/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          caughtErrors: "none",
+          varsIgnorePattern: "^_",
+        },
+      ],
+    },
   },
 ];
 

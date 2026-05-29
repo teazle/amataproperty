@@ -21,32 +21,55 @@ function verifyWebhookSecret(request: NextRequest): boolean {
   return secureEquals(provided, expected);
 }
 
-function extractMessage(body: any) {
-  const payload = body?.payload || body;
+type WahaWebhookBody = Record<string, unknown> & {
+  payload?: Record<string, unknown>;
+  event?: string;
+  session?: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function optionalStringOrNumber(value: unknown): string | number | null {
+  if (typeof value === 'string' || typeof value === 'number') return value;
+  return null;
+}
+
+function extractMessage(body: unknown) {
+  const bodyRecord = asRecord(body) as WahaWebhookBody;
+  const payload = asRecord(bodyRecord.payload || bodyRecord);
   if (!payload?.body || !payload?.from) {
     return null;
   }
 
+  const id = asRecord(payload.id);
   return {
     from: payload.from as string,
-    to: payload.to as string | undefined,
+    to: optionalString(payload.to),
     body: payload.body as string,
-    id: payload.id?._serialized || payload.id || payload.messageId || null,
-    timestamp: payload.timestamp || null,
+    id: optionalString(id._serialized) || optionalString(payload.id) || optionalString(payload.messageId) || null,
+    timestamp: optionalStringOrNumber(payload.timestamp),
     fromMe: Boolean(payload.fromMe),
     rawPayload: payload,
   };
 }
 
-function summarize(body: any) {
-  const payload = body?.payload || body;
+function summarize(body: unknown) {
+  const bodyRecord = asRecord(body) as WahaWebhookBody;
+  const payload = asRecord(bodyRecord.payload || bodyRecord);
+  const id = asRecord(payload.id);
   return {
-    event: body?.event || 'direct',
-    session: body?.session,
+    event: bodyRecord.event || 'direct',
+    session: bodyRecord.session,
     from: payload?.from,
     to: payload?.to,
     fromMe: payload?.fromMe,
-    messageId: payload?.id?._serialized || payload?.id || payload?.messageId,
+    messageId: id._serialized || payload?.id || payload?.messageId,
     messageLength: typeof payload?.body === 'string' ? payload.body.length : 0,
   };
 }

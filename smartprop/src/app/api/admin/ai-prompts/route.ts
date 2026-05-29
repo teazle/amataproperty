@@ -19,7 +19,7 @@ export async function GET() {
     }
 
     return NextResponse.json({ prompts });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching prompts:', error);
     return NextResponse.json(
       { error: 'Failed to fetch AI prompts' },
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ prompt: newPrompt });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error creating prompt:', error);
     return NextResponse.json(
       { error: 'Failed to create AI prompt' },

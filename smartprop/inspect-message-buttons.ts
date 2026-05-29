@@ -158,8 +158,8 @@ async function inspectMessageButtons() {
     console.log('\n⏸️  Browser will stay open for 30 seconds for manual inspection...');
     await page.waitForTimeout(30000);
 
-  } catch (error: any) {
-    console.error('❌ Error:', error.message);
+  } catch (error) {
+    console.error('❌ Error:', (error instanceof Error ? error.message : String(error)));
   } finally {
     await browser.close();
   }

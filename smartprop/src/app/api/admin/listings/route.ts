@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * GET /api/admin/listings
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     const to = from + limit - 1;
     query = query.range(from, to);
 
-    const { data: listings, error, count } = await query;
+    const { data: listings, error, count: _count } = await query;
 
     if (error) {
       throw error;
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil((totalCount || 0) / limit)
       }
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching listings:', error);
     return NextResponse.json(
       { error: 'Failed to fetch listings' },

@@ -8,9 +8,10 @@ export async function registerNodeInstrumentation() {
         const { initializeScheduler } = await import('@/lib/scheduler/scraper-scheduler');
         await initializeScheduler();
         console.log('[Instrumentation] Scraper scheduler initialized successfully');
-      } catch (error: any) {
+      } catch (error) {
         // Don't retry if it's a rate limit - that will just make it worse.
-        if (error?.message?.includes('rate limit') || error?.message?.includes('quota') || error?.message?.includes('exceeded')) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('rate limit') || errorMessage.includes('quota') || errorMessage.includes('exceeded')) {
           console.warn('[Instrumentation] Rate limit hit during initialization. Scheduler will start with empty schedules.');
           console.warn('[Instrumentation] Schedules can be loaded manually via /api/scheduler/reload once rate limits reset.');
         } else {
@@ -27,7 +28,7 @@ export async function registerNodeInstrumentation() {
         const { refreshLinkedInScheduler } = await import('@/lib/linkedin/scheduler');
         await refreshLinkedInScheduler(0);
         console.log('[Instrumentation] LinkedIn scheduler initialization initiated (has retry logic)');
-      } catch (error: any) {
+      } catch (error) {
         // refreshLinkedInScheduler handles its own retries, so this should rarely fail.
         console.error('[Instrumentation] Failed to initiate LinkedIn scheduler:', error);
       }

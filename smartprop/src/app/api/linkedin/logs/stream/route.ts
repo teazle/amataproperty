@@ -21,8 +21,8 @@ export async function GET(request: NextRequest) {
         if (!isClosed) {
           try {
             controller.enqueue(encoder.encode(data));
-          } catch (error: any) {
-            if (error.message?.includes('closed') || error.name === 'InvalidStateError') {
+          } catch (error) {
+            if (error instanceof Error && (error.message.includes('closed') || error.name === 'InvalidStateError')) {
               isClosed = true;
             }
           }
@@ -61,8 +61,8 @@ export async function GET(request: NextRequest) {
         const stats = fs.statSync(LOG_FILE_PATH);
         lastPosition = stats.size;
         lastSize = stats.size;
-      } catch (error: any) {
-        sendData(`data: ${JSON.stringify({ type: 'error', message: `Failed to read log file: ${error.message}` })}\n\n`);
+      } catch (error) {
+        sendData(`data: ${JSON.stringify({ type: 'error', message: `Failed to read log file: ${(error instanceof Error ? error.message : String(error))}` })}\n\n`);
       }
 
       // Watch for file changes and stream new content
@@ -104,9 +104,9 @@ export async function GET(request: NextRequest) {
             lastPosition = stats.size;
             lastSize = stats.size;
           }
-        } catch (error: any) {
+        } catch (error) {
           if (!isClosed) {
-            sendData(`data: ${JSON.stringify({ type: 'error', message: `Error reading log file: ${error.message}` })}\n\n`);
+            sendData(`data: ${JSON.stringify({ type: 'error', message: `Error reading log file: ${(error instanceof Error ? error.message : String(error))}` })}\n\n`);
           }
         }
       }, 500); // Check every 500ms for near real-time updates
@@ -143,4 +143,3 @@ export async function GET(request: NextRequest) {
     },
   });
 }
-

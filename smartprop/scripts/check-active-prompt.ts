@@ -22,7 +22,7 @@ async function checkActivePrompt() {
     
     if (allPrompts.length > 0) {
       console.log('\nPrompt details:');
-      allPrompts.forEach((prompt: any, index: number) => {
+      allPrompts.forEach((prompt: unknown, index: number) => {
         console.log(`${index + 1}. ID: ${prompt.id}, Active: ${prompt.is_active}, Created: ${prompt.created_at}`);
         console.log(`   Name: ${prompt.name || 'Unnamed'}`);
         console.log(`   Length: ${prompt.prompt_content?.length || 0} characters\n`);

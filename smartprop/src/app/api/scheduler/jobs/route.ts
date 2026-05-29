@@ -2,10 +2,10 @@
  * API Routes for Scheduled Jobs Management
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { reloadScheduler } from '@/lib/scheduler/scraper-scheduler';
 import { createClient } from '@supabase/supabase-js';
+import { NextRequest,NextResponse } from 'next/server';
 import cron from 'node-cron';
-import { getScheduler, reloadScheduler } from '@/lib/scheduler/scraper-scheduler';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE!;
@@ -15,7 +15,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
  * GET /api/scheduler/jobs
  * List all scheduled jobs
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const { data: jobs, error } = await supabase
       .from('scheduled_jobs')

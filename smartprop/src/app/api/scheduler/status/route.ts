@@ -2,14 +2,14 @@
  * API Route to Get Scheduler Status
  */
 
-import { NextRequest, NextResponse } from 'next/server';
 import { getScheduler } from '@/lib/scheduler/scraper-scheduler';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * GET /api/scheduler/status
  * Get scheduler status and active jobs
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const scheduler = getScheduler();
     const status = scheduler.getStatus();

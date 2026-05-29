@@ -5,9 +5,9 @@
  * Scrapes one article, saves it to database, and creates comparison view
  */
 
-import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scraper';
-import * as db from '../src/lib/db/articles';
 import { upsertArticleContent } from '../src/lib/db/article-content';
+import * as db from '../src/lib/db/articles';
+import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scraper';
 
 interface ProgressInfo {
     message: string;
@@ -16,7 +16,7 @@ interface ProgressInfo {
 }
 
 interface TestResult {
-    article: any;
+    article: unknown;
     originalUrl: string;
     scrapedUrl: string;
 }
@@ -51,7 +51,7 @@ async function testSingleArticleComparison(): Promise<TestResult | null> {
 
         // Save the article to database
         const sessionId = await db.createScrapeSession();
-        const savedResult = await db.upsertArticles([{
+        const _savedResult = await db.upsertArticles([{
             nid: article.nid || '',
             title: article.title || '',
             path: article.path || '',

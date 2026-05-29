@@ -36,7 +36,7 @@ export type SimpleProgressCallback = (progress: SimpleProgress) => void;
 export async function scrapeEdgePropSimple(
   maxPages: number,
   onProgress: SimpleProgressCallback,
-  sessionId?: string
+  _sessionId?: string
 ): Promise<SimpleArticle[]> {
   console.log('Starting simple EdgeProp scraper...');
   

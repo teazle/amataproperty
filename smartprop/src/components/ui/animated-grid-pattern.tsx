@@ -40,18 +40,14 @@ export function AnimatedGridPattern({
   const id = useId()
   const containerRef = useRef(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
-  const [squares, setSquares] = useState(() => generateSquares(numSquares))
+  const [squares, setSquares] = useState<Array<{ id: number; pos: number[] }>>([])
 
-  // Calculate max columns and rows based on dimensions
-  const maxCols = Math.floor(dimensions.width / width)
-  const maxRows = Math.floor(dimensions.height / height)
-
-  function getPos() {
+  const getPos = useCallback(() => {
     return [
       Math.floor((Math.random() * dimensions.width) / width),
       Math.floor((Math.random() * dimensions.height) / height),
     ]
-  }
+  }, [dimensions.width, dimensions.height, width, height])
 
   // Adjust the generateSquares function to return objects with an id, x, and y
   const generateSquares = useCallback((count: number) => {
@@ -59,10 +55,10 @@ export function AnimatedGridPattern({
       id: i,
       pos: getPos(),
     }))
-  }, [maxCols, maxRows])
+  }, [getPos])
 
   // Function to update a single square's position
-  const updateSquarePosition = (id: number) => {
+  const updateSquarePosition = useCallback((id: number) => {
     setSquares((currentSquares) =>
       currentSquares.map((sq) =>
         sq.id === id
@@ -73,7 +69,7 @@ export function AnimatedGridPattern({
           : sq
       )
     )
-  }
+  }, [getPos])
 
   // Update squares to animate in
   useEffect(() => {

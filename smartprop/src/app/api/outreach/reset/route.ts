@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       resetIds: data.map(record => record.id)
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error in reset outreach API:', error);
     return NextResponse.json(
       { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },

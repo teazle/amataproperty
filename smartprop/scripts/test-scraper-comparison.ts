@@ -11,8 +11,8 @@
  * 4. Article discovery accuracy
  */
 
-import { scrapeEdgePropUnified, UnifiedArticle } from '../src/lib/scraper/edgeprop-unified-scraper';
-import { scrapeEdgePropCombined, CombinedArticle } from '../src/lib/scraper/edgeprop-combined-scraper';
+import { scrapeEdgePropCombined } from '../src/lib/scraper/edgeprop-combined-scraper';
+import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scraper';
 import { getSupabaseClient } from '../src/workers/supa';
 
 interface ComparisonResults {
@@ -70,17 +70,17 @@ async function runUnifiedScraper(): Promise<ComparisonResults> {
     
     // Calculate averages
     const validArticles = result.filter(article => article.text_content && article.text_content.length > 100);
-    const avgWordCount = validArticles.length > 0 
+    const _avgWordCount = validArticles.length > 0
       ? Math.round(validArticles.reduce((sum, article) => sum + article.word_count, 0) / validArticles.length)
       : 0;
-    const avgReadingTime = validArticles.length > 0
+    const _avgReadingTime = validArticles.length > 0
       ? Math.round(validArticles.reduce((sum, article) => sum + article.reading_time_minutes, 0) / validArticles.length)
       : 0;
     
     // Get unique authors and categories
-    const uniqueAuthors = new Set(result.map(article => article.author)).size;
+    const _uniqueAuthors = new Set(result.map(article => article.author)).size;
     const allCategories = result.flatMap(article => Array.isArray(article.category) ? article.category : [article.category]);
-    const categories = Array.from(new Set(allCategories));
+    const _categories = Array.from(new Set(allCategories));
     
     // Sample articles
     result.slice(0, 5).forEach(article => {
@@ -180,17 +180,17 @@ async function runCombinedScraper(): Promise<ComparisonResults> {
     
     // Calculate averages
     const validArticles = result.filter(article => article.text_content && article.text_content.length > 100);
-    const avgWordCount = validArticles.length > 0 
+    const _avgWordCount = validArticles.length > 0
       ? Math.round(validArticles.reduce((sum, article) => sum + article.word_count, 0) / validArticles.length)
       : 0;
-    const avgReadingTime = validArticles.length > 0
+    const _avgReadingTime = validArticles.length > 0
       ? Math.round(validArticles.reduce((sum, article) => sum + article.reading_time_minutes, 0) / validArticles.length)
       : 0;
     
     // Get unique authors and categories
-    const uniqueAuthors = new Set(result.map(article => article.author)).size;
+    const _uniqueAuthors = new Set(result.map(article => article.author)).size;
     const allCategories = result.flatMap(article => Array.isArray(article.category) ? article.category : [article.category]);
-    const categories = Array.from(new Set(allCategories));
+    const _categories = Array.from(new Set(allCategories));
     
     // Sample articles
     result.slice(0, 5).forEach(article => {

@@ -1,12 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getLinkedInSettings, updateLinkedInSettings } from '@/lib/linkedin/tracker';
 import { refreshLinkedInScheduler } from '@/lib/linkedin/scheduler';
+import { getLinkedInSettings,updateLinkedInSettings,type LinkedInSettings } from '@/lib/linkedin/tracker';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * GET /api/linkedin/settings
  * Get LinkedIn settings
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const settings = await getLinkedInSettings();
     
@@ -21,10 +21,10 @@ export async function GET(request: NextRequest) {
       success: true,
       settings
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error getting LinkedIn settings:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to get settings' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to get settings' },
       { status: 500 }
     );
   }
@@ -39,7 +39,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     
     // Validate input
-    const updates: any = {};
+    const updates: Partial<LinkedInSettings> = {};
     
     if (body.profile_url !== undefined) {
       if (body.profile_url && !body.profile_url.includes('linkedin.com')) {
@@ -152,12 +152,11 @@ export async function PUT(request: NextRequest) {
       success: true,
       settings: updated
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error updating LinkedIn settings:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to update settings' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to update settings' },
       { status: 500 }
     );
   }
 }
-

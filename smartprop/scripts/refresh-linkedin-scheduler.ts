@@ -29,7 +29,7 @@ async function refreshScheduler() {
       console.error('❌ Failed to refresh scheduler');
       console.error('   Error:', data.error || data);
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error calling API:', error.message);
     console.error('\n💡 Make sure the server is running!');
     console.error('   Start with: bun run dev');

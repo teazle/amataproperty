@@ -3,8 +3,23 @@ import path from 'path';
 import type { ScraperPlatform } from './runtime-health';
 import { normalizeCompletionStatus } from './runtime-health';
 
-type DbClient = {
-  from: (table: string) => any;
+export type DbClient = {
+  from: (table: string) => DbQueryBuilder;
+};
+
+type DbQueryBuilder = {
+  select: (columns?: string, options?: { head?: boolean; count?: 'exact' | 'planned' | 'estimated' }) => DbFilterQuery;
+  update: (values: object) => DbFilterQuery;
+};
+
+type DbFilterQuery = PromiseLike<{ data?: unknown | null; error?: unknown }> & {
+  eq: (column: string, value: unknown) => DbFilterQuery;
+  in: (column: string, values: readonly unknown[]) => DbFilterQuery;
+  gte: (column: string, value: unknown) => DbFilterQuery;
+  lt: (column: string, value: unknown) => DbFilterQuery;
+  lte: (column: string, value: unknown) => DbFilterQuery;
+  order: (column: string, options?: { ascending?: boolean }) => DbFilterQuery;
+  limit: (count: number) => DbFilterQuery;
 };
 
 type RuntimeProgress = {
@@ -105,7 +120,7 @@ async function findLatestActiveJob(db: DbClient, platform: ScraperPlatform): Pro
     .order('started_at', { ascending: false })
     .limit(1);
 
-  return data?.[0] ?? null;
+  return (data as ScraperJobRow[] | null | undefined)?.[0] ?? null;
 }
 
 async function updateCompletedFromFile(
@@ -154,7 +169,7 @@ async function updateCompletedFromFile(
     .order('started_at', { ascending: false })
     .limit(1);
 
-  const job = matchingJobs?.[0];
+  const job = (matchingJobs as Pick<ScraperJobRow, 'id' | 'status'>[] | null | undefined)?.[0];
   if (!job) {
     return false;
   }
@@ -177,7 +192,8 @@ async function failStaleJobsWithoutRuntime(
     .in('status', ['queued', 'running'])
     .lt('started_at', cutoff);
 
-  if (!staleJobs || staleJobs.length === 0) {
+  const staleJobRows = staleJobs as Pick<ScraperJobRow, 'id' | 'status'>[] | null | undefined;
+  if (!staleJobRows || staleJobRows.length === 0) {
     return 0;
   }
 
@@ -188,9 +204,9 @@ async function failStaleJobsWithoutRuntime(
       completed_at: new Date().toISOString(),
       error_message: `No active scraper runtime found after ${staleAfterHours} hours - stale job reconciled`,
     })
-    .in('id', staleJobs.map((job: { id: string }) => job.id));
+    .in('id', staleJobRows.map((job) => job.id));
 
-  return error ? 0 : staleJobs.length;
+  return error ? 0 : staleJobRows.length;
 }
 
 export async function reconcileScraperRuntimeState(
@@ -267,7 +283,7 @@ async function getActiveJobs(db: DbClient): Promise<ScraperJobRow[]> {
     .in('status', ['queued', 'running'])
     .order('started_at', { ascending: false });
 
-  return data ?? [];
+  return (data as ScraperJobRow[] | null | undefined) ?? [];
 }
 
 function readJobRuntime(job: ScraperJobRow, cwd: string): {

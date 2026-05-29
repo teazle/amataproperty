@@ -334,7 +334,7 @@ export async function processMessageAsync(payload: AsyncMessagePayload): Promise
       console.error('❌ [ASYNC] Decision error stack:', (decisionError as Error)?.stack);
     }
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ [ASYNC] Background processing failed:', error);
     console.error('❌ [ASYNC] Error stack:', (error as Error)?.stack);
   }

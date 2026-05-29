@@ -155,7 +155,12 @@ export async function getConversationHistory(outreachId: string): Promise<Conver
     throw new Error(`Failed to load WhatsApp history: ${error.message}`);
   }
 
-  return (data || []).map((row: any) => ({
+  return (data || []).map((row: {
+    direction: 'outbound' | 'inbound';
+    body: string;
+    occurred_at?: string | null;
+    waha_message_id?: string | null;
+  }) => ({
     role: row.direction === 'outbound' ? 'user' : 'agent',
     message: row.body,
     timestamp: row.occurred_at || new Date().toISOString(),

@@ -31,7 +31,7 @@ async function testFixedDataExtraction() {
   const sessionId = sessionData.id;
   console.log(`✅ Created session: ${sessionId}\n`);
 
-  const onProgress = (progress: any) => {
+  const onProgress = (progress: unknown) => {
     console.log(`[${progress.step}] ${progress.message}`);
   };
 

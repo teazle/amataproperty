@@ -5,7 +5,7 @@
  * that may be left behind when scrapers crash or are killed (e.g., OOM kills).
  */
 
-import { exec, execSync } from 'child_process';
+import { exec,execSync } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -131,7 +131,7 @@ export async function cleanupOrphanedBrowsers(): Promise<{
  */
 export async function forceKillAllBrowsers(): Promise<number> {
   try {
-    const { stdout } = await execAsync(
+    const { stdout: _stdout } = await execAsync(
       "pkill -9 -f 'chromium|chrome|playwright' 2>/dev/null || true"
     );
     

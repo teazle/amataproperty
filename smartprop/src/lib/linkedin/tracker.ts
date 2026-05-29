@@ -28,8 +28,8 @@ async function withLinkedInDbTimeout<T>(
         }, timeoutMs);
       }),
     ]);
-  } catch (error: any) {
-    if (error?.name === 'AbortError' || controller.signal.aborted) {
+  } catch (error) {
+    if ((error instanceof Error && error.name === 'AbortError') || controller.signal.aborted) {
       throw new Error(`${label} timed out after ${timeoutMs}ms`);
     }
     throw error;

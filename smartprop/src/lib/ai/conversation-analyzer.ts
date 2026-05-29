@@ -4,11 +4,12 @@
  */
 
 import Groq from 'groq-sdk';
+import type { ChatCompletionCreateParamsNonStreaming } from 'groq-sdk/resources/chat/completions';
+import { coBrokingAnalysisBreaker,responseGenerationBreaker,timeslotDetectionBreaker } from './circuit-breaker';
+import { AI_CONFIG,ERROR_MESSAGES } from './config';
+import { logger,measurePerformance } from './logger';
 import { getActivePrompt } from './prompt-manager';
-import { coBrokingAnalysisBreaker, timeslotDetectionBreaker, responseGenerationBreaker } from './circuit-breaker';
-import { AI_CONFIG, CONVERSATION, BUSINESS_RULES, ERROR_MESSAGES, SUCCESS_MESSAGES } from './config';
-import { logger, measurePerformance } from './logger';
-import { cleanQuotes, hasQuotes } from './quote-cleaner';
+import { cleanQuotes,hasQuotes } from './quote-cleaner';
 
 // Lazy initialization
 let groq: Groq | null = null;
@@ -256,7 +257,7 @@ Please provide a detailed analysis of the co-broking intent, confidence level, a
 
     return analysis;
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error analyzing co-broking intent:', error);
     return {
       status: 'unknown',
@@ -615,7 +616,7 @@ Focus on whether the agent has provided or requested timeslots anywhere in this 
 
     const result = JSON.parse(responseText) as { detected: boolean; text?: string; type?: 'provided' | 'requested' };
     return result;
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error detecting timeslots:', error);
     return { detected: false };
   }
@@ -624,7 +625,7 @@ Focus on whether the agent has provided or requested timeslots anywhere in this 
 /**
  * Analyze conversation tone - Let AI handle this
  */
-function analyzeConversationTone(context: ConversationContext): 'positive' | 'neutral' | 'negative' | 'professional' {
+function analyzeConversationTone(_context: ConversationContext): 'positive' | 'neutral' | 'negative' | 'professional' {
   // Let AI handle tone analysis instead of pattern matching
   // This is just a placeholder - the AI will determine tone contextually
   return 'neutral';
@@ -633,7 +634,7 @@ function analyzeConversationTone(context: ConversationContext): 'positive' | 'ne
 /**
  * Assess agent engagement level - Let AI handle this
  */
-function assessAgentEngagement(context: ConversationContext): 'high' | 'medium' | 'low' {
+function assessAgentEngagement(_context: ConversationContext): 'high' | 'medium' | 'low' {
   // Let AI handle engagement assessment instead of pattern matching
   // This is just a placeholder - the AI will determine engagement contextually
   return 'medium';
@@ -870,7 +871,7 @@ function isDirectPersonalQuestion(message: string): boolean {
  */
 function isSimpleAcknowledgment(message: string): boolean {
   // First clean quotes to handle cases like "\"Ok\"" or '"Ok"'
-  let cleanMessage = cleanQuotes(message);
+  const cleanMessage = cleanQuotes(message);
   const lowerMessage = cleanMessage.toLowerCase().trim();
   
   // Simple acknowledgments that indicate conversation can end
@@ -1041,7 +1042,7 @@ async function generateNaturalResponse(
 
     // For follow-up messages, use fully natural AI generation
     // Format conversation history as proper message array for better context understanding
-    const conversationMessages = context.conversationHistory.map(msg => ({
+    const _conversationMessages = context.conversationHistory.map(msg => ({
       role: msg.role === 'user' ? 'assistant' : 'user', // Flip roles: our messages are 'assistant', theirs are 'user'
       content: msg.message
     }));
@@ -1106,7 +1107,7 @@ NATURAL CONVERSATION GUIDANCE:
     const client = getGroqClient();
     
     // Build request with natural conversation parameters
-    const requestParams: any = {
+    const requestParams: ChatCompletionCreateParamsNonStreaming = {
       messages: [
         {
           role: 'system',
@@ -1228,7 +1229,7 @@ Return the message text directly without extra quotes or JSON encoding.`;
       
       return cleanResponse;
     }
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Error generating natural response:', error);
     
     // Generic fallback when AI fails - avoid hardcoded templates
@@ -1239,12 +1240,12 @@ Return the message text directly without extra quotes or JSON encoding.`;
 
 // Removed template function - all responses after initial message are AI-generated
 
-function generateContextualResponse(
-  coBrokingAnalysis: CoBrokingAnalysis,
-  timeslotsDetected: boolean,
-  conversationTone: string,
-  agentEngagement: string,
-  context: ConversationContext
+function _generateContextualResponse(
+  _coBrokingAnalysis: CoBrokingAnalysis,
+  _timeslotsDetected: boolean,
+  _conversationTone: string,
+  _agentEngagement: string,
+  _context: ConversationContext
 ): string {
   // Let the AI generate natural responses instead of using templates
   // This will be handled by the AI prompt system for more natural conversation flow

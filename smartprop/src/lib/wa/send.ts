@@ -113,7 +113,7 @@ export async function sendTemplate(
       success: true,
       messageId: data.id,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error sending WhatsApp template message:', error);
     return {
       success: false,

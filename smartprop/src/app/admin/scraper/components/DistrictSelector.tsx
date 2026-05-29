@@ -3,7 +3,7 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
-interface District {
+export interface District {
   district: string;
   last_scraped_at: string | null;
   total_listings: number;

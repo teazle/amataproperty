@@ -34,7 +34,7 @@ async function debugContentExtraction() {
       ];
       
       let mainContent = '';
-      let mainContentElement = null;
+      let _mainContentElement = null;
       
       for (const selector of articleSelectors) {
         const element = document.querySelector(selector);
@@ -43,7 +43,7 @@ async function debugContentExtraction() {
           console.log(`Found element with selector "${selector}": ${elementText?.length} chars`);
           if (elementText && elementText.length > 500 && elementText.length > mainContent.length) {
             mainContent = elementText;
-            mainContentElement = element;
+            _mainContentElement = element;
             console.log(`Using "${selector}" as main content (${elementText.length} chars)`);
           }
         }

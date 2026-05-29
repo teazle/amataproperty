@@ -5,7 +5,7 @@ import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scrap
 async function testAuthorExtraction() {
   console.log('🧪 Testing Author Extraction from EdgeProp Unified Scraper...\n');
 
-  const onProgress = (progress: any) => {
+  const onProgress = (progress: unknown) => {
     console.log(`[${progress.step}] ${progress.message}`);
     console.log(`   Status: ${progress.status}`);
     console.log(`   Page: ${progress.page}/${progress.totalPages}`);

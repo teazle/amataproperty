@@ -290,15 +290,15 @@ async function testScraperStandalone() {
     
     if (articles.length > 0) {
       console.log(`\n📋 Article List:`);
-      articles.forEach((article: any, index: number) => {
+      articles.forEach((article: unknown, index: number) => {
         console.log(`   ${index + 1}. ${article.title.substring(0, 80)}${article.title.length > 80 ? '...' : ''}`);
         console.log(`      URL: ${article.href}`);
       });
     }
     
     // Quality checks
-    const hasValidTitles = articles.every((article: any) => article.title && article.title.length > 5);
-    const hasValidPaths = articles.every((article: any) => article.path && article.path.length > 0);
+    const hasValidTitles = articles.every((article: unknown) => article.title && article.title.length > 5);
+    const hasValidPaths = articles.every((article: unknown) => article.path && article.path.length > 0);
     
     console.log(`\n🔍 Quality Checks:`);
     console.log(`   Valid titles: ${hasValidTitles ? '✅' : '❌'}`);

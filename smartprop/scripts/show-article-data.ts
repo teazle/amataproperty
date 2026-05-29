@@ -5,7 +5,7 @@ import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scrap
 async function showArticleData() {
   console.log('📄 Showing Complete Article Data from EdgeProp Unified Scraper...\n');
 
-  const onProgress = (progress: any) => {
+  const onProgress = (_progress: unknown) => {
     // Minimal progress output for cleaner results
   };
 

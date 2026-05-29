@@ -1,15 +1,16 @@
 'use server'
 
-import { createClient } from '@supabase/supabase-js';
-import { revalidatePath } from 'next/cache';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
-import { enqueueScraperJob } from '@/lib/queue/scraper-queue';
 import type { ScraperJobPayload } from '@/lib/queue/queue-types';
-import { checkFlaresolverr, inspectAuthState } from '@/lib/scraper/runtime-health';
-import { buildScraperStatusPayload, reconcileScraperRuntimeState } from '@/lib/scraper/runtime-state';
+import { enqueueScraperJob } from '@/lib/queue/scraper-queue';
+import { checkFlaresolverr,inspectAuthState } from '@/lib/scraper/runtime-health';
+import { buildScraperStatusPayload,reconcileScraperRuntimeState,type DbClient } from '@/lib/scraper/runtime-state';
+import { createClient } from '@supabase/supabase-js';
+import { exec } from 'child_process';
+import fs from 'fs';
+import { revalidatePath } from 'next/cache';
+import cron from 'node-cron';
+import path from 'path';
+import { promisify } from 'util';
 import type { AuthStatus } from './types';
 
 /**
@@ -50,6 +51,7 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     },
   },
 });
+const runtimeDbClient = supabase as unknown as DbClient;
 
 export interface ScraperConfig {
   platform: 'propertyguru' | 'edgeprop';
@@ -78,6 +80,70 @@ export interface ScraperJobStatus {
   completedAt?: string;
   [key: string]: unknown;
   error?: string;
+}
+
+interface DistrictMetadata {
+  district: string;
+  last_scraped_at: string | null;
+  total_listings: number;
+  last_phone_success_rate: number | null;
+  is_favorite: boolean;
+}
+
+interface QualityMetricsResult {
+  success: boolean;
+  error?: string;
+  metrics: {
+    completenessScore: number;
+    phoneValidationRate: number;
+    duplicatesToday: number;
+    staleListings: number;
+  };
+}
+
+interface CompletedRuntimeData {
+  status?: string;
+  startedAt: string;
+  completedAt?: string;
+  progress?: {
+    listingsProcessed?: number;
+    currentPage?: number;
+    currentDistrict?: string | null;
+  };
+  stats?: Record<string, unknown> | null;
+}
+
+type JobUpdate = Record<string, unknown>;
+
+function getErrorMessage(error: unknown, fallback = 'Unknown error'): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String(error.message);
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  return fallback;
+}
+
+function parseRuntimeFile(filePath: string): CompletedRuntimeData | null {
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<CompletedRuntimeData>;
+  if (parsed.status !== 'completed' || !parsed.startedAt) {
+    return null;
+  }
+
+  return {
+    status: parsed.status,
+    startedAt: parsed.startedAt,
+    completedAt: parsed.completedAt,
+    progress: parsed.progress,
+    stats: parsed.stats,
+  };
 }
 
 async function validateScraperRuntime(
@@ -115,7 +181,7 @@ async function validateScraperRuntime(
  * Check and clean up stale lock files (lock file exists but process is dead)
  * Returns cleanup results
  */
-async function checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: string[] }> {
+async function _checkAndCleanStaleLocks(): Promise<{ cleaned: number; errors: string[] }> {
   const errors: string[] = [];
   let cleaned = 0;
 
@@ -216,7 +282,7 @@ export async function startScrapeJob(
 ) {
   try {
     // First, check and clean up any stale locks
-    const cleanupResult = await reconcileScraperRuntimeState(supabase);
+    const cleanupResult = await reconcileScraperRuntimeState(runtimeDbClient);
     if (cleanupResult.cleaned > 0) {
       console.log(`🧹 Cleaned up ${cleanupResult.cleaned} stale lock file(s)`);
     }
@@ -335,11 +401,11 @@ export async function getActiveJob(): Promise<ScraperJobStatus | null> {
     const now = Date.now();
 
     if (now - (lastSyncCache.get('all') || 0) >= SYNC_COOLDOWN) {
-      await reconcileScraperRuntimeState(supabase);
+      await reconcileScraperRuntimeState(runtimeDbClient);
       lastSyncCache.set('all', now);
     }
 
-    const statusPayload = await buildScraperStatusPayload(supabase, { reconcile: false });
+    const statusPayload = await buildScraperStatusPayload(runtimeDbClient, { reconcile: false });
     if (statusPayload.status !== 'active') return null;
     const job = statusPayload.job;
 
@@ -395,7 +461,7 @@ export async function getDistrictMetadata() {
 
     if (error) throw error;
 
-    return { success: true, districts: districts || [] };
+    return { success: true, districts: (districts || []) as DistrictMetadata[] };
 
   } catch (error) {
     console.error('Error getting district metadata:', error);
@@ -404,7 +470,7 @@ export async function getDistrictMetadata() {
 }
 
 // Cache for quality metrics to reduce queries
-let qualityMetricsCache: { data: any; timestamp: number } | null = null;
+let qualityMetricsCache: { data: QualityMetricsResult; timestamp: number } | null = null;
 const QUALITY_METRICS_CACHE_TTL = 60000; // Cache for 60 seconds
 
 /**
@@ -419,7 +485,7 @@ export async function getDataQualityMetrics() {
     }
 
     // Get latest metrics for each platform
-    const { data: metrics, error } = await supabase
+    const { data: _metrics, error } = await supabase
       .from('scraper_metrics')
       .select('*')
       .order('recorded_at', { ascending: false })
@@ -792,7 +858,7 @@ export async function deleteScraperHistory() {
     }
 
     // Now delete all completed and failed jobs
-    const { error, data } = await supabase
+    const { error, data: _data } = await supabase
       .from('scraper_jobs')
       .delete()
       .in('status', ['completed', 'failed']);
@@ -821,7 +887,7 @@ export async function deleteScraperHistory() {
     if (error instanceof Error) {
       errorMessage = error.message;
     } else if (error && typeof error === 'object' && 'message' in error) {
-      errorMessage = String((error as any).message);
+      errorMessage = getErrorMessage(error, errorMessage);
     } else if (typeof error === 'string') {
       errorMessage = error;
     }
@@ -879,7 +945,7 @@ export async function deleteScraperJob(jobId: string) {
     if (error instanceof Error) {
       errorMessage = error.message;
     } else if (error && typeof error === 'object' && 'message' in error) {
-      errorMessage = String((error as any).message);
+      errorMessage = getErrorMessage(error, errorMessage);
     } else if (typeof error === 'string') {
       errorMessage = error;
     }
@@ -987,7 +1053,7 @@ export async function forceResetStuckJobs() {
       let updateCount = 0;
       for (const jobId of jobIds) {
         // Try update without pid first (pid column may not exist)
-        const updateData: any = {
+        const updateData: JobUpdate = {
           status: 'failed',
           completed_at: new Date().toISOString(),
           error_message: 'Force reset by user - job was stuck'
@@ -1031,7 +1097,7 @@ export async function forceResetStuckJobs() {
 
         // Force update again for jobs that are still active
         for (const job of stillActive) {
-          const retryUpdateData: any = {
+          const retryUpdateData: JobUpdate = {
             status: 'failed',
             completed_at: new Date().toISOString(),
             error_message: 'Force reset by user - job was stuck'
@@ -1086,7 +1152,7 @@ export async function forceResetStuckJobs() {
       console.warn(`⚠️  Still found ${finalCheck.length} active job(s) after reset. Force updating individually...`);
       // Update each remaining job individually
       for (const job of finalCheck) {
-        const finalUpdateData: any = {
+        const finalUpdateData: JobUpdate = {
           status: 'failed',
           completed_at: new Date().toISOString(),
           error_message: 'Force reset by user - job was stuck'
@@ -1119,13 +1185,13 @@ export async function forceResetStuckJobs() {
       for (const stuckJob of ultimateCheck || []) {
         try {
           // Try updating with explicit where clause (without pid field)
-          const finalUpdateData: any = {
+          const finalUpdateData: JobUpdate = {
             status: 'failed',
             completed_at: new Date().toISOString(),
             error_message: 'Force reset by user - job was stuck (final attempt)'
           };
 
-          const { error: finalError, data: finalData } = await supabase
+          const { error: finalError, data: _finalData } = await supabase
             .from('scraper_jobs')
             .update(finalUpdateData)
             .eq('id', stuckJob.id)
@@ -1173,7 +1239,7 @@ export async function forceResetStuckJobs() {
       jobsReset: jobsToReset.length
     };
 
-  } catch (error: unknown) {
+  } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error('Error force resetting stuck jobs:', errorMsg);
     return {
@@ -1339,7 +1405,7 @@ export async function forceFixStuckJob(jobId: string) {
     }
 
     // Try multiple update approaches
-    const updateData: any = {
+    const updateData: JobUpdate = {
       status: 'failed',
       completed_at: new Date().toISOString(),
       error_message: 'Manually fixed - job was stuck'
@@ -1353,7 +1419,7 @@ export async function forceFixStuckJob(jobId: string) {
     }
 
     // Approach 1: Standard update
-    let { error: updateError } = await supabase
+    const { error: updateError } = await supabase
       .from('scraper_jobs')
       .update(updateData)
       .eq('id', jobId);
@@ -1422,7 +1488,7 @@ export async function forceFixStuckJob(jobId: string) {
 export async function syncCompletedJobs() {
   try {
     const storageDir = path.join(process.cwd(), 'storage');
-    const completedFiles: Array<{ platform: 'propertyguru' | 'edgeprop'; data: any }> = [];
+    const completedFiles: Array<{ platform: 'propertyguru' | 'edgeprop'; data: CompletedRuntimeData }> = [];
 
     // Check for completed.json files
     const pgCompletedFile = path.join(storageDir, 'pg-scraper.completed.json');
@@ -1430,8 +1496,8 @@ export async function syncCompletedJobs() {
 
     if (fs.existsSync(pgCompletedFile)) {
       try {
-        const data = JSON.parse(fs.readFileSync(pgCompletedFile, 'utf-8'));
-        if (data.status === 'completed') {
+        const data = parseRuntimeFile(pgCompletedFile);
+        if (data) {
           completedFiles.push({ platform: 'propertyguru', data });
         }
       } catch (error) {
@@ -1441,8 +1507,8 @@ export async function syncCompletedJobs() {
 
     if (fs.existsSync(epCompletedFile)) {
       try {
-        const data = JSON.parse(fs.readFileSync(epCompletedFile, 'utf-8'));
-        if (data.status === 'completed') {
+        const data = parseRuntimeFile(epCompletedFile);
+        if (data) {
           completedFiles.push({ platform: 'edgeprop', data });
         }
       } catch (error) {
@@ -1492,7 +1558,7 @@ export async function syncCompletedJobs() {
         const job = matchingJobs[0];
 
         // Update job to completed status
-        const updateData: any = {
+        const updateData: JobUpdate = {
           status: 'completed',
           completed_at: data.completedAt || new Date().toISOString(),
           listings_processed: data.progress?.listingsProcessed || data.stats?.totalSuccess || 0,
@@ -1582,9 +1648,10 @@ export async function getScheduledJobs(): Promise<ScheduledJob[]> {
     }
 
     return (jobs || []) as ScheduledJob[];
-  } catch (error: any) {
+  } catch (error) {
     // Check for rate limit errors
-    if (error?.message?.includes('rate limit') || error?.message?.includes('quota') || error?.message?.includes('exceeded')) {
+    const message = getErrorMessage(error, '');
+    if (message.includes('rate limit') || message.includes('quota') || message.includes('exceeded')) {
       console.warn('Rate limit exception when fetching scheduled jobs.');
       return [];
     }
@@ -1609,7 +1676,6 @@ export async function createScheduledJob(job: {
 }): Promise<{ success: boolean; job?: ScheduledJob; error?: string }> {
   try {
     // Validate cron expression
-    const cron = require('node-cron');
     if (!cron.validate(job.cron_expression)) {
       return {
         success: false,
@@ -1688,7 +1754,6 @@ export async function updateScheduledJob(
   try {
     // Validate cron expression if provided
     if (updates.cron_expression) {
-      const cron = require('node-cron');
       if (!cron.validate(updates.cron_expression)) {
         return {
           success: false,
@@ -1728,7 +1793,6 @@ export async function updateScheduledJob(
     // Calculate next run time if cron or timezone changed
     const updateData: Record<string, unknown> = { ...updates };
     if (updates.cron_expression || updates.timezone) {
-      const cron = require('node-cron');
       const finalCron = updates.cron_expression || existingJob.cron_expression;
       const finalTimezone = updates.timezone || existingJob.timezone;
       const tempTask = cron.schedule(finalCron, () => {}, {

@@ -9,7 +9,6 @@
  */
 
 import { getSupabaseClient } from '@/workers/supa';
-import { sendAutoReply } from './conversation';
 
 export interface SimpleConversationState {
   agentPhone: string;
@@ -27,14 +26,14 @@ export interface SimpleConversationState {
 
 export async function processSimpleConversation(
   agentPhone: string,
-  messageText: string,
-  timestamp: string
+  _messageText: string,
+  _timestamp: string
 ): Promise<void> {
   console.log(`🔇 [SIMPLE] Handler disabled for ${agentPhone} - delegating to advanced pipeline`);
   return;
 }
 
-async function getConversationState(agentPhone: string): Promise<SimpleConversationState & { outreachId: string; autoReplyCount: number }> {
+async function _getConversationState(agentPhone: string): Promise<SimpleConversationState & { outreachId: string; autoReplyCount: number }> {
   const supabase = getSupabaseClient();
   
   // Find agent
@@ -84,7 +83,7 @@ async function getConversationState(agentPhone: string): Promise<SimpleConversat
   };
 }
 
-function analyzeConversationState(state: SimpleConversationState): {
+function _analyzeConversationState(state: SimpleConversationState): {
   coBrokingStatus: 'unknown' | 'willing' | 'not_willing' | 'needs_discussion';
   timeslotsReceived: boolean;
   timeslotsText?: string;
@@ -136,7 +135,7 @@ function analyzeConversationState(state: SimpleConversationState): {
   };
 }
 
-function generateReply(state: SimpleConversationState, analysis: any): string {
+function _generateReply(state: SimpleConversationState, analysis: ReturnType<typeof _analyzeConversationState>): string {
   if (analysis.coBrokingStatus === 'willing' && !analysis.timeslotsReceived) {
     return "Great. When would be a good time for viewing this week?";
   }
@@ -156,7 +155,7 @@ function generateReply(state: SimpleConversationState, analysis: any): string {
   return "Thank you for your message. I'd be happy to discuss this further with you.";
 }
 
-async function saveConversationState(state: SimpleConversationState & { outreachId: string; autoReplyCount: number }): Promise<void> {
+async function _saveConversationState(state: SimpleConversationState & { outreachId: string; autoReplyCount: number }): Promise<void> {
   const supabase = getSupabaseClient();
   
   const updateData = {

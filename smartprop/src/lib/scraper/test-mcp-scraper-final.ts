@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { scrapeEdgePropMCP, MCPArticle, MCPProgress } from './edgeprop-mcp-scraper';
+import { scrapeEdgePropMCP, MCPArticle as _MCPArticle, MCPProgress } from './edgeprop-mcp-scraper';
 
 async function testMCPScraper() {
   console.log('🚀 Testing MCP Scraper with improved content extraction...\n');

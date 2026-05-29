@@ -3,7 +3,7 @@
  * Integrated into Next.js with TypeScript
  */
 
-import { type Page as _Page, type Browser, chromium } from 'playwright';
+import { type Page as _Page, type Browser, chromium, type Response } from 'playwright';
 
 export interface Article {
   nid: string;
@@ -63,14 +63,14 @@ export async function scrapeEdgeProp(
     const page = await currentBrowser.newPage();
     
     // Intercept API responses
-    page.on('response', async (response: any) => {
+    page.on('response', async (response: Response) => {
       if (response.url().includes('/proxy/news?secure-url=')) {
         try {
           const json = await response.json();
           if (json?.response?.results) {
             capturedData = json.response;
           }
-        } catch (_e: unknown) {
+        } catch (_e) {
           // Ignore parse errors
         }
       }
@@ -151,7 +151,7 @@ export async function scrapeEdgeProp(
               unique_articles: totalNewArticles,
               duplicates_found: totalDuplicates
             });
-          } catch (_error: unknown) {
+          } catch (_error) {
             console.error('Failed to save articles to database:', _error);
           }
         } else {
@@ -177,7 +177,7 @@ export async function scrapeEdgeProp(
           try {
             const nextUrl = `https://www.edgeprop.sg/property-news-search?combine=&field_tags_tid=&page=${pageNum + 1}&page_size=20&sort_by=posted_desc&category=`;
             await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          } catch (_e: unknown) {
+          } catch (_e) {
             const errorMessage = _e instanceof Error ? _e.message : 'Unknown navigation error';
             onProgress({
               currentPage: pageNum,
@@ -208,7 +208,7 @@ export async function scrapeEdgeProp(
       if (sessionId && dbModule) {
         try {
           await dbModule.completeScrapeSession(sessionId, 'completed');
-        } catch (_error: unknown) {
+        } catch (_error) {
           console.error('Failed to complete session:', _error);
         }
       }
@@ -224,7 +224,7 @@ export async function scrapeEdgeProp(
           message: 'Scraping completed successfully',
           articles: allArticles
         });
-      } catch (_error: unknown) {
+      } catch (_error) {
       console.error('Failed to send final progress:', _error);
       }
     }
@@ -234,7 +234,7 @@ export async function scrapeEdgeProp(
     
     return allArticles;
     
-  } catch (_error: unknown) {
+  } catch (_error) {
     if (currentBrowser) {
       await currentBrowser.close();
       currentBrowser = null;

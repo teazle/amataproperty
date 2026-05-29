@@ -1,5 +1,5 @@
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import * as db from '@/lib/db/articles';
+import { chromium, Browser as _Browser, BrowserContext as _BrowserContext, Page } from 'playwright';
+import * as _db from '@/lib/db/articles';
 import { upsertArticles } from '../db/articles';
 import { upsertArticleContent } from '@/lib/db/article-content';
 
@@ -91,7 +91,7 @@ export async function scrapeEdgePropMCPFixed(
       get: () => undefined,
     });
     
-    (window as any).chrome = {
+    (window as unknown as Window & Record<string, unknown>).chrome = {
       runtime: {},
     };
     
@@ -198,7 +198,7 @@ export async function scrapeEdgePropMCPFixed(
       }
 
       // Extract article data with enhanced metadata
-      const articles: any[] = [];
+      const articles: MCPArticle[] = [];
       const processedUrls = new Set<string>();
 
       for (let i = 0; i < Math.min(articleElements.length, targetCount); i++) {
@@ -206,9 +206,9 @@ export async function scrapeEdgePropMCPFixed(
         
         try {
           // Find the article link
-          let linkElement = element.tagName === 'A' ? element as HTMLAnchorElement : 
+          const linkElement = element.tagName === 'A' ? element as HTMLAnchorElement :
                            element.querySelector('a[href*="/property-news/"]:not([href*="/property-news-search"])') as HTMLAnchorElement;
-          
+
           if (!linkElement) continue;
 
           const href = linkElement.getAttribute('href');

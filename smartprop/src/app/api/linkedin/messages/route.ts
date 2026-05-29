@@ -64,10 +64,10 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       );
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error deleting LinkedIn message:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to delete message' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to delete message' },
       { status: 500 }
     );
   }

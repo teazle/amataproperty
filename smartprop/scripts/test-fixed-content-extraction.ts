@@ -5,7 +5,7 @@ import { scrapeEdgePropUnified } from '../src/lib/scraper/edgeprop-unified-scrap
 async function testFixedContentExtraction() {
   console.log('🔧 Testing Fixed Content Extraction...\n');
 
-  const onProgress = (progress: any) => {
+  const onProgress = (_progress: unknown) => {
     // console.log(`[${progress.step}] ${progress.message}`); // Commented out for cleaner output
   };
 

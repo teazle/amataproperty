@@ -10,7 +10,7 @@ interface LogEntry {
   level: string;
   category: string;
   message: string;
-  data?: Record<string, any>;
+  data?: Record<string, unknown>;
   error?: Error;
 }
 
@@ -78,7 +78,7 @@ class Logger {
     }
   }
 
-  private log(level: string, category: string, message: string, data?: Record<string, any>, error?: Error): void {
+  private log(level: string, category: string, message: string, data?: Record<string, unknown>, error?: Error): void {
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
@@ -112,51 +112,51 @@ class Logger {
 
   // AI Analysis Logging
   aiAnalysis = {
-    start: (operation: string, context?: Record<string, any>) => {
+    start: (operation: string, context?: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.AI_ANALYSIS, `Starting ${operation}`, context);
     },
     
-    success: (operation: string, duration: number, result?: Record<string, any>) => {
+    success: (operation: string, duration: number, result?: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.AI_ANALYSIS, `${operation} completed successfully`, {
         duration_ms: duration,
         ...result
       });
     },
     
-    error: (operation: string, error: Error, context?: Record<string, any>) => {
+    error: (operation: string, error: Error, context?: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.ERROR, LOGGING.CATEGORIES.AI_ANALYSIS, `${operation} failed`, context, error);
     },
     
-    debug: (operation: string, data: Record<string, any>) => {
+    debug: (operation: string, data: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.DEBUG, LOGGING.CATEGORIES.AI_ANALYSIS, `${operation} debug info`, data);
     }
   };
 
   // Conversation Logging
   conversation = {
-    messageReceived: (agentMessage: string, context?: Record<string, any>) => {
+    messageReceived: (agentMessage: string, context?: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.CONVERSATION, 'Agent message received', {
         message: agentMessage,
         ...context
       });
     },
     
-    responseGenerated: (response: string, analysis: Record<string, any>) => {
+    responseGenerated: (response: string, analysis: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.CONVERSATION, 'Response generated', {
         response,
         analysis
       });
     },
     
-    objectivesStatus: (status: Record<string, any>) => {
+    objectivesStatus: (status: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.CONVERSATION, 'Objectives status updated', status);
     },
     
-    analysisComplete: (result: Record<string, any>) => {
+    analysisComplete: (result: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.CONVERSATION, 'Conversation analysis completed', result);
     },
     
-    conversationEnd: (reason: string, finalStatus: Record<string, any>) => {
+    conversationEnd: (reason: string, finalStatus: Record<string, unknown>) => {
       this.log(LOGGING.LEVELS.INFO, LOGGING.CATEGORIES.CONVERSATION, `Conversation ended: ${reason}`, finalStatus);
     }
   };
@@ -206,19 +206,19 @@ class Logger {
   };
 
   // Generic logging methods
-  error = (message: string, error?: Error, data?: Record<string, any>) => {
+  error = (message: string, error?: Error, data?: Record<string, unknown>) => {
     this.log(LOGGING.LEVELS.ERROR, 'general', message, data, error);
   };
 
-  warn = (message: string, data?: Record<string, any>) => {
+  warn = (message: string, data?: Record<string, unknown>) => {
     this.log(LOGGING.LEVELS.WARN, 'general', message, data);
   };
 
-  info = (message: string, data?: Record<string, any>) => {
+  info = (message: string, data?: Record<string, unknown>) => {
     this.log(LOGGING.LEVELS.INFO, 'general', message, data);
   };
 
-  debug = (message: string, data?: Record<string, any>) => {
+  debug = (message: string, data?: Record<string, unknown>) => {
     this.log(LOGGING.LEVELS.DEBUG, 'general', message, data);
   };
 }
@@ -241,7 +241,7 @@ export function measurePerformance<T>(
       
       logger.aiAnalysis.success(operation, duration);
       resolve({ result, duration });
-    } catch (error: unknown) {
+    } catch (error) {
       const duration = Date.now() - startTime;
       logger.aiAnalysis.error(operation, error as Error, { duration_ms: duration });
       reject(error);

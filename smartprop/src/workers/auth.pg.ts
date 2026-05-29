@@ -2,10 +2,9 @@ import { chromium } from 'playwright-ghost';
 import plugins from 'playwright-ghost/plugins';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, resetFlaresolverrSession } from './flaresolverr.js';
 import { humanPause } from './stealth.js';
-import { waitForCloudflareAutoResolve, bypassCloudflareDirect } from './cloudflare-bypass-alternative.js';
+import { waitForCloudflareAutoResolve } from './cloudflare-bypass-alternative.js';
 import { getProxyFromEnv } from '../utils/free-proxy-rotator.js';
 import { checkFlaresolverr, getBrowserRuntimeStatus, inspectAuthState } from '../lib/scraper/runtime-health.js';
 
@@ -289,7 +288,7 @@ async function authenticatePropertyGuru() {
     Object.keys(window).forEach(key => {
       if (key.includes('cdc_') || key.includes('__playwright') || key.includes('__pw')) {
         try {
-          delete (window as any)[key];
+          delete (window as unknown as Window & Record<string, unknown>)[key];
         } catch (e) {
           // Ignore
         }
@@ -304,7 +303,7 @@ async function authenticatePropertyGuru() {
           { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
           { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
         ];
-        return plugins as any;
+        return plugins as unknown as PluginArray;
       },
       configurable: true,
     });
@@ -317,7 +316,7 @@ async function authenticatePropertyGuru() {
           { type: 'application/x-nacl', suffixes: '', description: 'Native Client Executable' },
           { type: 'application/x-pnacl', suffixes: '', description: 'Portable Native Client Executable' },
         ];
-        return mimeTypes as any;
+        return mimeTypes as unknown as MimeTypeArray;
       },
       configurable: true,
     });
@@ -348,14 +347,14 @@ async function authenticatePropertyGuru() {
 
     // 9. Permissions API
     const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters: any) => (
+    window.navigator.permissions.query = (parameters: PermissionDescriptor) => (
       parameters.name === 'notifications' ?
         Promise.resolve({ state: Notification.permission } as PermissionStatus) :
         originalQuery(parameters)
     );
 
     // 10. Chrome object (must exist for Chrome)
-    (window as any).chrome = {
+    (window as unknown as Window & Record<string, unknown>).chrome = {
       runtime: {
         onConnect: undefined,
         onMessage: undefined,
@@ -396,10 +395,10 @@ async function authenticatePropertyGuru() {
     // 15. CRITICAL: Ensure localStorage and sessionStorage are available (Cloudflare checks this)
     try {
       if (typeof Storage === 'undefined') {
-        (window as any).Storage = function() {};
+        (window as unknown as Window & Record<string, unknown>).Storage = function() {};
       }
       if (!window.localStorage) {
-        const storage: any = {};
+        const storage: Record<string, string> = {};
         window.localStorage = {
           getItem: (key: string) => storage[key] || null,
           setItem: (key: string, value: string) => { storage[key] = value; },
@@ -410,7 +409,7 @@ async function authenticatePropertyGuru() {
         };
       }
       if (!window.sessionStorage) {
-        const storage: any = {};
+        const storage: Record<string, string> = {};
         window.sessionStorage = {
           getItem: (key: string) => storage[key] || null,
           setItem: (key: string, value: string) => { storage[key] = value; },
@@ -426,36 +425,43 @@ async function authenticatePropertyGuru() {
 
     // 16. CRITICAL: Ensure IndexedDB is available (Cloudflare may check this)
     if (!window.indexedDB) {
-      (window as any).indexedDB = {
-        open: () => Promise.reject(new Error('IndexedDB not available')),
-      };
+      Object.defineProperty(window, 'indexedDB', {
+        value: { open: () => Promise.reject(new Error('IndexedDB not available')) },
+        configurable: true,
+      });
     }
 
     // 17. CRITICAL: Ensure Web Crypto API is available (Cloudflare uses this)
     if (!window.crypto || !window.crypto.subtle) {
-      (window as any).crypto = {
-        getRandomValues: (arr: any) => {
-          for (let i = 0; i < arr.length; i++) {
-            arr[i] = Math.floor(Math.random() * 256);
+      Object.defineProperty(window, 'crypto', {
+        value: {
+          getRandomValues: <T extends ArrayBufferView | null>(arr: T): T => {
+          if (arr && 'length' in arr) {
+            const typedArray = arr as Uint8Array;
+            for (let i = 0; i < typedArray.length; i++) {
+              typedArray[i] = Math.floor(Math.random() * 256);
+            }
           }
           return arr;
+          },
+          subtle: {
+            digest: () => Promise.reject(new Error('SubtleCrypto not available')),
+          },
+          randomUUID: () => {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+              const r = Math.random() * 16 | 0;
+              const v = c === 'x' ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          },
         },
-        subtle: {
-          digest: () => Promise.reject(new Error('SubtleCrypto not available')),
-        },
-        randomUUID: () => {
-          return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-          });
-        },
-      };
+        configurable: true,
+      });
     }
 
     // 13. Canvas fingerprinting protection (add noise)
     const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(type?: string, quality?: any) {
+    HTMLCanvasElement.prototype.toDataURL = function(type?: string, quality?: number) {
       const context = this.getContext('2d');
       if (context) {
         const imageData = context.getImageData(0, 0, this.width, this.height);
@@ -517,7 +523,6 @@ async function authenticatePropertyGuru() {
 
   // MANUAL CLOUDFLARE BYPASS: If in headed mode, wait for user to manually complete Cloudflare
   if (!isHeadless) {
-    const pageContent = await page.content().catch(() => '') || '';
     const pageText = await page.textContent('body').catch(() => '') || '';
     const hasCloudflareChallenge = isPropertyGuruCloudflareBlocked(pageText) ||
                                    pageText.length < 10000;
@@ -683,12 +688,12 @@ async function authenticatePropertyGuru() {
   if (flaresolverrSucceeded) {
     console.log('   🔍 Verifying Flaresolverr cookies were applied...');
     const cookiesAfterFlaresolverr = await context.cookies();
-    const cfCookies = cookiesAfterFlaresolverr.filter((c: any) =>
+    const cfCookies = cookiesAfterFlaresolverr.filter((c) =>
       ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
     );
     console.log(`   📊 Found ${cfCookies.length} Cloudflare cookies in context`);
     if (cfCookies.length > 0) {
-      console.log(`   🍪 Cloudflare cookies: ${cfCookies.map((c: any) => `${c.name} (domain: ${c.domain || 'default'}, path: ${c.path || '/'})`).join(', ')}`);
+      console.log(`   🍪 Cloudflare cookies: ${cfCookies.map((c) => `${c.name} (domain: ${c.domain || 'default'}, path: ${c.path || '/'})`).join(', ')}`);
     } else {
       console.log('   ⚠️  Warning: No Cloudflare cookies found after Flaresolverr!');
     }
@@ -795,7 +800,7 @@ async function authenticatePropertyGuru() {
 
         // Check current cookies
         const cookiesAfterNav = await context.cookies();
-        const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) =>
+        const cfCookiesAfterNav = cookiesAfterNav.filter((c) =>
           ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
         );
         console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
@@ -834,7 +839,7 @@ async function authenticatePropertyGuru() {
 
     // Verify cookies are still present after navigation
     const cookiesAfterNav = await context.cookies();
-    const cfCookiesAfterNav = cookiesAfterNav.filter((c: any) =>
+    const cfCookiesAfterNav = cookiesAfterNav.filter((c) =>
       ['__cf_bm', 'cf_clearance', '__cfduid'].some(cfName => c.name.toLowerCase().includes(cfName.toLowerCase()))
     );
     console.log(`   📊 Cloudflare cookies after navigation: ${cfCookiesAfterNav.length}`);
@@ -939,7 +944,6 @@ async function authenticatePropertyGuru() {
   }
 
   // Get page content for final validation (only if not already checked above)
-  const finalPageContent = await page.content().catch(() => '') || '';
   const finalPageText = await page.textContent('body').catch(() => '') || '';
   const finalPageLength = finalPageText.length;
 

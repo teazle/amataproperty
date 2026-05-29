@@ -5,37 +5,26 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Card,CardContent,CardDescription,CardHeader,CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
-import { toast } from 'sonner';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Target, 
-  CheckCircle, 
-  XCircle, 
-  AlertCircle,
-  Clock,
-  BarChart3,
-  PieChart,
-  Activity,
-  Users,
-  MessageSquare,
-  Calendar,
-  DollarSign,
-  Percent,
-  ArrowUpRight,
-  ArrowDownRight,
-  RefreshCw,
-  Home
-} from 'lucide-react';
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
 import { useConversationSelectors } from '@/lib/stores/conversation-store';
 import { useGlobalStore } from '@/lib/stores/global-store';
+import {
+BarChart3,
+Calendar,
+CheckCircle,
+Clock,
+Home,
+RefreshCw,
+Target,
+TrendingUp,
+Users,
+XCircle
+} from 'lucide-react';
+import { useEffect,useState } from 'react';
 
 interface CoBrokingAnalytics {
   overview: {
@@ -82,7 +71,7 @@ export default function CoBrokingAnalyticsPage() {
   const [analytics, setAnalytics] = useState<CoBrokingAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [timeRange, setTimeRange] = useState('7d');
-  const [selectedMetric, setSelectedMetric] = useState('successRate');
+  const [_selectedMetric, _setSelectedMetric] = useState('successRate');
   
   // Zustand selectors
   const conversations = useConversationSelectors.useFilteredConversations();
@@ -142,7 +131,7 @@ export default function CoBrokingAnalyticsPage() {
           title: 'Analytics Updated',
           message: 'Co-broking analytics refreshed successfully',
         });
-      } catch (error: any) {
+      } catch (error) {
         addNotification({
           type: 'error',
           title: 'Analytics Failed',

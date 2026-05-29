@@ -42,10 +42,10 @@ export async function GET(request: NextRequest) {
       limit,
       offset
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error getting LinkedIn history:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to get history' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to get history' },
       { status: 500 }
     );
   }

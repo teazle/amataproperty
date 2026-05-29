@@ -94,7 +94,7 @@ async function scrapeNewArticle() {
   const sessionId = await createScrapeSession();
   console.log(`   Session ID: ${sessionId}`);
   
-  let scrapedArticle: any = null;
+  let scrapedArticle: unknown = null;
   
   // Scrape only 1 page - we'll limit to 1 article in the loop
   await scrapeEdgePropMCP(
@@ -148,7 +148,7 @@ async function scrapeNewArticle() {
   return scrapedArticle;
 }
 
-async function verifyWithBrowser(article: any) {
+async function verifyWithBrowser(article: unknown) {
   console.log('\n🔍 Verifying article with browser...');
   
   const articleUrl = `https://www.edgeprop.sg/${article.path}`;
@@ -326,7 +326,7 @@ async function verifyWithBrowser(article: any) {
 async function main() {
   try {
     // Step 1: Delete today's articles
-    const deleteResult = await deleteTodayArticles();
+    const _deleteResult = await deleteTodayArticles();
     
     // Step 2: Scrape a new article
     const newArticle = await scrapeNewArticle();

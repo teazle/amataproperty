@@ -62,19 +62,19 @@ async function debugPageStructure() {
       const result = {
         title: document.title,
         url: window.location.href,
-        h1Elements: [] as any[],
+        h1Elements: [] as unknown[],
         author: undefined as string | undefined,
         dateElements: [] as string[],
         contentDivs: 0,
         paragraphs: 0,
         mainContent: undefined as string | undefined,
-        selectors: {} as any,
+        selectors: {} as unknown,
         bodyClasses: document.body.className,
         allParagraphs: [] as string[]
       };
       
       // H1 elements
-      document.querySelectorAll('h1').forEach((h1, index) => {
+      document.querySelectorAll('h1').forEach((h1, _index) => {
         result.h1Elements.push({
           text: h1.textContent?.trim().substring(0, 100),
           className: h1.className,
@@ -185,7 +185,7 @@ async function debugPageStructure() {
     console.log(`  Main Content Preview: ${analysis.mainContent}`);
     
     console.log('\n📋 Found Selectors:');
-    Object.entries(analysis.selectors).forEach(([selector, data]: [string, any]) => {
+    Object.entries(analysis.selectors).forEach(([selector, data]: [string, { count: number; firstText: string; className: string }]) => {
       console.log(`  ${selector}: ${data.count} elements - "${data.firstText}" (${data.className})`);
     });
     

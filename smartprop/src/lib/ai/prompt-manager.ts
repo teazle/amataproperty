@@ -43,7 +43,7 @@ export async function getAllPrompts() {
     }
 
     return prompts || [];
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error fetching active prompt:', error);
     return [];
   }

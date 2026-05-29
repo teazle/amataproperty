@@ -48,7 +48,7 @@ export type CombinedProgressCallback = (progress: CombinedProgress) => void;
 export async function scrapeEdgePropCombined(
   maxPages: number,
   onProgress: CombinedProgressCallback,
-  sessionId?: string
+  _sessionId?: string
 ): Promise<CombinedArticle[]> {
   console.log('Starting combined EdgeProp scraper (Simple discovery + MCP content)...');
   
@@ -433,7 +433,7 @@ export async function scrapeEdgePropCombined(
               console.log(`❌ Combined scraper: Failed to extract content: ${discoveredArticle.title}`);
             }
             
-          } catch (error: unknown) {
+          } catch (error) {
             articlesFailed++;
             console.error(`Combined scraper: Failed to scrape article ${discoveredArticle.title}:`, error);
           }

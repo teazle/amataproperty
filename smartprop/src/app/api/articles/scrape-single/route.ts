@@ -2,10 +2,34 @@
  * API endpoint for scraping a single article by URL
  */
 
-import { NextRequest } from 'next/server';
-import { scrapeEdgePropMCP, scrapeSingleArticleMCP } from '@/lib/scraper/edgeprop-mcp-scraper';
-import { scrapeEdgeProp } from '@/lib/scraper/edgeprop-scraper';
 import * as db from '@/lib/db/articles';
+import { scrapeSingleArticleMCP } from '@/lib/scraper/edgeprop-mcp-scraper';
+import { scrapeEdgeProp } from '@/lib/scraper/edgeprop-scraper';
+import { NextRequest } from 'next/server';
+
+interface ScrapedArticle {
+  nid: string;
+  title: string;
+  path: string;
+  author?: string;
+  category?: string | string[];
+  created?: string;
+  created_on?: string;
+  description?: string;
+  thumbnail?: string;
+  keywords?: string[];
+  word_count?: number;
+  reading_time_minutes?: number;
+  text_content?: string;
+  paragraphs?: string[];
+  images?: unknown[];
+  links?: unknown[];
+}
+
+interface ScrapeProgress {
+  message?: string;
+  articles?: ScrapedArticle[];
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,15 +56,15 @@ export async function POST(request: NextRequest) {
     const sessionId = await db.createScrapeSession();
     console.log('📊 Created scrape session:', sessionId);
     
-    let progress: any = {};
-    let articles: any[] = [];
+    let progress: ScrapeProgress = {};
+    let articles: ScrapedArticle[] = [];
     
     if (scraperType === 'mcp') {
       // Use the dedicated single article scraper
       const article = await scrapeSingleArticleMCP(
         url,
         (progressUpdate) => {
-          progress = progressUpdate;
+          progress = progressUpdate as ScrapeProgress;
           console.log('Progress:', progressUpdate.message);
         },
         sessionId,
@@ -55,7 +79,7 @@ export async function POST(request: NextRequest) {
       articles = await scrapeEdgeProp(
         1, // maxPages: 1
         (progressUpdate) => {
-          progress = progressUpdate;
+          progress = progressUpdate as ScrapeProgress;
           console.log('Progress:', progressUpdate.message);
         },
         sessionId
@@ -88,7 +112,13 @@ export async function POST(request: NextRequest) {
     console.log(`✅ Single article scraped successfully using ${scraperType.toUpperCase()} scraper:`, article.title);
     
     // Return different response structure based on scraper type
-    const responseData: any = {
+    const responseData: {
+      success: boolean;
+      scraperType: string;
+      sessionId: string;
+      message: string;
+      article?: Record<string, unknown>;
+    } = {
       success: true,
       scraperType,
       sessionId,
@@ -132,12 +162,12 @@ export async function POST(request: NextRequest) {
     
     return Response.json(responseData);
     
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Single article scrape failed:', error);
     
     return Response.json({ 
       error: 'Failed to scrape article', 
-      details: error.message 
+      details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
   }
 }

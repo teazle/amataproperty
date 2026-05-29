@@ -1,21 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getLinkedInSettings, getTodayMessageCount } from '@/lib/linkedin/tracker';
-import {
-  readLockFile,
-  hasStorageState,
-  isProcessRunning,
-  getLockAgeMs,
-  getLinkedInMaxRunMs,
-  isLinkedInLockExpired
-} from '@/lib/linkedin/storage';
 import { getSchedulerStatus } from '@/lib/linkedin/scheduler';
+import {
+getLinkedInMaxRunMs,
+getLockAgeMs,
+hasStorageState,
+isLinkedInLockExpired,
+isProcessRunning,
+readLockFile
+} from '@/lib/linkedin/storage';
+import { getLinkedInSettings,getTodayMessageCount } from '@/lib/linkedin/tracker';
 import { getSupabaseClient } from '@/workers/supa';
+import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * GET /api/linkedin/status
  * Get current LinkedIn automation status
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const supabase = getSupabaseClient();
 
@@ -110,10 +110,10 @@ export async function GET(request: NextRequest) {
       reauth,
       lockData: lockData || null
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error getting LinkedIn status:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to get status' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to get status' },
       { status: 500 }
     );
   }

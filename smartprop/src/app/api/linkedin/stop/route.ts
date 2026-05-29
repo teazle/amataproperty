@@ -29,8 +29,8 @@ export async function POST() {
       } else {
         killResult = 'process already exited';
       }
-    } catch (error: any) {
-      killResult = `error: ${error.message}`;
+    } catch (error) {
+      killResult = `error: ${(error instanceof Error ? error.message : String(error))}`;
       console.error(`❌ Error sending SIGTERM to PID ${lockData.pid}:`, error);
     }
   }

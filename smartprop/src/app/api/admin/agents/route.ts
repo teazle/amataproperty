@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil((totalCount || 0) / limit)
       }
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching agents:', error);
     return NextResponse.json(
       { error: 'Failed to fetch agents' },

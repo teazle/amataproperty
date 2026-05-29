@@ -92,8 +92,8 @@ async function run(): Promise<void> {
       );
       await page.getByRole('button', { name: 'Sign in', exact: true }).first().click({ timeout: 10000 });
       console.log('🔑 Submitted LinkedIn credentials from .env');
-    } catch (error: any) {
-      console.warn('⚠️ Could not auto-submit credentials; complete login manually:', error.message);
+    } catch (error) {
+      console.warn('⚠️ Could not auto-submit credentials; complete login manually:', (error instanceof Error ? error.message : String(error)));
     }
   }
   console.log('👀 Complete any remaining login challenge manually in the visible browser window');
@@ -144,8 +144,8 @@ async function run(): Promise<void> {
       path.join(storageDir, 'linkedin.sessionStorage.json'),
       JSON.stringify(sessionStorage, null, 2)
     );
-  } catch (error: any) {
-    console.warn('⚠️ Could not save sessionStorage:', error.message);
+  } catch (error) {
+    console.warn('⚠️ Could not save sessionStorage:', (error instanceof Error ? error.message : String(error)));
   }
 
   console.log('💾 Saved LinkedIn session successfully');

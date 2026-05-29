@@ -9,7 +9,7 @@ interface ProgressInfo {
 }
 
 interface TestResult {
-    article: any;
+    article: unknown;
     originalUrl: string;
     scrapedUrl: string;
 }

@@ -195,7 +195,7 @@ export const useConversationStore = create<ConversationStore>()(
           // Process with AI (this would call your existing AI logic)
           // await processMessageWithAI(conversation.id, message);
 
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error processing incoming message:', error);
         } finally {
           set((state) => {
@@ -221,7 +221,7 @@ export const useConversationStore = create<ConversationStore>()(
 
           get().addMessage(conversation.id, message);
 
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error processing outgoing message:', error);
         }
       },
@@ -263,7 +263,7 @@ export const useConversationStore = create<ConversationStore>()(
             });
             state.lastUpdate = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error fetching conversations:', error);
         } finally {
           set((state) => {
@@ -281,7 +281,7 @@ export const useConversationStore = create<ConversationStore>()(
             state.conversations.set(conversationId, conversation);
             state.lastUpdate = new Date().toISOString();
           });
-        } catch (error: unknown) {
+        } catch (error) {
           console.error('Error refreshing conversation:', error);
         }
       },

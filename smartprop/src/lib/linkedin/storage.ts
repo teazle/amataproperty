@@ -143,9 +143,9 @@ export async function isProcessRunning(pid: number): Promise<boolean> {
     // Send signal 0 to check if process exists (doesn't actually kill it)
     process.kill(pid, 0);
     return true;
-  } catch (error: any) {
+  } catch (error) {
     // If error code is ESRCH, process doesn't exist
-    if (error.code === 'ESRCH') {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
       return false;
     }
     // Other errors might mean we don't have permission, assume running
@@ -161,8 +161,8 @@ export function getLockAgeMs(lockData: LinkedInLockData, now = Date.now()): numb
 export function getLinkedInMaxRunMs(): number {
   const minutes = process.env.LINKEDIN_MAX_RUN_MINUTES
     ? Number.parseInt(process.env.LINKEDIN_MAX_RUN_MINUTES, 10)
-    : 120;
-  const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 120;
+    : 240;
+  const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 240;
   return safeMinutes * 60 * 1000;
 }
 

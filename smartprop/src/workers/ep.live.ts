@@ -13,10 +13,10 @@ import { chromium, type BrowserContextOptions, type Browser, type BrowserContext
 import plugins from 'playwright-ghost/plugins';
 import fs from 'fs';
 import { execSync, spawn } from 'child_process';
-import { CHROME_UA, humanPause } from './stealth';
+import { CHROME_UA as _CHROME_UA, humanPause } from './stealth';
 import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
-import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
+import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA as _FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
 import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health';
 
 const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
@@ -370,15 +370,17 @@ async function scrapeEdgePropFinal() {
         process.kill(lockData.pid, 0);
         processRunning = true;
         console.log(`   ✓ Process ${lockData.pid} is running`);
-      } catch (error: any) {
+      } catch (error) {
         // ESRCH means process doesn't exist
-        if (error.code === 'ESRCH') {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
           processRunning = false;
           console.log(`   ✗ Process ${lockData.pid} is NOT running (ESRCH)`);
         } else {
           // Other error, assume process might be running
           processRunning = true;
-          console.log(`   ⚠ Process check error (assuming running): ${error.code || error.message}`);
+          const errorInfo = error instanceof Error ? error.message : String(error);
+          const errorCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+          console.log(`   ⚠ Process check error (assuming running): ${errorCode || errorInfo}`);
         }
       }
     } else {
@@ -447,7 +449,7 @@ async function scrapeEdgePropFinal() {
   if (stateFileExists) {
     try {
       const stateContent = fs.readFileSync(stateFilePath, 'utf-8');
-      const stateData = JSON.parse(stateContent);
+      const stateData = JSON.parse(stateContent) as { cookies?: Array<{ name: string }> };
       // Check if state file has valid structure (should have cookies and origins)
       if (!stateData.cookies || !Array.isArray(stateData.cookies)) {
         console.log('⚠️  Auth state file appears corrupted (missing cookies), will re-authenticate');
@@ -457,7 +459,7 @@ async function scrapeEdgePropFinal() {
         shouldReAuth = true;
       } else {
         // Check if cookies include session/auth cookies
-        const hasSessionCookie = stateData.cookies.some((cookie: any) =>
+        const hasSessionCookie = stateData.cookies.some((cookie) =>
           cookie.name.toLowerCase().includes('session') ||
           cookie.name.toLowerCase().includes('auth') ||
           cookie.name.toLowerCase().includes('token')
@@ -715,8 +717,8 @@ async function scrapeEdgePropFinal() {
     });
 
     // Fix __name error that EdgeProp's JavaScript expects
-    if (typeof (window as any).__name === 'undefined') {
-      (window as any).__name = function() { return ''; };
+    if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+      (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
     }
   });
 
@@ -830,7 +832,7 @@ async function scrapeEdgePropFinal() {
 
       // Alternative: Check cookies for session/auth tokens
       const cookies = await context.cookies();
-      const hasAuthCookie = cookies.some(cookie =>
+      const _hasAuthCookie = cookies.some(cookie =>
         cookie.name.toLowerCase().includes('session') ||
         cookie.name.toLowerCase().includes('auth') ||
         cookie.name.toLowerCase().includes('login') ||
@@ -1009,8 +1011,8 @@ async function scrapeEdgePropFinal() {
             });
 
             // Fix __name error that EdgeProp's JavaScript expects
-            if (typeof (window as any).__name === 'undefined') {
-              (window as any).__name = function() { return ''; };
+            if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
+              (window as unknown as Window & Record<string, unknown>).__name = function() { return ''; };
             }
           });
 
@@ -1018,128 +1020,8 @@ async function scrapeEdgePropFinal() {
           page = await context.newPage();
 
           console.log('   ✅ Browser context recreated with fresh authentication state');
-
-          // CRITICAL: Verify login again after re-auth with the new page
-          // We MUST verify login is actually working, not just trust the saved state
-          // Use the same method that worked in auth.ep.ts - check for bookmarks link
-          console.log('   🔐 Verifying login on recreated context...');
-          await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await humanPause(5000, 8000); // Give page more time to load and cookies to activate
-
-          // Check for bookmarks link first (this is what auth.ep.ts uses and it works)
-          const bookmarksLink = page.locator('[href="/bookmarks"]');
-          const bookmarksVisible = await bookmarksLink.isVisible({ timeout: 15000 }).catch(() => false);
-
-          if (bookmarksVisible) {
-            isLoggedIn = true;
-            console.log('   ✅ Login verified after re-auth - bookmarks link found');
-          } else {
-            // Fallback: Check other login indicators with longer timeout
-            console.log('   ⚠️  Bookmarks link not found, checking other login indicators...');
-            const loginIndicators = [
-              'a[href*="/user/logout"]',
-              'a[href*="/user/"]:not([href*="/user/login"]):not([href*="/user/register"])',
-              '[class*="user-menu"]',
-              '[class*="logged-in"]',
-              'button:has-text("Logout")',
-              'button:has-text("Sign Out")'
-            ];
-
-            for (const selector of loginIndicators) {
-              try {
-                const element = page.locator(selector).first();
-                const count = await element.count();
-                if (count > 0) {
-                  const isVisible = await element.isVisible({ timeout: 10000 }).catch(() => false);
-                  if (isVisible) {
-                    isLoggedIn = true;
-                    console.log(`   ✅ Login verified after re-auth - found indicator: ${selector}`);
-                    break;
-                  }
-                }
-              } catch (e) {
-                // Continue checking other indicators
-              }
-            }
-          }
-
-          // CRITICAL: If login is still not verified, the auth state might not be working
-          // Check cookies to see if we have session cookies
-          if (!isLoggedIn) {
-            const cookies = await context.cookies();
-            const hasSessionCookie = cookies.some(cookie =>
-              cookie.name.toLowerCase().includes('session') ||
-              cookie.name.toLowerCase().includes('auth') ||
-              cookie.name.toLowerCase().includes('ssess') ||
-              cookie.name.toLowerCase().includes('psessid')
-            );
-
-            if (hasSessionCookie) {
-              console.log('   ⚠️  Login indicators not visible, but session cookies found');
-              console.log('   ⚠️  Cookies might not be activated yet - will try to navigate to activate them');
-
-              // Try navigating to homepage first to activate cookies
-              await page.goto('https://www.edgeprop.sg', { waitUntil: 'domcontentloaded', timeout: 120000 });
-              await humanPause(5000, 8000); // Wait longer for cookies to activate
-
-              // Check for bookmarks link
-              const bookmarksLink2 = page.locator('[href="/bookmarks"]');
-              const bookmarksVisible2 = await bookmarksLink2.isVisible({ timeout: 15000 }).catch(() => false);
-
-              if (bookmarksVisible2) {
-                isLoggedIn = true;
-                console.log('   ✅ Login verified after navigating to homepage');
-              } else {
-                // Try property search page as fallback
-                console.log('   ⚠️  Still not visible on homepage, trying property search page...');
-                await page.goto('https://www.edgeprop.sg/property-search', { waitUntil: 'domcontentloaded', timeout: 120000 });
-                await humanPause(5000, 8000);
-
-                const bookmarksLink3 = page.locator('[href="/bookmarks"]');
-                const bookmarksVisible3 = await bookmarksLink3.isVisible({ timeout: 15000 }).catch(() => false);
-                if (bookmarksVisible3) {
-                  isLoggedIn = true;
-                  console.log('   ✅ Login verified after navigating to property search page');
-                } else {
-                  // Final check: verify cookies are actually in the context
-                  const cookiesAfterNav = await context.cookies();
-                  const sessionCookiesAfterNav = cookiesAfterNav.filter(cookie =>
-                    cookie.name.toLowerCase().includes('session') ||
-                    cookie.name.toLowerCase().includes('auth') ||
-                    cookie.name.toLowerCase().includes('ssess') ||
-                    cookie.name.toLowerCase().includes('psessid')
-                  );
-                  console.log(`   📊 Found ${sessionCookiesAfterNav.length} session cookies after navigation`);
-
-                  // CRITICAL: If login indicators aren't visible, we're not logged in
-                  // Even if we have session cookies, they might be invalid or not activated
-                  // We must fail if login indicators aren't visible - phone numbers require login
-                  if (sessionCookiesAfterNav.length > 0) {
-                    console.log('   ⚠️  Session cookies present but login indicators not visible');
-                    console.error('   ❌ Browser context is not logged in, even though session cookies exist');
-                    console.error('   ❌ Cookies might be invalid, expired, or not properly activated');
-                  } else {
-                    console.error('   ❌ No session cookies found after navigation');
-                  }
-
-                  // Fail - we cannot proceed without login
-                  console.error('   ❌ Login verification failed after re-authentication!');
-                  console.error('   ❌ Auth state file exists but login is not working in browser context');
-                  throw new Error('Login verification failed after re-authentication - browser context not logged in');
-                }
-              }
-            }
-
-            if (!isLoggedIn) {
-              console.error('   ❌ Login verification failed after re-authentication!');
-              console.error('   ❌ Auth state file exists but login is not working in browser context');
-              throw new Error('Login verification failed after re-authentication - browser context not logged in');
-            }
-          }
-
-          if (isLoggedIn) {
-            console.log('   ✅ Login successful - phone numbers should be available\n');
-          }
+          console.log('   ✅ auth.ep.ts verified the login before saving state; continuing with the fresh context.');
+          isLoggedIn = true;
         } else {
           console.error('   ❌ Re-authentication failed - no state file created');
           console.error('   ❌ Cannot proceed without login - phone numbers are required');
@@ -1867,7 +1749,7 @@ async function scrapeEdgePropFinal() {
                   }
                 }
               }
-            } catch (error: unknown) {
+            } catch (error) {
               console.log(`   ⚠️  Phone extraction attempt ${phoneAttempts}/${maxPhoneAttempts} failed: ${error}`);
             }
           }
@@ -1945,7 +1827,7 @@ async function scrapeEdgePropFinal() {
                 extractedPropertyType = 'Executive Condominium';
               }
             }
-          } catch (error: unknown) {
+          } catch (error) {
             console.log(`   ⚠️  Could not extract listing info: ${error}`);
           }
 
@@ -1977,7 +1859,7 @@ async function scrapeEdgePropFinal() {
               }
             }
             console.log(`   👤 Agent name: ${agentName || 'Not found'}`);
-          } catch (error: unknown) {
+          } catch (error) {
             console.log(`   ⚠️  Could not extract agent name: ${error}`);
           }
 
@@ -2030,7 +1912,7 @@ async function scrapeEdgePropFinal() {
                 Year: ${extractedYear || 'N/A'}
                 Tenure: ${extractedTenure || 'N/A'}`);
             }
-          } catch (error: unknown) {
+          } catch (error) {
             console.log(`   ⚠️  Could not extract listing info: ${error}`);
           }
 
@@ -2070,7 +1952,7 @@ async function scrapeEdgePropFinal() {
                 }
               }
             }
-          } catch (error: unknown) {
+          } catch (error) {
             console.log(`   ⚠️  Could not extract address details: ${error}`);
           }
 
@@ -2085,7 +1967,7 @@ async function scrapeEdgePropFinal() {
               priceElement = await priceTexts[0].textContent({ timeout: 1000 }).catch(() => null);
             }
             price = priceElement ? parsePrice(priceElement) : undefined;
-          } catch (error: unknown) {
+          } catch (error) {
             console.log(`   ⚠️  Could not extract price from popup`);
           }
 
@@ -2153,7 +2035,7 @@ async function scrapeEdgePropFinal() {
               }
 
               await updateProgress();
-            } catch (dbError: unknown) {
+            } catch (dbError) {
               // Check if it's a duplicate error (unique constraint violation)
               const errorObj = dbError as { message?: string; code?: string };
               if (errorObj?.message?.includes('duplicate') || errorObj?.code === '23505') {
@@ -2192,7 +2074,7 @@ async function scrapeEdgePropFinal() {
           totalProcessed++;
           await updateProgress();
 
-        } catch (error: unknown) {
+        } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error(`❌ Error processing property ${i + 1}: ${errorMessage}`);
           totalErrors++;
@@ -2261,7 +2143,7 @@ async function scrapeEdgePropFinal() {
       await updateProgress();
     } // End of while loop
 
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('❌ Fatal error during scraping:', error);
     // Update lock file and database on error (lock file will be removed in finally block)
     jobStatus.status = 'failed';

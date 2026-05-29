@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+
 
 /**
  * LinkedIn Catch-Up Message Automation Worker
@@ -18,7 +18,6 @@ import {
   writeLockFile,
   readLockFile,
   deleteLockFile,
-  getLockFilePath,
   LinkedInLockData,
   isProcessRunning,
   getLinkedInMaxRunMs
@@ -29,12 +28,39 @@ import {
   updateLinkedInMessage,
   getTodayMessageCount,
   updateDailyStats,
-  getLinkedInMessageRecord
+  getLinkedInMessageRecord,
+  LinkedInSettings
 } from '@/lib/linkedin/tracker';
 import { getSupabaseClient } from '@/workers/supa';
 import { chromium as coreChromium, Page, Locator, BrowserContext } from 'playwright-core';
+import type { Cookie } from 'playwright-core';
 
 type SolveResult = { success: boolean; token?: string; error?: string };
+type ErrorLike = {
+  name?: string;
+  message: string;
+  stack?: string;
+  cause?: unknown;
+};
+type EditableElement = HTMLElement & {
+  value?: string;
+  disabled?: boolean;
+};
+type GrecaptchaClient = {
+  callback?: (token: string) => void;
+  V?: { callback?: (token: string) => void };
+  W?: { callback?: (token: string) => void };
+};
+type GrecaptchaConfig = {
+  clients?: Record<string, GrecaptchaClient>;
+};
+type IframeDebugInfo = {
+  html: string;
+  bodyText: string;
+  allInputs: Array<{ type: string; id: string; className: string; visible: boolean }>;
+  allButtons: Array<{ text?: string; className: string; visible: boolean }>;
+  allClickable: Array<{ tag: string; role: string | null; text?: string; className: string; visible: boolean }>;
+};
 
 type BrowserUseBrowser = {
   id: string;
@@ -43,6 +69,103 @@ type BrowserUseBrowser = {
 };
 
 const BROWSER_USE_API = 'https://api.browser-use.com/api/v3';
+
+function toErrorLike(error: unknown): ErrorLike {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      cause: error.cause,
+    };
+  }
+
+  return {
+    message: typeof error === 'string' ? error : JSON.stringify(error) || String(error),
+  };
+}
+
+function getErrorMessage(error: unknown): string {
+  return toErrorLike(error).message || 'Unknown error';
+}
+
+function getErrorName(error: unknown): string | undefined {
+  return toErrorLike(error).name;
+}
+
+function getErrorStack(error: unknown): string | undefined {
+  return toErrorLike(error).stack;
+}
+
+function getErrorCause(error: unknown): unknown {
+  return toErrorLike(error).cause;
+}
+
+function readEditableElementText(el: HTMLElement | SVGElement): string {
+  const target = el as EditableElement;
+  return target.innerText || target.textContent || target.value || '';
+}
+
+function getEditableElementTagName(el: HTMLElement | SVGElement): string {
+  return el.tagName?.toLowerCase() || '';
+}
+
+function isContentEditableElement(el: HTMLElement | SVGElement): boolean {
+  return (el as EditableElement).contentEditable === 'true';
+}
+
+function setEditableElementText(el: HTMLElement | SVGElement, text: string): void {
+  const target = el as EditableElement;
+  target.focus();
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+    const prototype = target.tagName === 'TEXTAREA'
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    valueSetter?.call(target, text);
+  } else {
+    const formattedHTML = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n\n+/g, '<br><br>')
+      .replace(/\n/g, '<br>');
+    target.innerHTML = formattedHTML;
+    target.textContent = text;
+  }
+
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(false);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+
+  target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+  target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+  target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+}
+
+function clearEditableElement(el: HTMLElement | SVGElement): void {
+  const target = el as EditableElement;
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+    target.value = '';
+  } else {
+    target.textContent = '';
+    target.innerText = '';
+    target.innerHTML = '';
+  }
+}
+
+function isSendButtonDisabled(el: HTMLElement | SVGElement): boolean {
+  const target = el as EditableElement;
+  return Boolean(
+    target.disabled ||
+    target.getAttribute('aria-disabled') === 'true' ||
+    target.classList.contains('artdeco-button--disabled') ||
+    target.hasAttribute('disabled')
+  );
+}
 
 async function fillInputValue(page: Page, selector: string, value: string): Promise<void> {
   const success = await page.evaluate(
@@ -128,12 +251,12 @@ async function handleAccountPicker(page: Page): Promise<void> {
       console.log('   ✏️ Account picker clicked via DOM fallback');
       await humanPause(1000, 2000);
     }
-  } catch (error: any) {
+  } catch (error) {
     console.warn('   ⚠️ Unable to handle account picker:', (error as Error).message);
   }
 }
 
-async function waitForLandingPage(page: Page): Promise<boolean> {
+async function _waitForLandingPage(page: Page): Promise<boolean> {
   const fallbackPattern = /linkedin\.com\/(feed|in|mynetwork|checkpoint|login(-submit)?)/i;
   const timeouts = [60000, 30000];
   for (const timeout of timeouts) {
@@ -237,16 +360,19 @@ async function navigateWithRecovery(
     try {
       await page.goto(url, { waitUntil, timeout });
       return;
-    } catch (error: any) {
-      const message = error?.message || String(error);
+    } catch (error) {
+      const message = error instanceof Error ? getErrorMessage(error) : String(error);
       const interrupted = message.includes('interrupted by another navigation');
       const aborted = message.includes('net::ERR_ABORTED');
-      if (aborted) {
-        await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+      const timedOut = message.includes('Timeout');
+      if (aborted || timedOut) {
+        if (aborted) {
+          await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+        }
         const currentUrl = page.url();
         const targetPath = new URL(url).pathname;
         if (currentUrl.includes(targetPath) || (targetPath.includes('/messaging/compose/') && currentUrl.includes('/messaging/compose/'))) {
-          console.warn(`   ⚠️  Navigation to ${label} returned net::ERR_ABORTED but landed on ${currentUrl}; continuing`);
+          console.warn(`   ⚠️  Navigation to ${label} ${timedOut ? 'timed out' : 'returned net::ERR_ABORTED'} but landed on ${currentUrl}; continuing`);
           return;
         }
       }
@@ -324,8 +450,8 @@ async function stopLinkedInCloudBrowser(browserId: string | undefined) {
       `Stop Browser Use cloud browser ${browserId}`
     );
     console.log(`   ☁️  Stopped Browser Use cloud browser ${browserId}`);
-  } catch (error: any) {
-    console.warn(`   ⚠️  Failed to stop Browser Use cloud browser ${browserId}: ${error.message}`);
+  } catch (error) {
+    console.warn(`   ⚠️  Failed to stop Browser Use cloud browser ${browserId}: ${getErrorMessage(error)}`);
   }
 }
 
@@ -343,7 +469,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
-async function resolveBrowserUseCdpWs(cdpUrl: string): Promise<string> {
+async function _resolveBrowserUseCdpWs(cdpUrl: string): Promise<string> {
   const versionUrl = `${cdpUrl.replace(/\/$/, '')}/json/version`;
   const response = await fetch(versionUrl);
   if (!response.ok) {
@@ -365,12 +491,12 @@ async function restoreStorageStateIntoExistingContext(context: BrowserContext, s
   }
 
   const state = JSON.parse(fs.readFileSync(storagePath, 'utf-8')) as {
-    cookies?: Array<Record<string, any>>;
+    cookies?: Cookie[];
     origins?: Array<{ origin: string; localStorage?: Array<{ name: string; value: string }> }>;
   };
 
   if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-    await context.addCookies(state.cookies as any);
+    await context.addCookies(state.cookies);
     console.log(`   💾 Restored ${state.cookies.length} cookies into remote browser context`);
   }
 
@@ -460,9 +586,9 @@ async function solveRecaptchaWithNopecha(page: Page): Promise<SolveResult> {
 
       candidates.forEach(setValue);
 
-      const cfg = (window as any).___grecaptcha_cfg;
+      const cfg = (window as unknown as Window & { ___grecaptcha_cfg?: GrecaptchaConfig }).___grecaptcha_cfg;
       if (cfg?.clients) {
-        Object.values(cfg.clients).forEach((client: any) => {
+        Object.values(cfg.clients).forEach((client) => {
           const cb = client?.callback || client?.V?.callback || client?.W?.callback;
           if (typeof cb === 'function') {
             try {
@@ -481,9 +607,9 @@ async function solveRecaptchaWithNopecha(page: Page): Promise<SolveResult> {
     }
 
     return { success: true, token };
-  } catch (error: any) {
-    console.log(`   ❌ NopeCHA solve error: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    console.log(`   ❌ NopeCHA solve error: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   }
 }
 
@@ -522,17 +648,17 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
       label: 'LinkedIn login'
     });
     console.log('   ✅ Navigation to login page completed');
-  } catch (error: any) {
-    console.error('   ❌ Error during login navigation:', error.message);
+  } catch (error) {
+    console.error('   ❌ Error during login navigation:', getErrorMessage(error));
     console.error('   📊 Error details:', {
-      name: error.name,
-      message: error.message,
-      stack: error.stack?.split('\n').slice(0, 5).join('\n')
+      name: getErrorName(error),
+      message: getErrorMessage(error),
+      stack: getErrorStack(error)?.split('\n').slice(0, 5).join('\n')
     });
 
-    if (error.message.includes('closed') || error.message.includes('detached')) {
+    if (getErrorMessage(error).includes('closed') || getErrorMessage(error).includes('detached')) {
       console.error('   ❌ Browser/context/page closure detected');
-      throw new Error(`Browser/context/page closed before navigation: ${error.message}`);
+      throw new Error(`Browser/context/page closed before navigation: ${getErrorMessage(error)}`);
     }
     throw error;
   }
@@ -607,8 +733,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
 
   try {
     await loginButton.click({ timeout: 10000 });
-  } catch (clickError: any) {
-    console.warn(`   ⚠️  Normal login button click failed (${clickError.message}); dispatching DOM click`);
+  } catch (clickError) {
+    console.warn(`   ⚠️  Normal login button click failed (${getErrorMessage(clickError)}); dispatching DOM click`);
     await loginButton.dispatchEvent('click').catch(() => {});
     const submitted = await page.evaluate(() => {
       const isVisible = (element: Element | null) => {
@@ -839,8 +965,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
             }
           }
         }
-      } catch (e: any) {
-        console.log(`   ⚠️  Error checking selector "${selector}": ${e.message}`);
+      } catch (e) {
+        console.log(`   ⚠️  Error checking selector "${selector}": ${getErrorMessage(e)}`);
       }
     }
 
@@ -877,8 +1003,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
             // Continue
           }
         }
-      } catch (e: any) {
-        console.warn(`   ⚠️  Error checking all iframes: ${e.message}`);
+      } catch (e) {
+        console.warn(`   ⚠️  Error checking all iframes: ${getErrorMessage(e)}`);
       }
     }
 
@@ -908,8 +1034,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
         } else {
           console.log(`   ⚠️  NopeCHA could not solve automatically (${solveResult.error || 'unknown error'}), falling back to manual clicks`);
         }
-      } catch (e: any) {
-        console.log(`   ⚠️  NopeCHA solve attempt threw an error: ${e.message}`);
+      } catch (e) {
+        console.log(`   ⚠️  NopeCHA solve attempt threw an error: ${getErrorMessage(e)}`);
       }
     }
 
@@ -1102,7 +1228,7 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
 
               // First, debug what's actually in the iframe
               const iframeDebug = await frame.evaluate(() => {
-                const debug: any = {
+                const debug: IframeDebugInfo = {
                   html: document.documentElement.outerHTML.substring(0, 500),
                   bodyText: document.body?.textContent?.substring(0, 200) || '',
                   allInputs: Array.from(document.querySelectorAll('input')).map(i => ({
@@ -1125,7 +1251,7 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
                   }))
                 };
                 return debug;
-              });
+              }) as IframeDebugInfo;
 
               console.log('   📋 Iframe debug info:');
               console.log(`   📄 Body text preview: ${iframeDebug.bodyText}`);
@@ -1259,8 +1385,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
                 console.log('   ⚠️  Evaluate did not find clickable checkbox');
                 console.log('   💡 The iframe content may be different than expected');
               }
-            } catch (e: any) {
-              console.warn(`   ⚠️  Evaluate click failed: ${e.message}`);
+            } catch (e) {
+              console.warn(`   ⚠️  Evaluate click failed: ${getErrorMessage(e)}`);
             }
           }
 
@@ -1312,15 +1438,15 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
                         console.log('   ✅ Clicked checkbox');
                         checkboxClicked = true;
                         break;
-                      } catch (clickError: any) {
-                        console.log(`   ⚠️  Click failed: ${clickError.message}`);
+                      } catch (clickError) {
+                        console.log(`   ⚠️  Click failed: ${getErrorMessage(clickError)}`);
                       }
                     }
                   }
                 }
-              } catch (e: any) {
+              } catch (e) {
                 // Continue to next selector
-                console.log(`   ⚠️  Selector "${selector}" failed: ${e.message}`);
+                console.log(`   ⚠️  Selector "${selector}" failed: ${getErrorMessage(e)}`);
               }
             }
           }
@@ -1340,14 +1466,14 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
                 checkboxClicked = true;
                 await humanPause(1000, 2000);
               }
-            } catch (e: any) {
-              console.warn(`   ⚠️  Could not click in iframe: ${e.message}`);
+            } catch (e) {
+              console.warn(`   ⚠️  Could not click in iframe: ${getErrorMessage(e)}`);
             }
           }
           } // End of else block (checkbox challenge handling - inside iframe)
         }
-      } catch (e: any) {
-        console.warn(`   ⚠️  Could not access iframe: ${e.message}`);
+      } catch (e) {
+        console.warn(`   ⚠️  Could not access iframe: ${getErrorMessage(e)}`);
       }
       } // End of if (recaptchaIframe) for checkbox clicking
     } // End of else block (checkbox challenge handling)
@@ -1398,7 +1524,7 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
               }
             }
           }
-        } catch (e: any) {
+        } catch (e) {
           // Continue
         }
       }
@@ -1418,8 +1544,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
             checkboxClicked = true;
             await humanPause(2000, 3000);
           }
-        } catch (e: any) {
-          console.warn(`   ⚠️  Could not click on iframe: ${e.message}`);
+        } catch (e) {
+          console.warn(`   ⚠️  Could not click on iframe: ${getErrorMessage(e)}`);
         }
       }
     }
@@ -1637,8 +1763,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
     }
 
     console.log('   ✅ Session verified - logged in successfully');
-  } catch (e: any) {
-    console.error('   ❌ Failed to verify session after login:', e.message);
+  } catch (e) {
+    console.error('   ❌ Failed to verify session after login:', getErrorMessage(e));
     const currentUrl = page.url();
     const currentTitle = await page.title().catch(() => 'unknown');
     const loginFormCount = await page
@@ -1680,8 +1806,8 @@ async function executeLoginFlow(page: Page, context: BrowserContext, email: stri
     const fs = await import('fs');
     fs.writeFileSync(sessionStoragePath, JSON.stringify(sessionStorage, null, 2));
     console.log('   💾 Saved sessionStorage separately');
-  } catch (e: any) {
-    console.warn('   ⚠️  Could not save sessionStorage:', e.message);
+  } catch (e) {
+    console.warn('   ⚠️  Could not save sessionStorage:', getErrorMessage(e));
   }
 
   console.log('✅ Logged in and saved session');
@@ -1742,8 +1868,8 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
           await catchUpTab.click();
           await humanPause(1000, 2000);
         }
-      } catch (tabError: any) {
-        console.log('   ⚠️ Unable to interact with Catch Up tab, continuing with page load:', tabError.message);
+      } catch (tabError) {
+        console.log('   ⚠️ Unable to interact with Catch Up tab, continuing with page load:', getErrorMessage(tabError));
       }
     }
 
@@ -1782,13 +1908,13 @@ async function loadCatchUpPage(page: Page): Promise<boolean> {
     }
 
     return true;
-  } catch (error: any) {
-    console.error('❌ Error navigating to Catch Up page:', error.message);
+  } catch (error) {
+    console.error('❌ Error navigating to Catch Up page:', getErrorMessage(error));
 
     // Check if the error is due to browser/page being closed
-    if (error.message.includes('closed') || error.message.includes('Target page') || error.message.includes('detached')) {
+    if (getErrorMessage(error).includes('closed') || getErrorMessage(error).includes('Target page') || getErrorMessage(error).includes('detached')) {
       console.error('   ❌ Browser/page was closed during navigation');
-      throw new Error(`Browser closed during catch-up navigation: ${error.message}`);
+      throw new Error(`Browser closed during catch-up navigation: ${getErrorMessage(error)}`);
     }
 
     return false;
@@ -1865,12 +1991,12 @@ function createReauthRequiredError(reason: string): Error {
 }
 
 function isReauthRequiredError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? getErrorMessage(error) : String(error);
   return message.includes('REAUTH_REQUIRED:');
 }
 
 function isBrowserClosedError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? getErrorMessage(error) : String(error);
   return (
     message.includes('Target page, context or browser has been closed') ||
     message.includes('Target closed') ||
@@ -1957,7 +2083,7 @@ async function getDialogInputText(messageDialog: Locator): Promise<string> {
   }
 
   return (await input
-    .evaluate((el: any) => el.innerText || el.textContent || el.value || '')
+    .evaluate(readEditableElementText)
     .catch(() => '')) || '';
 }
 
@@ -2233,12 +2359,12 @@ async function scrollToLoadMore(page: Page, containerLocator: Locator): Promise<
       );
       await humanPause(1200, 1800);
     }
-  } catch (e: any) {
-    console.log(`   ⚠️  Error scrolling: ${e.message}`);
+  } catch (e) {
+    console.log(`   ⚠️  Error scrolling: ${getErrorMessage(e)}`);
   }
 }
 
-async function scrollToLoadAllContacts(page: Page, containerLocator: Locator): Promise<number> {
+async function _scrollToLoadAllContacts(page: Page, containerLocator: Locator): Promise<number> {
   let previousCount = 0;
   let currentCount = 0;
   let noNewLoadsCount = 0;
@@ -2493,7 +2619,7 @@ async function extractContacts(
     if (isBrowserClosedError(error)) {
       throw error;
     }
-    throw new Error(`Contact extraction DOM read failed: ${error.message || String(error)}`);
+    throw new Error(`Contact extraction DOM read failed: ${getErrorMessage(error) || String(error)}`);
   });
 
   for (const contactInfo of extractedInfos) {
@@ -2542,11 +2668,11 @@ async function extractContacts(
       contacts.push(contact);
 
       console.log(`   ✅ Found: ${contactInfo.name} (${detectedType}) - Message link ${contactInfo.linkIndex + 1}`);
-    } catch (error: any) {
+    } catch (error) {
       if (isBrowserClosedError(error)) {
         throw error;
       }
-      console.error(`   ❌ Error processing extracted message link ${contactInfo.linkIndex + 1}:`, error.message);
+      console.error(`   ❌ Error processing extracted message link ${contactInfo.linkIndex + 1}:`, getErrorMessage(error));
       continue;
     }
   }
@@ -2558,7 +2684,7 @@ async function extractContacts(
 /**
  * Enhance LinkedIn's pre-filled message with greeting, profile and company links
  */
-function enhanceMessage(
+function _enhanceMessage(
   originalTemplate: string,
   profileUrl: string,
   companyUrl: string,
@@ -2754,7 +2880,7 @@ function normalizeMessageForComparison(message: string): string {
     .trim();
 }
 
-function messageMatchesExpected(actual: string, expected: string, settings: any): boolean {
+function messageMatchesExpected(actual: string, expected: string, settings: LinkedInSettings): boolean {
   const normalizedActual = normalizeMessageForComparison(actual);
   const normalizedExpected = normalizeMessageForComparison(expected);
   const profileUrl = settings.profile_url || '';
@@ -2776,9 +2902,7 @@ function messageMatchesExpected(actual: string, expected: string, settings: any)
 }
 
 async function readMessageInputText(messageInput: Locator): Promise<string> {
-  return (await messageInput.evaluate((el: any) => {
-    return el.innerText || el.textContent || el.value || '';
-  }).catch(() => '')) ||
+  return (await messageInput.evaluate(readEditableElementText).catch(() => '')) ||
     (await messageInput.textContent().catch(() => '')) ||
     (await messageInput.inputValue().catch(() => '')) ||
     '';
@@ -2794,13 +2918,13 @@ async function setMessageInputTextReliably(page: Page, messageInput: Locator, me
       await page.keyboard.press(modifier);
       await page.keyboard.press('Backspace');
       await page.keyboard.insertText(message);
-      await messageInput.evaluate((el: any) => {
+      await messageInput.evaluate((el) => {
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText' }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       });
       await humanPause(300, 500);
-    } catch (error: any) {
-      console.warn(`   ⚠️  Keyboard message set attempt ${attempt} failed: ${error.message}`);
+    } catch (error) {
+      console.warn(`   ⚠️  Keyboard message set attempt ${attempt} failed: ${getErrorMessage(error)}`);
     }
 
     let currentText = await readMessageInputText(messageInput);
@@ -2810,13 +2934,13 @@ async function setMessageInputTextReliably(page: Page, messageInput: Locator, me
 
     try {
       await messageInput.fill(message);
-      await messageInput.evaluate((el: any) => {
+      await messageInput.evaluate((el) => {
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText' }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       });
       await humanPause(300, 500);
-    } catch (error: any) {
-      console.warn(`   ⚠️  Locator fill message set attempt ${attempt} failed: ${error.message}`);
+    } catch (error) {
+      console.warn(`   ⚠️  Locator fill message set attempt ${attempt} failed: ${getErrorMessage(error)}`);
     }
 
     currentText = await readMessageInputText(messageInput);
@@ -2824,22 +2948,7 @@ async function setMessageInputTextReliably(page: Page, messageInput: Locator, me
       return currentText;
     }
 
-    await messageInput.evaluate((el: any, text: string) => {
-      el.focus();
-      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-        const prototype = el.tagName === 'TEXTAREA'
-          ? window.HTMLTextAreaElement.prototype
-          : window.HTMLInputElement.prototype;
-        const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-        valueSetter?.call(el, text);
-      } else {
-        el.textContent = text;
-      }
-
-      el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-      el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-    }, message);
+    await messageInput.evaluate(setEditableElementText, message);
     await humanPause(300, 500);
 
     currentText = await readMessageInputText(messageInput);
@@ -2853,7 +2962,7 @@ async function setMessageInputTextReliably(page: Page, messageInput: Locator, me
 
 export async function buildLinkedInMessage(
   contact: Contact,
-  settings: any,
+  settings: LinkedInSettings,
   originalTemplate: string,
   firstName: string
 ): Promise<LinkedInMessageBuildResult> {
@@ -2927,11 +3036,11 @@ export async function buildLinkedInMessage(
     }
 
     return { message: withLinks, source: 'groq', personalNote };
-  } catch (error: any) {
+  } catch (error) {
     return {
       message: fallbackMessage,
       source: 'template',
-      error: error?.message || String(error)
+      error: getErrorMessage(error) || String(error)
     };
   }
 }
@@ -2942,8 +3051,8 @@ export async function buildLinkedInMessage(
 async function processContact(
   page: Page,
   contact: Contact,
-  settings: any,
-  lockData: LinkedInLockData
+  settings: LinkedInSettings,
+  _lockData: LinkedInLockData
 ): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
   let messageId: string | null = null; // Track messageId for error handling
   let sendAttempted = false;
@@ -2954,21 +3063,39 @@ async function processContact(
     console.log(`   🔑 Dedup key: ${getContactDedupKey(contact)}`);
 
     const retryFailed = process.env.LINKEDIN_RETRY_FAILED === 'true';
+    const retryOnlyFailed = process.env.LINKEDIN_RETRY_ONLY_FAILED === 'true';
     const existingRecord = await getLinkedInMessageRecord(contact.profileUrl);
+    if (retryOnlyFailed && existingRecord?.status !== 'failed') {
+      console.log(
+        `   ⏭️  Skipping ${contact.name}: LINKEDIN_RETRY_ONLY_FAILED=true and status is "${existingRecord?.status || 'new'}"`
+      );
+      return { success: true, skipped: true };
+    }
+
     if (existingRecord) {
       messageId = existingRecord.id;
 
       const shouldRetryFailed = retryFailed && existingRecord.status === 'failed';
-      if (!shouldRetryFailed) {
+      const pendingAgeMs = Date.now() - Date.parse(existingRecord.updated_at);
+      const shouldRetryStalePending =
+        existingRecord.status === 'pending' &&
+        (!Number.isFinite(pendingAgeMs) || pendingAgeMs > 10 * 60 * 1000);
+      if (!shouldRetryFailed && !shouldRetryStalePending) {
         console.log(
           `   ⏭️  Skipping ${contact.name}: existing DB record found with status "${existingRecord.status}" (${existingRecord.updated_at})`
         );
         return { success: true, skipped: true };
       }
 
-      console.log(
-        `   🔁 Retrying ${contact.name}: LINKEDIN_RETRY_FAILED=true and last record is failed (${existingRecord.updated_at})`
-      );
+      if (shouldRetryFailed) {
+        console.log(
+          `   🔁 Retrying ${contact.name}: LINKEDIN_RETRY_FAILED=true and last record is failed (${existingRecord.updated_at})`
+        );
+      } else {
+        console.log(
+          `   🔁 Resuming ${contact.name}: last record is stale pending (${existingRecord.updated_at})`
+        );
+      }
     }
 
     await assertStillAuthenticatedWithTimeout(page, `starting contact processing for ${contact.name}`);
@@ -3004,17 +3131,17 @@ async function processContact(
                     }
                     document.body.blur();
                     const buttons = document.querySelectorAll('button');
-                    buttons.forEach((el: any) => {
-                      if (el && el.blur) el.blur();
+                    buttons.forEach((el) => {
+                      if (el instanceof HTMLElement) el.blur();
                     });
                     const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-                    inputs.forEach((el: any) => {
-                      if (el && el.blur) el.blur();
+                    inputs.forEach((el) => {
+                      if (el instanceof HTMLElement) el.blur();
                     });
                     // Blur all focusable elements
                     const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
-                    focusable.forEach((el: any) => {
-                      if (el && el.blur) el.blur();
+                    focusable.forEach((el) => {
+                      if (el instanceof HTMLElement) el.blur();
                     });
                   });
                   await humanPause(30, 50);
@@ -3022,7 +3149,7 @@ async function processContact(
                 await humanPause(300, 400);
 
           // CRITICAL: Use synthetic mouse event instead of click() to avoid keyboard events
-          await closeButtons.evaluate((el: any) => {
+          await closeButtons.evaluate((el) => {
             // Blur everything first
             if (document.activeElement && document.activeElement instanceof HTMLElement) {
               document.activeElement.blur();
@@ -3031,8 +3158,8 @@ async function processContact(
 
             // Blur all buttons
             const buttons = document.querySelectorAll('button');
-            buttons.forEach((btn: any) => {
-              if (btn && btn.blur) btn.blur();
+            buttons.forEach((btn) => {
+              if (btn instanceof HTMLElement) btn.blur();
             });
 
             // Use synthetic mouse event instead of click()
@@ -3053,17 +3180,17 @@ async function processContact(
               }
               document.body.blur();
               const buttons = document.querySelectorAll('button');
-              buttons.forEach((el: any) => {
-                if (el && el.blur) el.blur();
+              buttons.forEach((el) => {
+                if (el instanceof HTMLElement) el.blur();
               });
               const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-              inputs.forEach((el: any) => {
-                if (el && el.blur) el.blur();
+              inputs.forEach((el) => {
+                if (el instanceof HTMLElement) el.blur();
               });
               // Blur all focusable elements
               const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
-              focusable.forEach((el: any) => {
-                if (el && el.blur) el.blur();
+              focusable.forEach((el) => {
+                if (el instanceof HTMLElement) el.blur();
               });
             });
             await humanPause(30, 50);
@@ -3074,7 +3201,7 @@ async function processContact(
                 })(),
                 closeTimeout
               ]).catch((error) => {
-                console.warn(`   ⚠️  Error/timeout closing overlay: ${error.message}, continuing anyway...`);
+                console.warn(`   ⚠️  Error/timeout closing overlay: ${getErrorMessage(error)}, continuing anyway...`);
               });
             } catch (e) {
               console.warn(`   ⚠️  Error closing overlay: ${e}, continuing anyway...`);
@@ -3268,7 +3395,7 @@ async function processContact(
     await humanPause(100, 200);
 
     // Get link attributes using evaluate to avoid triggering events
-    const linkInfo = await messageLink.evaluate((el: any) => {
+    const linkInfo = await messageLink.evaluate((el) => {
       return {
         href: el.getAttribute('href') || '',
         ariaLabel: el.getAttribute('aria-label') || '',
@@ -3329,8 +3456,8 @@ async function processContact(
       const composeUrl = new URL(href, 'https://www.linkedin.com').toString();
       console.log(`   🔗 Opening compose URL directly for ${contact.name}: ${composeUrl.substring(0, 120)}...`);
       await navigateWithRecovery(page, composeUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
+        waitUntil: 'commit',
+        timeout: 60000,
         label: `LinkedIn compose for ${contact.name}`,
       });
     } else {
@@ -3441,17 +3568,17 @@ async function processContact(
         }
         document.body.blur();
         const buttons = document.querySelectorAll('button');
-        buttons.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        buttons.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-        inputs.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        inputs.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur all focusable elements
         const focusable = document.querySelectorAll('a, button, input, textarea, select, [contenteditable], [tabindex]');
-        focusable.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        focusable.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
       });
       await humanPause(30, 50);
@@ -3464,7 +3591,7 @@ async function processContact(
       console.log(`   🎯 Clicking message link for ${contact.name} (href: ${(finalHref || '').substring(0, 80)}...)...`);
 
       // Use JavaScript click with synthetic mouse event
-      await messageLink.evaluate((el: any) => {
+      await messageLink.evaluate((el) => {
         // Blur everything first
         if (document.activeElement && document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
@@ -3473,8 +3600,8 @@ async function processContact(
 
         // Blur all other links
         const links = document.querySelectorAll('a');
-        links.forEach((link: any) => {
-          if (link !== el && link.blur) link.blur();
+        links.forEach((link) => {
+          if (link !== el && link instanceof HTMLElement) link.blur();
         });
 
         // Use synthetic mouse event instead of click()
@@ -3497,16 +3624,16 @@ async function processContact(
           }
           document.body.blur();
           const buttons = document.querySelectorAll('button');
-          buttons.forEach((el: any) => {
-            if (el && el.blur) el.blur();
+          buttons.forEach((el) => {
+            if (el instanceof HTMLElement) el.blur();
           });
           const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-          inputs.forEach((el: any) => {
-            if (el && el.blur) el.blur();
+          inputs.forEach((el) => {
+            if (el instanceof HTMLElement) el.blur();
           });
           const links = document.querySelectorAll('a');
-          links.forEach((el: any) => {
-            if (el && el.blur) el.blur();
+          links.forEach((el) => {
+            if (el instanceof HTMLElement) el.blur();
           });
         });
         await humanPause(30, 50);
@@ -3768,7 +3895,7 @@ async function processContact(
     // Extract LinkedIn's pre-filled template (we'll clear and rebuild with greeting)
     const originalTemplate = await messageInput.textContent().catch(() => '') ||
                            await messageInput.inputValue().catch(() => '') ||
-                           await messageInput.evaluate((el: any) => el.innerText || el.textContent || el.value || '').catch(() => '');
+                           await messageInput.evaluate(readEditableElementText).catch(() => '');
 
     if (originalTemplate.trim()) {
       console.log(`   📝 Extracted LinkedIn template (${originalTemplate.trim().length} chars): "${originalTemplate.trim().substring(0, 50)}..."`);
@@ -3860,9 +3987,9 @@ async function processContact(
     }
     console.log(`   ✅ Compose box contains generated message (${normalizeMessageForComparison(reliablySetText).length} chars)`);
 
-    const tagName = await messageInput.evaluate((el: any) => el.tagName?.toLowerCase()).catch(() => '');
+    const tagName = await messageInput.evaluate(getEditableElementTagName).catch(() => '');
     const role = await messageInput.getAttribute('role').catch(() => '');
-    const isContentEditable = await messageInput.evaluate((el: any) => el.contentEditable === 'true').catch(() => false);
+    const isContentEditable = await messageInput.evaluate(isContentEditableElement).catch(() => false);
 
     if (isContentEditable || (tagName === 'div' && role === 'textbox')) {
       console.log('   ⌨️  Typing full message in contenteditable div...');
@@ -3894,22 +4021,12 @@ async function processContact(
       await humanPause(200, 300);
 
       // Verify it's cleared
-      const textAfterClear = await messageInput.evaluate((el: any) => {
-        return (el.textContent || el.innerText || el.value || '').trim();
-      }).catch(() => '');
+      const textAfterClear = await messageInput.evaluate(readEditableElementText).catch(() => '');
 
       if (textAfterClear.length > 0) {
         console.log(`   ⚠️  Input not fully cleared (${textAfterClear.length} chars remaining), forcing clear...`);
         // Force clear by setting content directly
-        await messageInput.evaluate((el: any) => {
-          if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-            el.value = '';
-          } else {
-            el.textContent = '';
-            el.innerText = '';
-            el.innerHTML = '';
-          }
-        });
+        await messageInput.evaluate(clearEditableElement);
         await humanPause(200, 300);
       }
 
@@ -3926,7 +4043,7 @@ async function processContact(
       // Trigger input events to ensure LinkedIn recognizes the change
 
       // Trigger input event
-      await messageInput.evaluate((el: any) => {
+      await messageInput.evaluate((el) => {
         el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       });
@@ -3938,41 +4055,19 @@ async function processContact(
 
       // Verify the message was typed
       const typedContent = (await messageInput.textContent().catch(() => '')) ||
-                          (await messageInput.evaluate((el: any) => el.innerText || el.textContent || '').catch(() => ''));
+                          (await messageInput.evaluate(readEditableElementText).catch(() => ''));
 
       if (typedContent.length < enhancedMessage.length * 0.8) {
         console.log(`   ⚠️  Message not fully typed (got ${typedContent.length} chars, expected ~${enhancedMessage.length}), setting directly...`);
         // Fallback: set content directly with proper formatting
-      await messageInput.evaluate((el: any, text: string) => {
-        el.focus();
-          if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-            el.value = text;
-          } else {
-            // Convert newlines to <br> tags for contenteditable divs
-            const formattedHTML = text
-              .replace(/&/g, '&amp;')
-              .replace(/</g, '&lt;')
-              .replace(/>/g, '&gt;')
-              .replace(/\n\n+/g, '<br><br>') // Multiple newlines = paragraph break
-              .replace(/\n/g, '<br>'); // Single newline = line break
-            el.innerHTML = formattedHTML;
-            el.textContent = text;
-          }
-          // Move cursor to end
-          const sel = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          sel?.removeAllRanges();
-          sel?.addRange(range);
-      }, enhancedMessage);
+        await messageInput.evaluate(setEditableElementText, enhancedMessage);
         await humanPause(500, 800);
       } else {
         console.log(`   ✅ Message typed successfully (${typedContent.length} characters)`);
       }
 
       // Trigger input events to ensure LinkedIn recognizes the change
-      await messageInput.evaluate((el: any) => {
+      await messageInput.evaluate((el) => {
         el.focus();
         el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
@@ -3994,7 +4089,7 @@ async function processContact(
       await messageInput.fill(enhancedMessage);
 
       // Trigger input events
-      await messageInput.evaluate((el: any) => {
+      await messageInput.evaluate((el) => {
         el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       });
@@ -4013,10 +4108,7 @@ async function processContact(
     await humanPause(800, 1200); // Wait for Send to enable after typing
 
     // Verify message was set - try multiple ways to read content
-    const messageText = (await messageInput.evaluate((el: any) => {
-      // Try different properties to get the text
-      return el.innerText || el.textContent || el.value || '';
-    }).catch(() => '')) ||
+    const messageText = (await messageInput.evaluate(readEditableElementText).catch(() => '')) ||
     (await messageInput.textContent().catch(() => '')) ||
     (await messageInput.inputValue().catch(() => '')) || '';
 
@@ -4033,41 +4125,12 @@ async function processContact(
       await humanPause(200, 300);
 
       // Set the full enhanced message using evaluate (more reliable for contenteditable)
-      await messageInput.evaluate((el: any, text: string) => {
-        el.focus();
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-          el.value = text;
-        } else {
-          // Convert newlines to <br> tags for contenteditable divs
-          const formattedHTML = text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/\n\n+/g, '<br><br>') // Multiple newlines = paragraph break
-            .replace(/\n/g, '<br>'); // Single newline = line break
-          el.innerHTML = formattedHTML;
-          el.textContent = text;
-        }
-        // Move cursor to end
-        const sel = window.getSelection();
-        if (sel) {
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-        // Trigger events
-        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      }, enhancedMessage);
+      await messageInput.evaluate(setEditableElementText, enhancedMessage);
 
       await humanPause(1000, 1500);
 
       // Verify again
-      const retryText = (await messageInput.evaluate((el: any) => {
-        return el.innerText || el.textContent || el.value || '';
-      }).catch(() => '')) || '';
+      const retryText = (await messageInput.evaluate(readEditableElementText).catch(() => '')) || '';
 
       if (retryText.trim().length < expectedMinLength) {
         throw new Error(`Failed to set message text: got ${retryText.trim().length} chars, expected at least ${expectedMinLength}`);
@@ -4112,7 +4175,7 @@ async function processContact(
       'button:has-text("Send"):not([disabled]):not([class*="footer-action"])',
       // Footer send buttons
       'footer button:has-text("Send"):not([disabled])',
-      // Last resort: any button with "Send" in aria-label (but send button might not have one)
+      // Last resort: unknown button with "Send" in aria-label (but send button might not have one)
       'button[aria-label*="Send" i]:not([disabled]):not([class*="footer-action"])',
     ];
 
@@ -4212,12 +4275,7 @@ async function processContact(
       const maxAttempts = 18; // Slightly more retries
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const isDisabled = await sendButton!.evaluate((el: any) => {
-          return el.disabled ||
-                el.getAttribute('aria-disabled') === 'true' ||
-                el.classList.contains('artdeco-button--disabled') ||
-                el.hasAttribute('disabled');
-        }).catch(() => true);
+        const isDisabled = await sendButton!.evaluate(isSendButtonDisabled).catch(() => true);
 
         if (!isDisabled) {
           isEnabled = true;
@@ -4235,21 +4293,21 @@ async function processContact(
           // Try triggering input events periodically to wake up LinkedIn
           if (attempt % 3 === 0) {
             // Verify text is still there
-            const currentText = await messageInput.evaluate((el: any) => el.innerText || el.textContent || el.value || '').catch(() => '');
+            const currentText = await messageInput.evaluate(readEditableElementText).catch(() => '');
             if (currentText.length < enhancedMessage.length * 0.8) {
               console.log(`   ⚠️  Text seems incomplete, clearing and setting full message again...`);
               // Clear and set the full message
               await messageInput.clear();
               await humanPause(200, 300);
               await messageInput.fill(enhancedMessage);
-              await messageInput.evaluate((el: any) => {
+              await messageInput.evaluate((el) => {
                 el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
               });
               await humanPause(1000, 1500);
             } else {
               // Text is there, just trigger events (NO SPACE KEY - it triggers Finder)
-              await messageInput.evaluate((el: any) => {
+              await messageInput.evaluate((el) => {
                 el.focus();
                 // Trigger input events to simulate user activity (NO keyboard events with Space)
                 el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
@@ -4276,16 +4334,19 @@ async function processContact(
         // DON'T click - clicking might place cursor in the middle
         // Always use JavaScript events instead
         console.log(`   🔄 Last attempt: triggering input events via JavaScript (no keyboard shortcuts, no clicking)...`);
-        await messageInput.evaluate((el: any) => {
-          el.focus();
+        await messageInput.evaluate((el) => {
+          const target = el as EditableElement;
+          target.focus();
           // Ensure cursor is at end
-          if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-            const length = el.value.length;
-            el.setSelectionRange(length, length);
+          if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+            const length = target.value?.length || 0;
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+              target.setSelectionRange(length, length);
+            }
           } else {
             const sel = window.getSelection();
             const range = document.createRange();
-            range.selectNodeContents(el);
+            range.selectNodeContents(target);
             range.collapse(false);
             sel?.removeAllRanges();
             sel?.addRange(range);
@@ -4295,20 +4356,17 @@ async function processContact(
 
         // Use JavaScript events instead of keyboard to prevent Finder/Spotlight from opening
         // NO SPACE KEY EVENTS - they trigger Finder on macOS
-        await messageInput.evaluate((el: any) => {
-          el.focus();
+        await messageInput.evaluate((el) => {
+          const target = el as EditableElement;
+          target.focus();
           // Trigger multiple events to simulate user input (NO keyboard events with Space)
-          el.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
-          el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          target.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
+          target.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
         });
         await humanPause(1000, 1500);
 
-        const stillDisabled = await sendButton!.evaluate((el: any) => {
-          return el.disabled ||
-                el.getAttribute('aria-disabled') === 'true' ||
-                el.classList.contains('artdeco-button--disabled');
-        }).catch(() => true);
+        const stillDisabled = await sendButton!.evaluate(isSendButtonDisabled).catch(() => true);
 
         if (stillDisabled) {
           throw new Error('Send button is still disabled after all attempts - message input may not be recognized by LinkedIn');
@@ -4330,7 +4388,7 @@ async function processContact(
         await messageInput.clear();
         await humanPause(200, 300);
         await messageInput.fill(enhancedMessage);
-        await messageInput.evaluate((el: any) => {
+        await messageInput.evaluate((el) => {
           el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
           el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
         });
@@ -4357,12 +4415,12 @@ async function processContact(
         }
         // Blur all input elements (message input, etc.)
         const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-        inputs.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        inputs.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur all buttons EXCEPT the send button (identified by class)
         const buttons = document.querySelectorAll('button');
-        buttons.forEach((el: any) => {
+        buttons.forEach((el) => {
           const btnClass = el.className || '';
           // Only blur if it's NOT the send button (doesn't have msg-form__send-button class)
           // Also blur attach buttons (msg-form__footer-action) to prevent accidental clicks
@@ -4379,7 +4437,7 @@ async function processContact(
       }
 
       // Verify we're clicking the send button, not an attachment button
-      const finalCheck = await sendButton!.evaluate((el: any) => {
+      const finalCheck = await sendButton!.evaluate((el) => {
       const ariaLabel = el.getAttribute('aria-label') || '';
       const title = el.getAttribute('title') || '';
       const className = el.getAttribute('class') || '';
@@ -4404,7 +4462,7 @@ async function processContact(
       await humanPause(200, 300);
 
       // CRITICAL: Final verification - double check it's the send button and not attachment
-      const finalVerification = await sendButton!.evaluate((el: any) => {
+      const finalVerification = await sendButton!.evaluate((el) => {
       const ariaLabel = el.getAttribute('aria-label') || '';
       const title = el.getAttribute('title') || '';
       const className = el.getAttribute('class') || '';
@@ -4448,7 +4506,7 @@ async function processContact(
       // DO NOT blur the send button itself - we need to click it!
       // Based on browser investigation: send button has class "msg-form__send-button"
       sendAttempted = true;
-      await sendButton!.evaluate((el: any) => {
+      await sendButton!.evaluate((el) => {
       // Blur everything EXCEPT the send button (identified by class)
       if (document.activeElement && document.activeElement instanceof HTMLElement) {
         const activeClass = document.activeElement.className || '';
@@ -4461,7 +4519,7 @@ async function processContact(
 
       // Blur all other buttons (but NOT the send button - identified by class)
       const buttons = document.querySelectorAll('button');
-      buttons.forEach((btn: any) => {
+      buttons.forEach((btn) => {
         const btnClass = btn.className || '';
         // Only blur if it's NOT the send button (doesn't have msg-form__send-button class)
         if (btn && btn.blur && !btnClass.includes('msg-form__send-button')) {
@@ -4471,8 +4529,8 @@ async function processContact(
 
       // Blur all input elements
       const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-      inputs.forEach((input: any) => {
-        if (input && input.blur) input.blur();
+      inputs.forEach((input) => {
+        if (input instanceof HTMLElement) input.blur();
       });
 
       // Use synthetic MouseEvent instead of click() - this doesn't trigger keyboard events
@@ -4496,13 +4554,13 @@ async function processContact(
         }
         // Blur all input elements
         const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-        inputs.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        inputs.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur all buttons
         const buttons = document.querySelectorAll('button');
-        buttons.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        buttons.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur body
         if (document.body) {
@@ -4510,8 +4568,8 @@ async function processContact(
         }
         // Blur any dialogs
         const dialogs = document.querySelectorAll('[role="dialog"]');
-        dialogs.forEach((dialog: any) => {
-          if (dialog && dialog.blur) dialog.blur();
+        dialogs.forEach((dialog) => {
+          if (dialog instanceof HTMLElement) dialog.blur();
         });
       });
       await humanPause(100, 150);
@@ -4521,7 +4579,7 @@ async function processContact(
     // selector wait as success; ambiguous sends are failed and skipped by default.
     console.log(`   ⏳ Waiting for message confirmation for ${contact.name}...`);
     const sendConfirmation = await waitForMessageSendConfirmation(page, messageDialog, contact, sendAttempted);
-    let messageConfirmed = sendConfirmation.confirmed;
+    const messageConfirmed = sendConfirmation.confirmed;
     let dialogStillOpen = sendConfirmation.dialogStillOpen;
 
     if (messageConfirmed) {
@@ -4560,8 +4618,8 @@ async function processContact(
         }
         // Blur all input elements
         const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"], button, a');
-        inputs.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        inputs.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur body
         if (document.body) {
@@ -4569,10 +4627,10 @@ async function processContact(
         }
         // Blur any focused elements in dialogs
         const dialogs = document.querySelectorAll('[role="dialog"]');
-        dialogs.forEach((dialog: any) => {
-          if (dialog && dialog.blur) dialog.blur();
+        dialogs.forEach((dialog) => {
+          if (dialog instanceof HTMLElement) dialog.blur();
           const focused = dialog.querySelector(':focus');
-          if (focused && focused.blur) focused.blur();
+          if (focused instanceof HTMLElement) focused.blur();
         });
       });
       await humanPause(50, 100);
@@ -4624,7 +4682,7 @@ async function processContact(
 
                   // Blur all buttons EXCEPT the close button
                   const buttons = document.querySelectorAll('button');
-                  buttons.forEach((el: any) => {
+                  buttons.forEach((el) => {
                     const btnAria = el.getAttribute('aria-label') || '';
                     // Only blur if it's NOT the close button
                     if (el && el.blur && btnAria !== excludeAriaLabel) {
@@ -4634,8 +4692,8 @@ async function processContact(
 
                   // Blur all input elements
                   const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-                  inputs.forEach((el: any) => {
-                    if (el && el.blur) el.blur();
+                  inputs.forEach((el) => {
+                    if (el instanceof HTMLElement) el.blur();
                   });
                 }, closeBtnAriaLabel || '');
                 await humanPause(50, 100);
@@ -4643,7 +4701,7 @@ async function processContact(
               await humanPause(200, 300);
 
               // CRITICAL: Use synthetic MouseEvent instead of click() to avoid keyboard events
-              await closeBtn.evaluate((el: any) => {
+              await closeBtn.evaluate((el) => {
                 // Blur everything EXCEPT this close button
                 if (document.activeElement && document.activeElement instanceof HTMLElement) {
                   if (document.activeElement !== el) {
@@ -4654,14 +4712,14 @@ async function processContact(
 
                 // Blur all other buttons (but NOT this close button)
                 const buttons = document.querySelectorAll('button');
-                buttons.forEach((btn: any) => {
-                  if (btn && btn !== el && btn.blur) btn.blur();
+                buttons.forEach((btn) => {
+                  if (btn !== el && btn instanceof HTMLElement) btn.blur();
                 });
 
                 // Blur all input elements
                 const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-                inputs.forEach((input: any) => {
-                  if (input && input.blur) input.blur();
+                inputs.forEach((input) => {
+                  if (input instanceof HTMLElement) input.blur();
                 });
 
                 // Use synthetic MouseEvent instead of click() - this doesn't trigger keyboard events
@@ -4683,12 +4741,12 @@ async function processContact(
                   }
                   document.body.blur();
                   const buttons = document.querySelectorAll('button');
-                  buttons.forEach((el: any) => {
-                    if (el && el.blur) el.blur();
+                  buttons.forEach((el) => {
+                    if (el instanceof HTMLElement) el.blur();
                   });
                   const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-                  inputs.forEach((el: any) => {
-                    if (el && el.blur) el.blur();
+                  inputs.forEach((el) => {
+                    if (el instanceof HTMLElement) el.blur();
                   });
                 });
                 await humanPause(50, 100);
@@ -4724,8 +4782,8 @@ async function processContact(
         }
         // Blur all input elements
         const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"], button, a');
-        inputs.forEach((el: any) => {
-          if (el && el.blur) el.blur();
+        inputs.forEach((el) => {
+          if (el instanceof HTMLElement) el.blur();
         });
         // Blur body
         if (document.body) {
@@ -4733,8 +4791,8 @@ async function processContact(
         }
         // Blur any remaining dialogs
         const dialogs = document.querySelectorAll('[role="dialog"]');
-        dialogs.forEach((dialog: any) => {
-          if (dialog && dialog.blur) dialog.blur();
+        dialogs.forEach((dialog) => {
+          if (dialog instanceof HTMLElement) dialog.blur();
         });
       });
       await humanPause(50, 100);
@@ -4761,8 +4819,8 @@ async function processContact(
     }
 
     return { success: true };
-  } catch (error: any) {
-    const errorMsg = error.message || 'Unknown error';
+  } catch (error) {
+    const errorMsg = getErrorMessage(error) || 'Unknown error';
     console.error(`   ❌ Error processing contact: ${errorMsg}`);
 
     if (messageRecordedSent) {
@@ -4900,6 +4958,16 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     lockData.lastHeartbeatAt = new Date().toISOString();
     writeLockFile(lockData);
   };
+  const stopLockWithError = (error: unknown) => {
+    lockData.status = isReauthRequiredError(error) ? 'reauth_required' : 'stopped';
+    lockData.error = error instanceof Error ? getErrorMessage(error) : String(error || 'Unknown error');
+    lockData.stoppedAt = new Date().toISOString();
+    touchLock();
+  };
+  const readPositiveInt = (value: string | undefined, fallback: number) => {
+    const parsed = value ? Number.parseInt(value, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
 
   // Detect headless mode - default to HEADED (visible) for debugging and user visibility
   const forceHeadless = process.env.HEADLESS === 'true' || process.env.HEADLESS === '1';
@@ -4967,7 +5035,18 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   const explicitCdpUrl = process.env.LINKEDIN_BROWSER_CDP_URL;
   let usingRemoteBrowser = useBrowserUseCloud || Boolean(explicitCdpUrl);
   let hasRemotePersistentSession = usingRemoteBrowser;
-  const maxBrowserLaunchAttempts = Number(process.env.LINKEDIN_BROWSER_LAUNCH_ATTEMPTS || 3);
+  const maxBrowserLaunchAttempts = readPositiveInt(
+    process.env.LINKEDIN_BROWSER_LAUNCH_ATTEMPTS,
+    useBrowserUseCloud ? 8 : 3
+  );
+  const browserLaunchRetryBaseDelayMs = readPositiveInt(
+    process.env.LINKEDIN_BROWSER_LAUNCH_RETRY_DELAY_MS,
+    useBrowserUseCloud ? 30000 : 5000
+  );
+  const browserLaunchRetryMaxDelayMs = readPositiveInt(
+    process.env.LINKEDIN_BROWSER_LAUNCH_RETRY_MAX_DELAY_MS,
+    useBrowserUseCloud ? 120000 : 30000
+  );
   for (let attempt = 1; attempt <= maxBrowserLaunchAttempts; attempt++) {
     cloudBrowser = null;
 
@@ -5007,12 +5086,12 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         });
       }
       break;
-    } catch (error: any) {
-      console.error(`   ❌ Failed to launch browser (attempt ${attempt}/${maxBrowserLaunchAttempts}):`, error.message);
+    } catch (error) {
+      console.error(`   ❌ Failed to launch browser (attempt ${attempt}/${maxBrowserLaunchAttempts}):`, getErrorMessage(error));
       console.error('   📊 Error details:', {
-        name: error.name,
-        stack: error.stack,
-        cause: error.cause
+        name: getErrorName(error),
+        stack: getErrorStack(error),
+        cause: getErrorCause(error)
       });
       await stopLinkedInCloudBrowser(cloudBrowser?.id);
 
@@ -5020,35 +5099,48 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         const allowLocalFallback = useBrowserUseCloud && !explicitCdpUrl && process.env.LINKEDIN_DISABLE_LOCAL_BROWSER_FALLBACK !== 'true';
         if (allowLocalFallback) {
           console.warn('   ⚠️  Browser Use cloud CDP failed after retries; falling back to local stealth browser');
-          const [{ chromium: ghostChromium }, { default: ghostPlugins }] = await Promise.all([
-            import('playwright-ghost'),
-            import('playwright-ghost/plugins')
-          ]);
-          browser = await ghostChromium.launch({
-            headless: headlessMode,
-            plugins: ghostPlugins.recommended({
-              humanize: {
-                click: { delay: { min: 200, max: 600 } },
-                cursor: false,
-                dialog: { delay: { min: 800, max: 2000 } }
-              }
-            }),
-            args: browserArgs
-          });
-          usingRemoteBrowser = false;
-          hasRemotePersistentSession = false;
-          break;
+          try {
+            const [{ chromium: ghostChromium }, { default: ghostPlugins }] = await Promise.all([
+              import('playwright-ghost'),
+              import('playwright-ghost/plugins')
+            ]);
+            browser = await ghostChromium.launch({
+              headless: headlessMode,
+              plugins: ghostPlugins.recommended({
+                humanize: {
+                  click: { delay: { min: 200, max: 600 } },
+                  cursor: false,
+                  dialog: { delay: { min: 800, max: 2000 } }
+                }
+              }),
+              args: browserArgs
+            });
+            usingRemoteBrowser = false;
+            hasRemotePersistentSession = false;
+            break;
+          } catch (fallbackError) {
+            stopLockWithError(fallbackError);
+            throw fallbackError;
+          }
         }
 
+        stopLockWithError(error);
         throw error;
       }
 
-      await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+      const retryDelayMs = Math.min(
+        browserLaunchRetryBaseDelayMs * attempt,
+        browserLaunchRetryMaxDelayMs
+      );
+      console.warn(`   ⏳ Waiting ${Math.round(retryDelayMs / 1000)}s before retrying browser launch...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
     }
   }
 
   if (!browser) {
-    throw new Error('Browser launch failed without an error');
+    const error = new Error('Browser launch failed without an error');
+    stopLockWithError(error);
+    throw error;
   }
 
   console.log('   ✅ Browser launched successfully');
@@ -5102,13 +5194,14 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     }
     console.log('   ✅ Browser context created successfully');
     console.log(`   📊 Context pages count: ${context.pages().length}`);
-  } catch (error: any) {
-    console.error('   ❌ Failed to create browser context:', error.message);
+  } catch (error) {
+    console.error('   ❌ Failed to create browser context:', getErrorMessage(error));
     console.error('   📊 Error details:', {
-      name: error.name,
-      stack: error.stack,
+      name: getErrorName(error),
+      stack: getErrorStack(error),
       browserConnected: !browser.isConnected() ? 'disconnected' : 'connected'
     });
+    stopLockWithError(error);
     throw error;
   }
 
@@ -5136,8 +5229,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
 
         console.log('   💾 Restored sessionStorage from saved session');
       }
-    } catch (e: any) {
-      console.warn('   ⚠️  Could not restore sessionStorage:', e.message);
+    } catch (e) {
+      console.warn('   ⚠️  Could not restore sessionStorage:', getErrorMessage(e));
     }
   }
 
@@ -5145,7 +5238,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
   await context.addInitScript(() => {
     // tsx/esbuild can emit __name() around functions passed into the page
     // context. Define it in-page so Node/tsx cloud runs behave like Bun runs.
-    (window as any).__name = (target: any) => target;
+    (window as unknown as Window & Record<string, unknown>).__name = (target: unknown) => target;
 
     // Remove webdriver property
     Object.defineProperty(navigator, 'webdriver', {
@@ -5171,7 +5264,7 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     });
 
     // Override chrome object
-    (window as any).chrome = {
+    (window as unknown as Window & Record<string, unknown>).chrome = {
       runtime: {},
     };
   });
@@ -5184,14 +5277,15 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
     console.log(`   📊 Total pages in context: ${context.pages().length}`);
     console.log(`   🔗 Page URL: ${page.url()}`);
     console.log(`   📋 Page is closed: ${page.isClosed()}`);
-  } catch (error: any) {
-    console.error('   ❌ Failed to create page:', error.message);
+  } catch (error) {
+    console.error('   ❌ Failed to create page:', getErrorMessage(error));
     console.error('   📊 Error details:', {
-      name: error.name,
-      stack: error.stack,
+      name: getErrorName(error),
+      stack: getErrorStack(error),
       contextPages: context.pages().length,
       browserConnected: !browser.isConnected() ? 'disconnected' : 'connected'
     });
+    stopLockWithError(error);
     throw error;
   }
 
@@ -5225,9 +5319,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
         });
         console.log('   ✅ Feed navigation completed');
         await humanPause(2000, 2000); // 2 second wait before navigating to catch-up page
-      } catch (timeoutError: any) {
+      } catch (timeoutError) {
         console.log('   ⚠️  Feed page load slow, trying catch-up page directly...');
-        console.log(`   📊 Timeout error: ${timeoutError.message}`);
+        console.log(`   📊 Timeout error: ${getErrorMessage(timeoutError)}`);
         await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
         await humanPause(1000, 1500);
         try {
@@ -5258,17 +5352,17 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           console.log('   ✅ Navigation to catch-up completed');
           await humanPause(2000, 3000);
           console.log('   ✅ Session appears valid (catch-up page loaded)');
-        } catch (e: any) {
-          console.error('   ❌ Error during catch-up navigation:', e.message);
+        } catch (e) {
+          console.error('   ❌ Error during catch-up navigation:', getErrorMessage(e));
           console.error('   📊 Error details:', {
-            name: e.name,
-            message: e.message,
-            stack: e.stack?.split('\n').slice(0, 5).join('\n')
+            name: getErrorName(e),
+            message: getErrorMessage(e),
+            stack: getErrorStack(e)?.split('\n').slice(0, 5).join('\n')
           });
 
-          if (e.message.includes('closed') || e.message.includes('detached')) {
-            console.error('   ❌ Browser/context/page closed during navigation:', e.message);
-            throw new Error(`Browser closed during navigation: ${e.message}`);
+          if (getErrorMessage(e).includes('closed') || getErrorMessage(e).includes('detached')) {
+            console.error('   ❌ Browser/context/page closed during navigation:', getErrorMessage(e));
+            throw new Error(`Browser closed during navigation: ${getErrorMessage(e)}`);
           }
           console.log('   ⚠️  Session expired while verifying saved session');
           if (hasLocalSavedSession) {
@@ -5437,8 +5531,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           return true;
         }
         return false;
-      } catch (error: any) {
-        const message = error?.message || String(error);
+      } catch (error) {
+        const message = getErrorMessage(error) || String(error);
         console.error(`\n❌ Could not verify LinkedIn daily sent count before ${context}: ${message}`);
         result.errors.push(`Daily count check failed before ${context}: ${message}`);
         return true;
@@ -5465,8 +5559,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
           console.warn('   ⚠️  Page reloaded but main container not found');
           return false;
         }
-      } catch (reloadError: any) {
-        console.error(`   ❌ Failed to reload catch-up page: ${reloadError.message}`);
+      } catch (reloadError) {
+        console.error(`   ❌ Failed to reload catch-up page: ${getErrorMessage(reloadError)}`);
         return false;
       }
     };
@@ -5554,9 +5648,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       try {
         visibleContacts = await extractContacts(page, maxBatchSize, processedProfileUrls);
         visibleContacts = visibleContacts.filter(c => !processedProfileUrls.has(c.profileUrl));
-      } catch (error: any) {
+      } catch (error) {
         let recoveredFromExtractionError = false;
-        if (error.message?.includes('Target page, context or browser has been closed')) {
+        if (getErrorMessage(error)?.includes('Target page, context or browser has been closed')) {
           console.warn('\n⚠️  Browser/page hiccup during contact extraction, attempting one recovery reload...');
           const reloaded = await reloadCatchUpPage();
           if (reloaded) {
@@ -5578,6 +5672,22 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       touchLock();
 
       if (visibleContacts.length === 0) {
+        const currentUrl = page.url();
+        if (!/\/mynetwork\/catch-up\//.test(currentUrl)) {
+          console.warn(`   ⚠️  Scanner is on the wrong LinkedIn page (${currentUrl}); reloading ${currentTab} Catch Up tab before scrolling.`);
+          const reloaded = await reloadCatchUpPage();
+          if (!reloaded) {
+            console.error('\n❌ Failed to recover back to Catch Up, stopping automation');
+            result.errors.push(`Scanner left Catch Up and could not recover from ${currentUrl}`);
+            break;
+          }
+          currentTabIndex = 0;
+          currentTab = catchUpTabs[currentTabIndex].name;
+          tabScrollAttempts = 0;
+          container = page.locator('main').first();
+          continue;
+        }
+
         // Get max scroll attempts for current tab (All gets more attempts)
         const maxTabScrollAttempts = getMaxTabScrollAttempts(currentTab);
 
@@ -5598,8 +5708,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
             if (!currentUrl.includes('/catch-up') && !currentUrl.includes('/mynetwork')) {
               console.warn(`   ⚠️  WARNING: Not on catch-up page! Current URL: ${currentUrl}`);
             }
-          } catch (diagError: any) {
-            console.log(`   🔍 Diagnostic check failed: ${diagError.message}`);
+          } catch (diagError) {
+            console.log(`   🔍 Diagnostic check failed: ${getErrorMessage(diagError)}`);
           }
         }
 
@@ -5632,9 +5742,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               await humanPause(1000, 1500);
             }
             await humanPause(2000, 3000);
-          } catch (scrollError: any) {
-            if (scrollError.message?.includes('crashed') || scrollError.message?.includes('Target closed')) {
-              console.warn(`   ⚠️  Page crashed during scroll: ${scrollError.message}`);
+          } catch (scrollError) {
+            if (getErrorMessage(scrollError)?.includes('crashed') || getErrorMessage(scrollError)?.includes('Target closed')) {
+              console.warn(`   ⚠️  Page crashed during scroll: ${getErrorMessage(scrollError)}`);
               const reloaded = await reloadCatchUpPage();
               if (reloaded) {
                 container = page.locator('main').first();
@@ -5653,9 +5763,9 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
             if (await switchToNextCatchUpTab()) {
               continue;
             }
-          } catch (tabError: any) {
-            console.log(`   ⚠️  Error switching Catch Up tabs: ${tabError.message}`);
-            if (tabError.message?.includes('crashed') || tabError.message?.includes('Target closed')) {
+          } catch (tabError) {
+            console.log(`   ⚠️  Error switching Catch Up tabs: ${getErrorMessage(tabError)}`);
+            if (getErrorMessage(tabError)?.includes('crashed') || getErrorMessage(tabError)?.includes('Target closed')) {
               console.log('   🔄 Page crashed during tab switch, reloading...');
               const reloaded = await reloadCatchUpPage();
               if (reloaded) {
@@ -5769,20 +5879,20 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               processContact(page, contact, settings, lockData),
               timeoutPromise
             ]);
-          } catch (error: any) {
+          } catch (error) {
             // If browser/page was closed, stop processing immediately
-            if (error.message?.includes('Target page, context or browser has been closed') ||
-                error.message?.includes('browser has been closed') ||
-                error.message?.includes('Target crashed')) {
+            if (getErrorMessage(error)?.includes('Target page, context or browser has been closed') ||
+                getErrorMessage(error)?.includes('browser has been closed') ||
+                getErrorMessage(error)?.includes('Target crashed')) {
               console.error(`\n❌ Browser/page closed while processing ${contact.name}, stopping automation`);
-              result.errors.push(`Browser/page crashed or closed while processing ${contact.name}: ${error.message}`);
+              result.errors.push(`Browser/page crashed or closed while processing ${contact.name}: ${getErrorMessage(error)}`);
               stopRequested = true;
               break;
             }
             // If timeout, mark as failed and continue
-            if (error.message?.includes('Timeout:')) {
-              console.error(`\n⏱️  ${error.message}, stopping this run so the browser can be restarted cleanly...`);
-              result.errors.push(error.message);
+            if (getErrorMessage(error)?.includes('Timeout:')) {
+              console.error(`\n⏱️  ${getErrorMessage(error)}, stopping this run so the browser can be restarted cleanly...`);
+              result.errors.push(getErrorMessage(error));
               stopRequested = true;
               break;
             } else {
@@ -5822,8 +5932,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               const returnUrl = catchUpTabs[currentTabIndex]?.url || 'https://www.linkedin.com/mynetwork/catch-up/all/';
               console.log(`   🔙 Returning to Catch Up after direct compose send: ${returnUrl}`);
               await navigateWithRecovery(page, returnUrl, {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000,
+                waitUntil: 'commit',
+                timeout: 60000,
                 label: `LinkedIn catch-up return after ${contact.name}`,
               });
               await page
@@ -5860,8 +5970,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
               console.log(`   🔙 Returning to Catch Up after direct compose failure: ${returnUrl}`);
               try {
                 await navigateWithRecovery(page, returnUrl, {
-                  waitUntil: 'domcontentloaded',
-                  timeout: 30000,
+                  waitUntil: 'commit',
+                  timeout: 60000,
                   label: `LinkedIn catch-up return after failed ${contact.name}`,
                 });
                 await page
@@ -5873,8 +5983,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
                     console.warn('   ⚠️  Returned to Catch Up after failure but message links did not appear before timeout');
                   });
                 container = page.locator('main').first();
-              } catch (returnError: any) {
-                const returnMessage = returnError?.message || String(returnError);
+              } catch (returnError) {
+                const returnMessage = getErrorMessage(returnError) || String(returnError);
                 console.warn(`   ⚠️  Could not recover Catch Up after failed ${contact.name}: ${returnMessage}`);
                 result.errors.push(`Could not recover Catch Up after failed ${contact.name}: ${returnMessage}`);
                 stopRequested = true;
@@ -5947,13 +6057,13 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       await updateDailyStats(result.messagesSent, result.messagesFailed, result.contactsFound, byType);
     }
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error in LinkedIn automation:', error);
     console.error('   📊 Error details:', {
-      name: error.name,
-      message: error.message,
-      stack: error.stack?.split('\n').slice(0, 10).join('\n'),
-      cause: error.cause
+      name: getErrorName(error),
+      message: getErrorMessage(error),
+      stack: getErrorStack(error)?.split('\n').slice(0, 10).join('\n'),
+      cause: getErrorCause(error)
     });
 
     // Log browser/context/page state at error time
@@ -5975,16 +6085,16 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       } else {
         console.log('      Page: null');
       }
-    } catch (stateError: any) {
-      console.error('   ⚠️  Could not check browser state:', stateError.message);
+    } catch (stateError) {
+      console.error('   ⚠️  Could not check browser state:', getErrorMessage(stateError));
     }
 
-    result.errors.push(error.message || 'Unknown error');
+    result.errors.push(getErrorMessage(error) || 'Unknown error');
     result.success = false;
 
     // Update lock file with error
     lockData.status = isReauthRequiredError(error) ? 'reauth_required' : 'stopped';
-    lockData.error = error.message || 'Unknown error';
+    lockData.error = getErrorMessage(error) || 'Unknown error';
     lockData.stoppedAt = new Date().toISOString();
     writeLockFile(lockData);
 
@@ -6013,11 +6123,11 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       } else {
         console.log('   ⚠️  Context is null, cannot save storage state');
       }
-    } catch (e: any) {
-      console.warn('   ⚠️  Could not save storage state:', e.message);
+    } catch (e) {
+      console.warn('   ⚠️  Could not save storage state:', getErrorMessage(e));
       console.warn('   📊 Storage state error details:', {
-        name: e.name,
-        stack: e.stack?.split('\n').slice(0, 3).join('\n')
+        name: getErrorName(e),
+        stack: getErrorStack(e)?.split('\n').slice(0, 3).join('\n')
       });
     }
 
@@ -6052,11 +6162,11 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
       } else {
         console.log('   ⚠️  Browser is null, cannot close');
       }
-    } catch (e: any) {
-      console.warn('   ⚠️  Error closing browser:', e.message);
+    } catch (e) {
+      console.warn('   ⚠️  Error closing browser:', getErrorMessage(e));
       console.warn('   📊 Browser close error details:', {
-        name: e.name,
-        stack: e.stack?.split('\n').slice(0, 3).join('\n')
+        name: getErrorName(e),
+        stack: getErrorStack(e)?.split('\n').slice(0, 3).join('\n')
       });
     }
 
@@ -6070,7 +6180,8 @@ async function automateLinkedInMessages(dryRun: boolean = false): Promise<Proces
 }
 
 // Run if executed directly (Bun check)
-if ((import.meta as any).main || process.argv[1]?.includes('linkedin.ts')) {
+const currentImportMeta = import.meta as ImportMeta & { main?: boolean };
+if (currentImportMeta.main || process.argv[1]?.includes('linkedin.ts')) {
   const dryRun = process.argv.includes('--dry-run');
   automateLinkedInMessages(dryRun)
     .then(result => {

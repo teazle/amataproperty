@@ -11,6 +11,7 @@ ARTICLE_MAX_AGE_HOURS="${ARTICLE_MAX_AGE_HOURS:-168}"
 export HOME="${HOME:-/root}"
 export PM2_HOME="${PM2_HOME:-/root/.pm2}"
 export PATH="/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+ADMIN_COOKIE=""
 
 mkdir -p "$LOG_DIR"
 
@@ -24,6 +25,49 @@ rotate_log() {
   if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 10485760 ]; then
     mv "$LOG_FILE" "$LOG_FILE.old"
   fi
+}
+
+get_admin_cookie() {
+  if [ -n "$ADMIN_COOKIE" ]; then
+    printf "%s" "$ADMIN_COOKIE"
+    return 0
+  fi
+
+  local admin_password response cookie
+  admin_password="$(cd "$APP_DIR" && node -e 'require("dotenv").config({ path: ".env.local", override: false, quiet: true }); process.stdout.write(process.env.ADMIN_PASSWORD || "amataadmin")' 2>/dev/null || true)"
+
+  if [ -z "$admin_password" ]; then
+    return 1
+  fi
+
+  response="$(curl -sS --max-time 10 -i \
+    -X POST "$APP_BASE_URL/api/admin/auth/login" \
+    -H "Content-Type: application/json" \
+    --data "$(node -e 'console.log(JSON.stringify({ password: process.argv[1] }))' "$admin_password")" 2>/dev/null || true)"
+
+  cookie="$(printf "%s" "$response" | awk 'BEGIN{IGNORECASE=1} /^set-cookie:/ { sub(/\r$/, ""); sub(/^set-cookie:[[:space:]]*/, ""); split($0, parts, ";"); print parts[1]; exit }')"
+
+  if [ -z "$cookie" ]; then
+    return 1
+  fi
+
+  ADMIN_COOKIE="$cookie"
+  printf "%s" "$ADMIN_COOKIE"
+  return 0
+}
+
+admin_get() {
+  local endpoint cookie
+  endpoint="$1"
+  cookie="$(get_admin_cookie)" || return 1
+  curl -sS --max-time 10 -H "Cookie: $cookie" "$APP_BASE_URL$endpoint"
+}
+
+admin_post() {
+  local endpoint cookie
+  endpoint="$1"
+  cookie="$(get_admin_cookie)" || return 1
+  curl -sS --max-time 30 -X POST -H "Cookie: $cookie" "$APP_BASE_URL$endpoint"
 }
 
 check_pm2() {
@@ -97,15 +141,15 @@ check_http() {
 check_scheduler() {
   local status_json active_jobs initialized jobs_json enabled_jobs failed_jobs stale_jobs
 
-  status_json="$(curl -sS --max-time 10 "$APP_BASE_URL/api/scheduler/status" 2>/dev/null || true)"
+  status_json="$(admin_get "/api/scheduler/status" 2>/dev/null || true)"
   active_jobs="$(printf "%s" "$status_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s); console.log(Number(j.activeJobs||0));}catch{console.log(0)}})' 2>/dev/null || echo 0)"
   initialized="$(printf "%s" "$status_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s); console.log(j.initialized === true ? "true" : "false");}catch{console.log("false")}})' 2>/dev/null || echo false)"
 
   if [ "$initialized" != "true" ] || [ "$active_jobs" -lt "$SCHEDULER_MIN_ACTIVE_JOBS" ]; then
     log WARN "scheduler unhealthy initialized=$initialized activeJobs=$active_jobs; reloading"
-    curl -sS --max-time 30 -X POST "$APP_BASE_URL/api/scheduler/reload" >/dev/null 2>&1 || true
+    admin_post "/api/scheduler/reload" >/dev/null 2>&1 || true
     sleep 5
-    status_json="$(curl -sS --max-time 10 "$APP_BASE_URL/api/scheduler/status" 2>/dev/null || true)"
+    status_json="$(admin_get "/api/scheduler/status" 2>/dev/null || true)"
     active_jobs="$(printf "%s" "$status_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s); console.log(Number(j.activeJobs||0));}catch{console.log(0)}})' 2>/dev/null || echo 0)"
     initialized="$(printf "%s" "$status_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s); console.log(j.initialized === true ? "true" : "false");}catch{console.log("false")}})' 2>/dev/null || echo false)"
   fi
@@ -115,7 +159,7 @@ check_scheduler() {
     return 1
   fi
 
-  jobs_json="$(curl -sS --max-time 10 "$APP_BASE_URL/api/scheduler/jobs" 2>/dev/null || true)"
+  jobs_json="$(admin_get "/api/scheduler/jobs" 2>/dev/null || true)"
   enabled_jobs="$(printf "%s" "$jobs_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const jobs=JSON.parse(s).jobs||[]; console.log(jobs.filter(j=>j.enabled).length)}catch{console.log(0)}})' 2>/dev/null || echo 0)"
   failed_jobs="$(printf "%s" "$jobs_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const jobs=JSON.parse(s).jobs||[]; console.log(jobs.filter(j=>j.enabled && j.last_run_status==="failed").map(j=>j.name).join(","))}catch{console.log("parse-error")}})' 2>/dev/null || echo parse-error)"
   stale_jobs="$(printf "%s" "$jobs_json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const maxMs=Number(process.env.SCRAPER_JOB_MAX_AGE_HOURS||36)*3600*1000; const jobs=(JSON.parse(s).jobs||[]).filter(j=>j.enabled && j.last_run_at && Date.now()-Date.parse(j.last_run_at)>maxMs); console.log(jobs.map(j=>j.name).join(','));}catch{console.log('parse-error')}})" 2>/dev/null || echo parse-error)"

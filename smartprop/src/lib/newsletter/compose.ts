@@ -4,11 +4,12 @@
  * Pure function. No I/O. Given a lead, a valuation, the featured-projects
  * list, and a tracking code, returns the exact WhatsApp body to send.
  *
- * Copy rules locked with the user on 2026-05-29:
+ * Copy rules updated with the user on 2026-06-01:
  *   - Plain text only. No emoji, no markdown asterisks, no bullet symbols.
- *   - Three reply-word CTAs: SELL, REFI, MEET.
+ *   - Reply-word CTAs: BUY, SELL, REFI, CALL, COFFEE, STOP.
  *   - One short URL with ?ref=<leadCode> for click tracking.
- *   - UNSUB footer.
+ *   - STOP footer.
+ *   - Do not render send-ready copy without a supported valuation.
  */
 
 export interface NewsletterLeadInput {
@@ -39,7 +40,7 @@ export interface ComposeNewsletterInput {
   featuredUrlBase: string;
   /** First name shown in the sign-off. Defaults to "Jeremy". */
   senderName?: string;
-  /** Reply keyword that triggers opt-out. Defaults to "UNSUB". */
+  /** Reply keyword that triggers opt-out. Defaults to "STOP". */
   unsubKeyword?: string;
 }
 
@@ -102,20 +103,20 @@ function buildValuationLine(v: NewsletterValuationInput): string {
     const comps = v.comparablesCount && v.comparablesCount > 0
       ? ` Based on ${v.comparablesCount} recent ${v.comparablesCount === 1 ? 'transaction' : 'transactions'}.`
       : '';
-    return `PropNex indicative value as of ${asOf}: ${low} to ${high}.${comps}`;
+    return `Current indicative market valuation as of ${asOf}: ${low} to ${high}.${comps}`;
   }
 
   const mid = formatSgd(v.midSgd);
   if (mid) {
-    return `PropNex indicative value as of ${asOf}: around ${mid}.`;
+    return `Current indicative market valuation as of ${asOf}: around ${mid}.`;
   }
 
-  return 'I can pull an indicative PropNex valuation for your unit on request. Reply VALUE and I will send it through.';
+  throw new Error('A send-ready valuation newsletter requires a valuation range or midpoint.');
 }
 
 export function composeNewsletter(input: ComposeNewsletterInput): string {
   const senderName = input.senderName || 'Jeremy';
-  const unsub = (input.unsubKeyword || 'UNSUB').toUpperCase();
+  const unsub = (input.unsubKeyword || 'STOP').toUpperCase();
   const fname = greetingName(input.lead.name);
 
   const valuationLine = buildValuationLine(input.valuation);
@@ -129,16 +130,17 @@ export function composeNewsletter(input: ComposeNewsletterInput): string {
   const lines: string[] = [];
   lines.push(`Hi ${fname},`);
   lines.push('');
-  lines.push(`${senderName} here from ViewProperty.ai. Quick weekly update on your home.`);
+  lines.push(`${senderName} here from ViewProperty.ai. Quick update on your property.`);
   lines.push('');
   lines.push(input.lead.propertyTitle);
   lines.push(valuationLine);
   lines.push('');
-  lines.push('Three things you can do from here:');
+  lines.push('Are you looking to buy or sell property this year?');
   lines.push('');
-  lines.push('1. Sell — reply SELL and I will prep a no-obligation pricing and listing chat.');
-  lines.push('2. Refinance — reply REFI and I will connect you to our mortgage desk for a rate review.');
-  lines.push('3. Just chat — reply MEET for a coffee or a call, whichever you prefer.');
+  lines.push('1. Reply BUY if you are looking for your next place.');
+  lines.push('2. Reply SELL if you want to understand your selling options.');
+  lines.push('3. Reply REFI if you are not buying or selling now but want to review refinancing.');
+  lines.push('4. Reply CALL or COFFEE if you prefer to go through it directly.');
 
   if (projectsBlock) {
     lines.push('');

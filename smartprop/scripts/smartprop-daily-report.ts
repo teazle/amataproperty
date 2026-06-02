@@ -302,6 +302,26 @@ async function buildReport(options: CliOptions) {
     }, {})
   ).map(([platform, value]) => ({ platform, ...value }));
 
+  const articlesBySource = Object.entries(
+    (articleSessions.data ?? []).reduce<Record<string, {
+      sessions: number;
+      statuses: CountMap;
+      articlesScraped: number;
+      uniqueArticles: number;
+      errors: string[];
+    }>>((acc, row) => {
+      const source = String(row.source ?? 'unknown');
+      acc[source] ??= { sessions: 0, statuses: {}, articlesScraped: 0, uniqueArticles: 0, errors: [] };
+      acc[source].sessions += 1;
+      const status = String(row.status ?? 'unknown');
+      acc[source].statuses[status] = (acc[source].statuses[status] ?? 0) + 1;
+      acc[source].articlesScraped += Number(row.articles_scraped ?? 0);
+      acc[source].uniqueArticles += Number(row.unique_articles ?? 0);
+      if (row.error_message) acc[source].errors.push(String(row.error_message));
+      return acc;
+    }, {})
+  ).map(([source, value]) => ({ source, ...value }));
+
   const linkedinFailures = linkedinRows
     .filter((row) => row.status === 'failed' || row.error_message)
     .slice(0, 6)
@@ -310,17 +330,20 @@ async function buildReport(options: CliOptions) {
       error: row.error_message || row.status,
     }));
 
+  const unhealthyPm2 = pm2.filter((row) => row.status !== 'online');
+  const wahaReady =
+    wahaSessionStatus?.status === 'WORKING' ||
+    Boolean(wahaSessionStatus?.me?.id && wahaSessionStatus?.engine?.state === 'CONNECTED');
+  const wahaStatus = wahaSessionStatus?.status ?? 'unknown';
+  const wahaState = wahaSessionStatus?.engine?.state ?? 'n/a';
+
   const allErrors = [
     ...scraperRows.filter((row) => row.error_message).map((row) => `${row.platform}: ${row.error_message}`),
     ...linkedinFailures.map((row) => `LinkedIn ${row.contact}: ${row.error}`),
     ...(appHealth?.error ? [`App health: ${appHealth.error}`] : []),
     ...(wahaSessionStatus?.error ? [`WAHA: ${wahaSessionStatus.error}`] : []),
+    ...(!wahaSessionStatus?.error && !wahaReady ? [`WAHA session is not ready (${wahaStatus}/${wahaState})`] : []),
   ];
-
-  const unhealthyPm2 = pm2.filter((row) => row.status !== 'online');
-  const wahaReady =
-    wahaSessionStatus?.status === 'WORKING' ||
-    Boolean(wahaSessionStatus?.me?.id && wahaSessionStatus?.engine?.state === 'CONNECTED');
 
   const verdict =
     allErrors.length === 0 && unhealthyPm2.length === 0 && (!wahaSessionStatus || wahaReady)
@@ -352,6 +375,7 @@ async function buildReport(options: CliOptions) {
     },
     articleSessions: {
       total: articleSessions.data?.length ?? 0,
+      bySource: articlesBySource,
       statuses: countBy(articleSessions.data ?? [], 'status'),
       articlesScraped: sum(articleSessions.data ?? [], 'articles_scraped'),
       uniqueArticles: sum(articleSessions.data ?? [], 'unique_articles'),
@@ -394,8 +418,35 @@ function formatCounts(counts: CountMap): string {
   return entries.map(([key, value]) => `${key} ${value}`).join(', ');
 }
 
+function findPlatformSummary(
+  items: Array<{ platform: string; jobs: number; listings: number; statuses: CountMap; errors: string[] }>,
+  platform: string
+) {
+  return items.find((item) => item.platform.toLowerCase() === platform.toLowerCase()) ?? {
+    platform,
+    jobs: 0,
+    listings: 0,
+    statuses: {},
+    errors: [],
+  };
+}
+
+function formatLikeRun(run: { targetLikes: number; counts: CountMap; errors: any[] }) {
+  const counts = run.counts ?? {};
+  const confirmed = counts.confirmed ?? counts.liked ?? 0;
+  const attempted = counts.attempted ?? 0;
+  const considered = counts.considered ?? 0;
+  const skippedPromoted = counts.skippedPromoted ?? 0;
+  const skippedAlreadyLiked = counts.skippedAlreadyLiked ?? 0;
+  const failed = counts.failed ?? run.errors.length;
+
+  return `target=${run.targetLikes}; confirmed=${confirmed}; attempted=${attempted}; considered=${considered}; skipped_promoted=${skippedPromoted}; already_liked=${skippedAlreadyLiked}; failed=${failed}`;
+}
+
 function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   const lines: string[] = [];
+  const edgepropListings = findPlatformSummary(report.scrapers.byPlatform, 'edgeprop');
+  const propertyGuruListings = findPlatformSummary(report.scrapers.byPlatform, 'propertyguru');
   const pm2Summary = report.currentHealth.pm2.length
     ? report.currentHealth.pm2.map((row) => `${row.name}:${row.status}`).join(', ')
     : 'unavailable';
@@ -409,6 +460,23 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   lines.push(`Current health: app=${report.currentHealth.app}; WAHA=${report.currentHealth.waha.status}/${report.currentHealth.waha.engine ?? 'n/a'}; PM2=${pm2Summary}`);
   lines.push(`Containers: ${dockerSummary}`);
   lines.push('');
+  lines.push('Run counts:');
+  lines.push(`- EdgeProp articles: ${report.articleSessions.articlesScraped} scraped; ${report.articleSessions.uniqueArticles} unique; sessions=${report.articleSessions.total}; statuses=${formatCounts(report.articleSessions.statuses)}`);
+  for (const item of report.articleSessions.bySource) {
+    lines.push(`  - ${item.source}: articles=${item.articlesScraped}; unique=${item.uniqueArticles}; sessions=${item.sessions}; errors=${item.errors.length}`);
+  }
+  lines.push(`- EdgeProp listings: ${edgepropListings.listings} listings; jobs=${edgepropListings.jobs}; statuses=${formatCounts(edgepropListings.statuses)}; errors=${edgepropListings.errors.length}`);
+  lines.push(`- PropertyGuru listings: ${propertyGuruListings.listings} listings; jobs=${propertyGuruListings.jobs}; statuses=${formatCounts(propertyGuruListings.statuses)}; errors=${propertyGuruListings.errors.length}`);
+  lines.push(`- LinkedIn outreach: total=${report.linkedin.messages.total}; ${formatCounts(report.linkedin.messages.statuses)}`);
+  if (report.linkedin.likes.length > 0) {
+    for (const likeRun of report.linkedin.likes) {
+      lines.push(`- LinkedIn likes: ${formatLikeRun(likeRun)}`);
+    }
+  } else {
+    lines.push('- LinkedIn likes: no run artifact found for this SGT day');
+  }
+  lines.push(`- WhatsApp seller-agent messages: ${report.whatsapp.messages.total}; ${formatCounts(report.whatsapp.messages.directions)}`);
+  lines.push('');
   lines.push('Scheduled jobs:');
   for (const job of report.scheduledJobs) {
     lines.push(`- ${job.name} (${job.platform ?? 'n/a'}): enabled=${job.enabled}; last=${job.last_run_status ?? 'n/a'} at ${formatSgt(job.last_run_at)}; next=${formatSgt(job.next_run_at)}`);
@@ -416,25 +484,12 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   }
   if (report.scheduledJobs.length === 0) lines.push('- none found');
   lines.push('');
-  lines.push(`Scrapers: ${report.scrapers.totalJobs} jobs; statuses=${formatCounts(report.scrapers.statuses)}; listings=${report.scrapers.listingsProcessed}`);
-  for (const item of report.scrapers.byPlatform) {
-    lines.push(`- ${item.platform}: jobs=${item.jobs}; listings=${item.listings}; statuses=${formatCounts(item.statuses)}; errors=${item.errors.length}`);
-  }
-  lines.push(`Article scrapers: sessions=${report.articleSessions.total}; statuses=${formatCounts(report.articleSessions.statuses)}; articles=${report.articleSessions.articlesScraped}; unique=${report.articleSessions.uniqueArticles}`);
-  lines.push('');
-  lines.push(`LinkedIn messages: total=${report.linkedin.messages.total}; statuses=${formatCounts(report.linkedin.messages.statuses)}`);
+  lines.push(`Listing scrapers total: ${report.scrapers.totalJobs} jobs; statuses=${formatCounts(report.scrapers.statuses)}; listings=${report.scrapers.listingsProcessed}`);
   if (report.linkedin.messages.failures.length > 0) {
     lines.push('LinkedIn failures:');
     for (const failure of report.linkedin.messages.failures) {
       lines.push(`- ${failure.contact}: ${String(failure.error).slice(0, 160)}`);
     }
-  }
-  if (report.linkedin.likes.length > 0) {
-    for (const likeRun of report.linkedin.likes) {
-      lines.push(`LinkedIn likes: target=${likeRun.targetLikes}; counts=${formatCounts(likeRun.counts)}; errors=${likeRun.errors.length}`);
-    }
-  } else {
-    lines.push('LinkedIn likes: no artifact found for this SGT day');
   }
   lines.push('');
   lines.push(`WhatsApp/outreach: wa_messages=${report.whatsapp.messages.total} (${formatCounts(report.whatsapp.messages.directions)}); outreach_created=${report.whatsapp.outreachCreated.total}; replies=${report.whatsapp.outreachReplies}`);

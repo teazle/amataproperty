@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OpenClaw SmartProp daily run report at 10:00 SGT
+
+[Timer]
+# 02:00 UTC = 10:00 SGT. Singapore has no DST; UTC avoids host-local DST drift.
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=openclaw-smartprop-daily-report.service
+
+[Install]
+WantedBy=timers.target

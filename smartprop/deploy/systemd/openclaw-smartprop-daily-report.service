@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenClaw SmartProp daily run report
+After=network-online.target openclaw-gateway-watchdog.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/smartprop/app/smartprop
+EnvironmentFile=/root/.openclaw/workspace/smartprop-daily-report.env
+Environment=HOME=/root
+Environment=PM2_HOME=/root/.pm2
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/smartprop/app/smartprop/scripts/openclaw-smartprop-daily-report.sh
+TimeoutStartSec=900

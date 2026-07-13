@@ -743,6 +743,8 @@ DECLARE
   v_day_attempt_count INTEGER;
   v_recipient_attempt_count INTEGER;
   v_attempt_no INTEGER;
+  v_current_digits TEXT;
+  v_current_recipient_key TEXT;
 BEGIN
   IF p_send_id IS NULL THEN
     RAISE EXCEPTION 'send id is required' USING ERRCODE = '22023';
@@ -794,6 +796,24 @@ BEGIN
   IF NOT FOUND OR v_lead.status = 'lost' OR v_lead.opt_out_at IS NOT NULL THEN
     RAISE EXCEPTION 'queued attempt lead is no longer sendable'
       USING ERRCODE = '55000';
+  END IF;
+
+  v_current_digits := regexp_replace(
+    COALESCE(v_lead.phone_e164, v_lead.phone),
+    '[^0-9]',
+    '',
+    'g'
+  );
+  v_current_recipient_key := CASE
+    WHEN length(v_current_digits) = 8 THEN '+65' || v_current_digits
+    WHEN length(v_current_digits) = 10 AND left(v_current_digits, 2) = '65'
+      THEN '+' || v_current_digits
+    ELSE NULL
+  END;
+  IF v_current_recipient_key IS DISTINCT FROM v_identity.recipient_key
+     OR v_current_recipient_key !~ '^\+65[689][0-9]{7}$' THEN
+    RAISE EXCEPTION 'queued recipient no longer matches the current CRM phone'
+      USING ERRCODE = '40001';
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtext('newsletter_send:' || p_send_id::TEXT));
@@ -1101,6 +1121,188 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION create_newsletter_test_send(
+  p_issue_id UUID,
+  p_lead_id UUID,
+  p_override_phone TEXT,
+  p_rendered_body TEXT,
+  p_valuation_snapshot JSONB
+)
+RETURNS newsletter_sends
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_issue newsletter_issues%ROWTYPE;
+  v_lead crm_leads%ROWTYPE;
+  v_send newsletter_sends%ROWTYPE;
+  v_source_digits TEXT;
+  v_recipient_key TEXT;
+  v_override_digits TEXT;
+  v_override_phone TEXT;
+BEGIN
+  IF p_issue_id IS NULL OR p_lead_id IS NULL THEN
+    RAISE EXCEPTION 'issue id and lead id are required' USING ERRCODE = '22023';
+  END IF;
+  IF p_rendered_body IS NULL OR btrim(p_rendered_body) = '' THEN
+    RAISE EXCEPTION 'rendered body is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_valuation_snapshot IS NULL THEN
+    RAISE EXCEPTION 'valuation snapshot is required' USING ERRCODE = '22023';
+  END IF;
+
+  v_override_digits := regexp_replace(COALESCE(p_override_phone, ''), '[^0-9]', '', 'g');
+  v_override_phone := CASE
+    WHEN length(v_override_digits) = 8 THEN '+65' || v_override_digits
+    WHEN length(v_override_digits) = 10 AND left(v_override_digits, 2) = '65'
+      THEN '+' || v_override_digits
+    ELSE NULL
+  END;
+  IF v_override_phone IS NULL OR v_override_phone !~ '^\+65[689][0-9]{7}$' THEN
+    RAISE EXCEPTION 'override phone must be canonical Singapore E.164'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_issue
+  FROM newsletter_issues
+  WHERE id = p_issue_id
+    AND status IN ('approved', 'sending')
+  FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter issue is not active' USING ERRCODE = '55000';
+  END IF;
+
+  SELECT * INTO v_lead
+  FROM crm_leads
+  WHERE id = p_lead_id
+  FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CRM lead not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  v_source_digits := regexp_replace(
+    COALESCE(v_lead.phone_e164, v_lead.phone),
+    '[^0-9]',
+    '',
+    'g'
+  );
+  v_recipient_key := CASE
+    WHEN length(v_source_digits) = 8 THEN '+65' || v_source_digits
+    WHEN length(v_source_digits) = 10 AND left(v_source_digits, 2) = '65'
+      THEN '+' || v_source_digits
+    ELSE NULL
+  END;
+  IF v_recipient_key IS NULL OR v_recipient_key !~ '^\+65[689][0-9]{7}$' THEN
+    RAISE EXCEPTION 'lead does not have a canonical Singapore recipient key'
+      USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO newsletter_sends (
+    issue_id,
+    lead_id,
+    recipient_name,
+    recipient_key,
+    phone,
+    override_phone,
+    rendered_body,
+    valuation_snapshot,
+    status,
+    retryable,
+    is_test
+  )
+  VALUES (
+    v_issue.id,
+    v_lead.id,
+    v_lead.name,
+    v_recipient_key,
+    v_recipient_key,
+    v_override_phone,
+    p_rendered_body,
+    p_valuation_snapshot,
+    'test',
+    FALSE,
+    TRUE
+  )
+  RETURNING * INTO v_send;
+
+  RETURN v_send;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION finalize_newsletter_test_send(
+  p_send_id UUID,
+  p_provider_outcome TEXT,
+  p_provider_message_id TEXT,
+  p_error TEXT,
+  p_retryable BOOLEAN
+)
+RETURNS newsletter_sends
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_send newsletter_sends%ROWTYPE;
+  v_effective_retryable BOOLEAN;
+BEGIN
+  IF p_send_id IS NULL THEN
+    RAISE EXCEPTION 'send id is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_outcome IS NULL OR p_provider_outcome NOT IN ('sent', 'failed', 'unknown') THEN
+    RAISE EXCEPTION 'provider outcome must be sent, failed, or unknown' USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_outcome = 'sent'
+     AND (p_provider_message_id IS NULL OR btrim(p_provider_message_id) = '') THEN
+    RAISE EXCEPTION 'provider message id is required for sent test sends'
+      USING ERRCODE = '22023';
+  END IF;
+
+  v_effective_retryable := CASE
+    WHEN p_provider_outcome = 'unknown' THEN FALSE
+    ELSE COALESCE(p_retryable, FALSE)
+  END;
+
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_test_send:' || p_send_id::TEXT));
+  SELECT * INTO v_send
+  FROM newsletter_sends
+  WHERE id = p_send_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter test send not found' USING ERRCODE = 'P0002';
+  END IF;
+  IF v_send.is_test <> TRUE OR v_send.status <> 'test' THEN
+    RAISE EXCEPTION 'test-send finalization requires a test ledger row'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF v_send.completed_at IS NOT NULL THEN
+    IF v_send.provider_outcome = p_provider_outcome
+       AND v_send.waha_message_id IS NOT DISTINCT FROM NULLIF(btrim(p_provider_message_id), '')
+       AND v_send.error IS NOT DISTINCT FROM NULLIF(btrim(p_error), '')
+       AND v_send.retryable IS NOT DISTINCT FROM v_effective_retryable THEN
+      RETURN v_send;
+    END IF;
+    RAISE EXCEPTION 'conflicting finalization replay for test send'
+      USING ERRCODE = '55000';
+  END IF;
+
+  UPDATE newsletter_sends
+  SET provider_outcome = p_provider_outcome,
+      waha_message_id = NULLIF(btrim(p_provider_message_id), ''),
+      error = NULLIF(btrim(p_error), ''),
+      retryable = v_effective_retryable,
+      sent_at = CASE WHEN p_provider_outcome = 'sent' THEN clock_timestamp() ELSE sent_at END,
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_send.id
+  RETURNING * INTO v_send;
+
+  RETURN v_send;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION record_newsletter_opt_out(
   p_recipient TEXT,
   p_message_id TEXT,
@@ -1284,6 +1486,7 @@ DECLARE
   v_send newsletter_sends%ROWTYPE;
   v_run newsletter_runs%ROWTYPE;
   v_locked_lead_id UUID;
+  v_clears_recovery_blocker BOOLEAN;
 BEGIN
   IF p_send_id IS NULL THEN
     RAISE EXCEPTION 'send id is required' USING ERRCODE = '22023';
@@ -1352,6 +1555,11 @@ BEGIN
     RAISE EXCEPTION 'newsletter attempt is not attached to a run' USING ERRCODE = '55000';
   END IF;
 
+  v_clears_recovery_blocker := v_send.provider_outcome = 'sent'
+    AND v_run.status = 'failed'
+    AND v_run.blocker = 'accepted send requires CRM finalization recovery'
+    AND v_run.unknown_count = 1;
+
   UPDATE newsletter_sends
   SET status = p_resolution,
       retryable = FALSE,
@@ -1388,7 +1596,22 @@ BEGIN
   END IF;
 
   UPDATE newsletter_runs
-  SET unknown_count = unknown_count - 1,
+  SET status = CASE
+        WHEN v_clears_recovery_blocker AND unknown_count = 1 THEN
+          CASE WHEN attempted_count < 5 THEN 'running' ELSE 'completed' END
+        ELSE status
+      END,
+      blocker = CASE
+        WHEN v_clears_recovery_blocker AND unknown_count = 1 THEN NULL
+        ELSE blocker
+      END,
+      completed_at = CASE
+        WHEN v_clears_recovery_blocker AND unknown_count = 1 AND attempted_count >= 5
+          THEN clock_timestamp()
+        WHEN v_clears_recovery_blocker AND unknown_count = 1 THEN NULL
+        ELSE completed_at
+      END,
+      unknown_count = unknown_count - 1,
       sent_count = sent_count + CASE WHEN p_resolution = 'sent' THEN 1 ELSE 0 END,
       failed_count = failed_count + CASE WHEN p_resolution = 'failed' THEN 1 ELSE 0 END,
       last_heartbeat_at = clock_timestamp(),
@@ -1413,6 +1636,10 @@ REVOKE ALL ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB) F
 REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN)
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
 
@@ -1421,8 +1648,12 @@ GRANT EXECUTE ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB
 GRANT EXECUTE ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
 GRANT EXECUTE ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;
+GRANT EXECUTE ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;
+REVOKE ALL ON TABLE newsletter_sends FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE newsletter_sends TO service_role;
 REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE newsletter_suppression_events TO service_role;
 

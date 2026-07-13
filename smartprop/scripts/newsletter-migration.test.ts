@@ -49,6 +49,8 @@ describe('newsletter migration contract', () => {
       'start_newsletter_attempt',
       'finalize_newsletter_attempt',
       'record_accepted_newsletter_recovery',
+      'create_newsletter_test_send',
+      'finalize_newsletter_test_send',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown',
     ]) {
@@ -81,6 +83,7 @@ describe('newsletter migration contract', () => {
     expect(start).toMatch(/v_send\.status <> 'queued'/i);
     expect(start).toMatch(/v_run\.claim_token IS DISTINCT FROM btrim\(p_claim_token\)/i);
     expect(start).toMatch(/SET status = 'sending'[\s\S]+slot_no = p_slot_no[\s\S]+attempt_started_at = clock_timestamp\(\)/i);
+    expect(start).toMatch(/FROM crm_leads[\s\S]+FOR UPDATE[\s\S]+v_current_recipient_key IS DISTINCT FROM v_identity\.recipient_key/i);
   });
 
   test('transfers only stale claims after fifteen minutes', () => {
@@ -100,6 +103,40 @@ describe('newsletter migration contract', () => {
     expect(recovery).toMatch(/UPDATE newsletter_runs[\s\S]+SET status = 'failed'[\s\S]+unknown_count = unknown_count \+ 1/i);
     expect(recovery).not.toContain('UPDATE crm_leads');
     expect(recovery).not.toContain('INSERT INTO crm_lead_activities');
+  });
+
+  test('repairs the run when accepted recovery is explicitly resolved', () => {
+    const resolve = functionSql('resolve_newsletter_unknown');
+    expect(resolve).toContain("blocker = 'accepted send requires CRM finalization recovery'");
+    expect(resolve).toMatch(/unknown_count = 1[\s\S]+attempted_count < 5[\s\S]+THEN 'running'[\s\S]+ELSE 'completed'/i);
+    expect(resolve).toMatch(/blocker = CASE[\s\S]+THEN NULL[\s\S]+ELSE blocker\s+END/i);
+  });
+
+  test('makes the send ledger service-role read-only', () => {
+    expect(sql).toContain(
+      'REVOKE ALL ON TABLE newsletter_sends FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(sql).toContain('GRANT SELECT ON TABLE newsletter_sends TO service_role;');
+    expect(sql).not.toMatch(/GRANT\s+(INSERT|UPDATE|DELETE|ALL)[^;]+newsletter_sends\s+TO service_role/i);
+  });
+
+  test('provides secured test-send write RPCs without CRM or run mutation', () => {
+    const createTest = functionSql('create_newsletter_test_send', 'finalize_newsletter_test_send');
+    const finalizeTest = functionSql('finalize_newsletter_test_send', 'record_newsletter_opt_out');
+    for (const section of [createTest, finalizeTest]) {
+      expect(section).toContain('SECURITY DEFINER');
+      expect(section).toContain('SET search_path = public');
+      expect(section).not.toContain('UPDATE crm_leads');
+      expect(section).not.toContain('INSERT INTO crm_lead_activities');
+      expect(section).not.toContain('UPDATE newsletter_runs');
+    }
+    expect(createTest).toMatch(/INSERT INTO newsletter_sends[\s\S]+status[\s\S]+is_test[\s\S]+'test'[\s\S]+TRUE/i);
+    expect(createTest).toContain('override_phone');
+    expect(finalizeTest).toMatch(/v_send\.is_test <> TRUE[\s\S]+v_send\.status <> 'test'/i);
+    expect(sql).toMatch(/REVOKE ALL ON FUNCTION create_newsletter_test_send[\s\S]+FROM PUBLIC, anon, authenticated, service_role/i);
+    expect(sql).toMatch(/REVOKE ALL ON FUNCTION finalize_newsletter_test_send[\s\S]+FROM PUBLIC, anon, authenticated, service_role/i);
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION create_newsletter_test_send');
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION finalize_newsletter_test_send');
   });
 
   test('gates provider submissions to the current SGT day and five globally', () => {
@@ -233,6 +270,10 @@ describe('newsletter migration contract', () => {
       'ASSERT: stale claim takeover',
       'ASSERT: accepted recovery persistence',
       'ASSERT: Task 1.1 secured RPC grants',
+      'ASSERT: newsletter sends least privilege and spoofed GUC',
+      'ASSERT: secured test-send RPCs',
+      'ASSERT: post-queue phone change blocks start',
+      'ASSERT: accepted recovery auto-repairs run',
     ]) {
       expect(assertions).toContain(marker);
     }

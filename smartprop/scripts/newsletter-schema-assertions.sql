@@ -39,6 +39,12 @@ BEGIN
   IF to_regprocedure('public.record_accepted_newsletter_recovery(uuid,text,text)') IS NULL THEN
     v_missing := array_append(v_missing, 'record_accepted_newsletter_recovery(uuid,text,text)');
   END IF;
+  IF to_regprocedure('public.create_newsletter_test_send(uuid,uuid,text,text,jsonb)') IS NULL THEN
+    v_missing := array_append(v_missing, 'create_newsletter_test_send(uuid,uuid,text,text,jsonb)');
+  END IF;
+  IF to_regprocedure('public.finalize_newsletter_test_send(uuid,text,text,text,boolean)') IS NULL THEN
+    v_missing := array_append(v_missing, 'finalize_newsletter_test_send(uuid,text,text,text,boolean)');
+  END IF;
   IF to_regprocedure('public.start_newsletter_attempt(uuid,uuid,integer,text)') IS NOT NULL THEN
     v_missing := array_append(v_missing, 'obsolete start_newsletter_attempt overload still exists');
   END IF;
@@ -65,12 +71,16 @@ BEGIN
       'start_newsletter_attempt',
       'finalize_newsletter_attempt',
       'record_accepted_newsletter_recovery',
+      'create_newsletter_test_send',
+      'finalize_newsletter_test_send',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown'
     ])
     AND proc.prosecdef = TRUE
     AND proc.proconfig @> ARRAY['search_path=public']
     AND has_function_privilege('service_role', proc.oid, 'EXECUTE')
+    AND NOT has_function_privilege('anon', proc.oid, 'EXECUTE')
+    AND NOT has_function_privilege('authenticated', proc.oid, 'EXECUTE')
     AND NOT EXISTS (
       SELECT 1
       FROM aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) AS acl
@@ -78,8 +88,8 @@ BEGIN
         AND acl.privilege_type = 'EXECUTE'
     );
 
-  IF v_function_count <> 7 THEN
-    RAISE EXCEPTION 'RPC security contract matched % of 7 functions', v_function_count;
+  IF v_function_count <> 9 THEN
+    RAISE EXCEPTION 'RPC security contract matched % of 9 functions', v_function_count;
   END IF;
 
   IF NOT EXISTS (
@@ -145,6 +155,53 @@ BEGIN
       AND proc.proowner = relation.relowner
   ) THEN
     RAISE EXCEPTION 'STOP RPC is not owner-executed for suppression event insertion';
+  END IF;
+
+  -- ASSERT: newsletter sends least privilege and spoofed GUC
+  IF NOT has_table_privilege('service_role', 'newsletter_sends', 'SELECT')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'INSERT')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'UPDATE')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'DELETE')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'TRUNCATE')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'REFERENCES')
+     OR has_table_privilege('service_role', 'newsletter_sends', 'TRIGGER')
+     OR has_table_privilege('anon', 'newsletter_sends', 'SELECT')
+     OR has_table_privilege('anon', 'newsletter_sends', 'INSERT')
+     OR has_table_privilege('anon', 'newsletter_sends', 'UPDATE')
+     OR has_table_privilege('anon', 'newsletter_sends', 'DELETE')
+     OR has_table_privilege('anon', 'newsletter_sends', 'TRUNCATE')
+     OR has_table_privilege('anon', 'newsletter_sends', 'REFERENCES')
+     OR has_table_privilege('anon', 'newsletter_sends', 'TRIGGER')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'SELECT')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'INSERT')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'UPDATE')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'DELETE')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'REFERENCES')
+     OR has_table_privilege('authenticated', 'newsletter_sends', 'TRIGGER')
+     OR EXISTS (
+       SELECT 1
+       FROM pg_class AS relation
+       CROSS JOIN LATERAL aclexplode(
+         COALESCE(relation.relacl, acldefault('r', relation.relowner))
+       ) AS acl
+       WHERE relation.oid = 'newsletter_sends'::regclass
+         AND acl.grantee = 0
+  ) THEN
+    RAISE EXCEPTION 'newsletter send table privileges are not service-role read-only';
+  END IF;
+
+  IF (
+    SELECT count(*)
+    FROM pg_proc AS proc
+    JOIN pg_namespace AS namespace ON namespace.oid = proc.pronamespace
+    JOIN pg_class AS relation ON relation.oid = 'newsletter_sends'::regclass
+    WHERE namespace.nspname = 'public'
+      AND proc.proname IN ('create_newsletter_test_send', 'finalize_newsletter_test_send')
+      AND proc.prosecdef = TRUE
+      AND proc.proowner = relation.relowner
+  ) <> 2 THEN
+    RAISE EXCEPTION 'test-send RPCs are not owner-executed for ledger writes';
   END IF;
 
   IF NOT EXISTS (
@@ -479,6 +536,131 @@ BEGIN
 END;
 $$;
 
+-- ASSERT: secured test-send RPCs
+DO $$
+DECLARE
+  v_issue_id UUID;
+  v_run_id UUID;
+  v_lead_ids UUID[];
+  v_send newsletter_sends%ROWTYPE;
+  v_run_before newsletter_runs%ROWTYPE;
+  v_lead_before crm_leads%ROWTYPE;
+BEGIN
+  SELECT issue_id, run_id, lead_ids INTO v_issue_id, v_run_id, v_lead_ids
+  FROM newsletter_assertion_fixture;
+
+  SELECT * INTO v_run_before FROM newsletter_runs WHERE id = v_run_id;
+  SELECT * INTO v_lead_before FROM crm_leads WHERE id = v_lead_ids[8];
+
+  v_send := create_newsletter_test_send(
+    v_issue_id,
+    v_lead_ids[8],
+    '+65 9888 0000',
+    'isolated test-send body',
+    '{"value":800000,"source":"test-send-assertion"}'::JSONB
+  );
+
+  IF v_send.status <> 'test'
+     OR v_send.is_test <> TRUE
+     OR v_send.override_phone <> '+6598880000'
+     OR v_send.run_id IS NOT NULL
+     OR v_send.slot_no IS NOT NULL
+     OR v_send.attempt_no IS NOT NULL
+     OR v_send.attempt_started_at IS NOT NULL THEN
+    RAISE EXCEPTION 'test-send creation did not remain outside provider run accounting';
+  END IF;
+
+  v_send := finalize_newsletter_test_send(
+    v_send.id,
+    'sent',
+    'test-provider-message',
+    NULL,
+    FALSE
+  );
+
+  IF v_send.status <> 'test'
+     OR v_send.provider_outcome <> 'sent'
+     OR v_send.waha_message_id <> 'test-provider-message'
+     OR v_send.completed_at IS NULL
+     OR v_send.sent_at IS NULL
+     OR v_send.run_id IS NOT NULL
+     OR v_send.slot_no IS NOT NULL
+     OR v_send.attempt_started_at IS NOT NULL THEN
+    RAISE EXCEPTION 'test-send finalization did not preserve isolated provider evidence';
+  END IF;
+
+  IF (SELECT newsletter_runs FROM newsletter_runs WHERE id = v_run_id)
+       IS DISTINCT FROM v_run_before
+     OR (SELECT crm_leads FROM crm_leads WHERE id = v_lead_ids[8])
+       IS DISTINCT FROM v_lead_before
+     OR EXISTS (
+       SELECT 1 FROM crm_lead_activities
+       WHERE lead_id = v_lead_ids[8]
+         AND metadata ->> 'newsletter_send_id' = v_send.id::TEXT
+     ) THEN
+    RAISE EXCEPTION 'test-send RPC mutated CRM or run state';
+  END IF;
+END;
+$$;
+
+-- ASSERT: post-queue phone change blocks start
+DO $$
+DECLARE
+  v_run_id UUID;
+  v_lead_ids UUID[];
+  v_queued newsletter_sends%ROWTYPE;
+  v_attempted_before INTEGER;
+  v_rejected BOOLEAN := FALSE;
+BEGIN
+  SELECT run_id, lead_ids INTO v_run_id, v_lead_ids
+  FROM newsletter_assertion_fixture;
+
+  v_queued := queue_newsletter_attempt(
+    v_run_id,
+    v_lead_ids[7],
+    'schema-assertion-takeover',
+    'phone-change queue body',
+    '{"value":700000,"source":"phone-change"}'::JSONB
+  );
+  SELECT attempted_count INTO v_attempted_before
+  FROM newsletter_runs
+  WHERE id = v_run_id;
+
+  UPDATE crm_leads
+  SET phone = '92000007',
+      phone_e164 = '+6592000007',
+      updated_at = clock_timestamp()
+  WHERE id = v_lead_ids[7];
+
+  BEGIN
+    PERFORM start_newsletter_attempt(v_queued.id, 1, 'schema-assertion-takeover');
+  EXCEPTION WHEN serialization_failure THEN
+    v_rejected := TRUE;
+  END;
+
+  IF NOT v_rejected
+     OR NOT EXISTS (
+       SELECT 1 FROM newsletter_sends
+       WHERE id = v_queued.id
+         AND status = 'queued'
+         AND slot_no IS NULL
+         AND attempt_no IS NULL
+         AND attempt_started_at IS NULL
+     )
+     OR (SELECT attempted_count FROM newsletter_runs WHERE id = v_run_id)
+       IS DISTINCT FROM v_attempted_before THEN
+    RAISE EXCEPTION 'post-queue CRM phone change consumed or started a provider slot';
+  END IF;
+
+  UPDATE newsletter_sends
+  SET status = 'skipped',
+      retryable = FALSE,
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_queued.id;
+END;
+$$;
+
 -- ASSERT: provider submission negative transitions
 DO $$
 DECLARE
@@ -629,6 +811,7 @@ $$;
 
 -- ASSERT: unknown is non-retryable
 -- ASSERT: accepted recovery persistence
+-- ASSERT: accepted recovery auto-repairs run
 DO $$
 DECLARE
   v_run_id UUID;
@@ -694,11 +877,17 @@ BEGIN
     RAISE EXCEPTION 'accepted recovery resolution did not finalize CRM safely';
   END IF;
 
-  UPDATE newsletter_runs
-  SET status = 'running',
-      blocker = NULL,
-      updated_at = clock_timestamp()
-  WHERE id = v_run_id;
+  IF NOT EXISTS (
+    SELECT 1 FROM newsletter_runs
+    WHERE id = v_run_id
+      AND status = 'running'
+      AND blocker IS NULL
+      AND unknown_count = 0
+      AND attempted_count = 4
+      AND completed_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'accepted recovery resolution did not automatically repair the run';
+  END IF;
 
   v_send := pg_temp.queue_and_start_newsletter_assertion(
     v_run_id,
@@ -986,5 +1175,35 @@ BEGIN
   END IF;
 END;
 $$;
+
+SET LOCAL ROLE service_role;
+
+-- ASSERT: newsletter sends least privilege and spoofed GUC
+DO $$
+DECLARE
+  v_send_id UUID;
+  v_rejected BOOLEAN := FALSE;
+BEGIN
+  SELECT id INTO v_send_id
+  FROM newsletter_sends
+  ORDER BY created_at, id
+  LIMIT 1;
+
+  PERFORM set_config('app.newsletter_start_send_id', v_send_id::TEXT, TRUE);
+  BEGIN
+    UPDATE newsletter_sends
+    SET updated_at = clock_timestamp()
+    WHERE id = v_send_id;
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_rejected := TRUE;
+  END;
+
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'service role bypassed the send ledger ACL with a spoofed start GUC';
+  END IF;
+END;
+$$;
+
+RESET ROLE;
 
 ROLLBACK;

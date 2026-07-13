@@ -241,6 +241,25 @@ It does not need a new approval every day. The production campaign runner, not a
 OpenClaw chat send tool, owns recipient selection, sending, CRM updates, STOP
 suppression, and the operator report.
 
+### Mobile-only lead preparation
+
+Before every dry-run, Chloe must review the audience project's CRM leads:
+
+- Use the mobile field when a source row contains both mobile and landline numbers.
+- A WhatsApp newsletter candidate must normalize to `+658XXXXXXX` or `+659XXXXXXX`.
+  Treat landlines and malformed numbers as ineligible; never move them to another
+  field or send them manually to bypass validation.
+- Duplicates, lost leads, opted-out contacts, and suppressed contacts are also
+  ineligible. Report excluded mobile-ineligible contacts as counts and reasons,
+  without printing a raw lead list.
+- Confirm the issue is approved, the audience project is active, and the project
+  has a current approved valuation. Run the dry-run, review its selected count and
+  blocker, and only then treat the list as ready.
+
+The runner automatically selects up to five eligible recipients. Do not manually
+choose the five recipients. Do not send a parallel batch or retry a failed or unknown
+provider submission outside the ledger.
+
 1. Import and manage newsletter leads in the SmartProp CRM. Keep each list in the
    correct CRM project and verify the imported/skipped/duplicate counts.
 2. Confirm the newsletter issue is approved and its audience project is active.

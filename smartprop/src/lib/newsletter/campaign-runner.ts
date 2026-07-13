@@ -106,7 +106,9 @@ function validateDate(value: string): void {
 }
 
 function validateOptions(options: CampaignRunOptions): string[] {
-  if (!options.enabled) throw new CampaignConfigurationError('WhatsApp newsletter campaign is disabled.');
+  if (!options.enabled && !options.dryRun) {
+    throw new CampaignConfigurationError('WhatsApp newsletter campaign is disabled.');
+  }
   if (options.date && !options.dryRun) {
     throw new CampaignConfigurationError('--date is allowed only with --dry-run.');
   }

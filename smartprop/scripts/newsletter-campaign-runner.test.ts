@@ -436,6 +436,19 @@ describe('runNewsletterCampaign', () => {
     expect(store.referenceTimes[0]?.toISOString()).toBe('2026-07-11T16:00:00.000Z');
   });
 
+  test('dry-run remains available while real campaign sending is disabled', async () => {
+    const store = new FakeStore();
+    let posts = 0;
+    const result = await runNewsletterCampaign(dependencies(store, {
+      transport: async () => { posts += 1; return { outcome: 'accepted', messageId: 'x' }; },
+    }), { ...options, enabled: false, dryRun: true });
+
+    expect(result.status).toBe('dry-run');
+    expect(result.selectedCount).toBe(5);
+    expect(posts).toBe(0);
+    expect(store.calls).toEqual(['resolveIssue', 'selectCandidates:5']);
+  });
+
   test('rejects impossible dry-run calendar dates before store access', async () => {
     const store = new FakeStore();
     await expect(runNewsletterCampaign(dependencies(store), {

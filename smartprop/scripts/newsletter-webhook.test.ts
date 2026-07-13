@@ -347,7 +347,7 @@ describe('WAHA webhook', () => {
     const example = readFileSync(new URL('../env.example', import.meta.url), 'utf8');
 
     expect(compose).toContain('WAHA_API_KEY=${WAHA_API_KEY:?WAHA_API_KEY is required}');
-    expect(compose).toContain('X-Api-Key: $$WAHA_API_KEY');
+    expect(compose).toContain('curl -f -H \\"X-Api-Key: $$WAHA_API_KEY\\"');
     expect(example).toContain('WAHA_API_KEY=replace-with-a-strong-random-api-key');
   });
 });

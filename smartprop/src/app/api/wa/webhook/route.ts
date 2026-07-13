@@ -12,7 +12,7 @@ function webhookAuthorizationStatus(request: NextRequest): 401 | 503 | null {
   const expected = process.env.WAHA_WEBHOOK_SECRET;
   if (!expected) return process.env.NODE_ENV === 'production' ? 503 : null;
 
-  const provided = request.headers.get('x-waha-webhook-secret') || '';
+  const provided = request.headers.get('X-WAHA-Webhook-Secret') || '';
 
   return secureEquals(provided, expected) ? null : 401;
 }
@@ -109,6 +109,18 @@ type WebhookDependencies = {
   recordOptOut: (input: Omit<RecordNewsletterOptOutInput, 'client'>) => Promise<void>;
 };
 
+async function resolveMessageLogDependencies(overrides: Partial<WebhookDependencies>) {
+  const messageLog = overrides.normalizePhone && overrides.findLatestOutreach && overrides.logMessage
+    ? null
+    : await import('@/lib/wa/message-log');
+
+  return {
+    normalizePhone: overrides.normalizePhone || messageLog!.normalizeWhatsAppPhone,
+    findLatestOutreach: overrides.findLatestOutreach || messageLog!.findLatestOutreachByPhone,
+    logMessage: overrides.logMessage || messageLog!.logWhatsAppMessage,
+  };
+}
+
 async function reconcileUnknownOutboundMessage(
   providerMessageId: string | null,
   client: WebhookSupabaseClient,
@@ -161,12 +173,10 @@ export function createWebhookHandler(overrides: Partial<WebhookDependencies> = {
       }
 
       if (message.fromMe) {
-        const messageLog = overrides.normalizePhone && overrides.findLatestOutreach && overrides.logMessage
-          ? null
-          : await import('@/lib/wa/message-log');
-        const phone = (overrides.normalizePhone || messageLog!.normalizeWhatsAppPhone)(message.to || message.from);
-        const outreach = await (overrides.findLatestOutreach || messageLog!.findLatestOutreachByPhone)(phone);
-        const logged = await (overrides.logMessage || messageLog!.logWhatsAppMessage)({
+        const messageLog = await resolveMessageLogDependencies(overrides);
+        const phone = messageLog.normalizePhone(message.to || message.from);
+        const outreach = await messageLog.findLatestOutreach(phone);
+        const logged = await messageLog.logMessage({
           outreachId: outreach?.id || null,
           agentId: outreach?.agent_id || null,
           direction: 'outbound',
@@ -194,14 +204,37 @@ export function createWebhookHandler(overrides: Partial<WebhookDependencies> = {
         if (overrides.recordOptOut) {
           await overrides.recordOptOut({ recipient: message.from, messageId: message.id });
         } else {
-          const getClient = (await import('@/workers/supa')).getSupabaseClient;
+          const getClient = overrides.getSupabaseClient || (await import('@/workers/supa')).getSupabaseClient;
           await recordNewsletterOptOut({
             recipient: message.from,
             messageId: message.id,
             client: getClient() as unknown as WebhookSupabaseClient,
           });
         }
-        return NextResponse.json({ success: true, optedOut: true });
+
+        const messageLog = await resolveMessageLogDependencies(overrides);
+        const phone = messageLog.normalizePhone(message.from);
+        const outreach = await messageLog.findLatestOutreach(phone);
+        const logged = await messageLog.logMessage({
+          outreachId: outreach?.id || null,
+          agentId: outreach?.agent_id || null,
+          direction: 'inbound',
+          phone,
+          chatId: message.from,
+          wahaMessageId: message.id,
+          body: message.body,
+          rawPayload: message.rawPayload,
+          occurredAt: message.timestamp
+            ? new Date(typeof message.timestamp === 'number' ? message.timestamp * 1000 : message.timestamp).toISOString()
+            : new Date().toISOString(),
+        });
+
+        return NextResponse.json({
+          success: true,
+          optedOut: true,
+          duplicate: logged.duplicate,
+          outreachId: outreach?.id || null,
+        });
       }
 
       const processInboundMessage = overrides.processInboundMessage

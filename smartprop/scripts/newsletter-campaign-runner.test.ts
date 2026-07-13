@@ -16,7 +16,13 @@ import type {
   TestSendInput,
 } from '../src/lib/newsletter/campaign-store';
 import type { CampaignTransportResult } from '../src/lib/newsletter/campaign-types';
-import { parseCampaignCliArgs } from './run-whatsapp-newsletter-campaign';
+import { createCampaignStore } from '../src/lib/newsletter/campaign-store';
+import {
+  createProcessClaimToken,
+  exitCodeForError,
+  exitCodeForResult,
+  parseCampaignCliArgs,
+} from './run-whatsapp-newsletter-campaign';
 
 const issue: NewsletterIssue = {
   id: 'issue-1',
@@ -57,13 +63,16 @@ class FakeStore implements CampaignStore {
   attempts: NewsletterAttempt[] = [];
   suppressed = new Set<string>();
   finalizeError: Error | null = null;
+  recoveryError: Error | null = null;
   testRows: TestSendInput[] = [];
+  reports: OperatorReport[] = [];
+  referenceTimes: Array<Date | undefined> = [];
 
   async resolveIssue(_issueId?: string): Promise<NewsletterIssue> { this.calls.push('resolveIssue'); return issue; }
   async claimToday(_claimToken: string): Promise<CampaignRun> { this.calls.push('claimToday'); return this.run; }
   async listAttempts(): Promise<NewsletterAttempt[]> { this.calls.push('listAttempts'); return this.attempts; }
-  async recoverAbandoned(): Promise<number> {
-    this.calls.push('recoverAbandoned');
+  async recoverAbandoned(_runId: string, olderThan: Date): Promise<number> {
+    this.calls.push(`recoverAbandoned:${olderThan.toISOString()}`);
     let recovered = 0;
     this.attempts = this.attempts.map((attempt) => {
       if (attempt.status !== 'sending') return attempt;
@@ -72,33 +81,45 @@ class FakeStore implements CampaignStore {
     });
     return recovered;
   }
-  async selectCandidates(_issue: NewsletterIssue, limit: number): Promise<CampaignCandidate[]> {
+  async selectCandidates(_issue: NewsletterIssue, limit: number, referenceTime?: Date): Promise<CampaignCandidate[]> {
     this.calls.push(`selectCandidates:${limit}`);
+    this.referenceTimes.push(referenceTime);
     return this.candidates.slice(0, limit);
   }
   async selectCandidate(issue: NewsletterIssue, leadId: string): Promise<CampaignCandidate | null> {
     this.calls.push(`selectCandidate:${leadId}`);
     return this.candidates.find((item) => item.id === leadId) || null;
   }
-  async startAttempt(
-    run: CampaignRun, selected: CampaignCandidate, slotNo: number, body: string,
+  async queueAttempt(
+    run: CampaignRun, selected: CampaignCandidate, _claimToken: string, body: string,
   ): Promise<NewsletterAttempt | 'suppressed'> {
-    this.calls.push(`start:${selected.id}:${slotNo}`);
-    if (this.suppressed.has(selected.id)) return 'suppressed';
+    this.calls.push(`queue:${selected.id}`);
     const attempt: NewsletterAttempt = {
       id: `send-${selected.id}-${selected.attemptCount + 1}`,
       runId: run.id,
       leadId: selected.id,
-      slotNo,
+      slotNo: null,
       recipientName: selected.name,
       recipientKey: selected.recipientKey,
       renderedBody: body,
-      status: 'sending',
-      attemptNo: selected.attemptCount + 1,
+      status: 'queued',
+      attemptNo: null,
       retryable: true,
     };
     this.attempts.push(attempt);
     return attempt;
+  }
+  async startAttempt(
+    attempt: NewsletterAttempt, _run: CampaignRun, slotNo: number, _claimToken: string,
+  ): Promise<NewsletterAttempt | 'suppressed'> {
+    this.calls.push(`start:${attempt.leadId}:${slotNo}`);
+    if (attempt.leadId && this.suppressed.has(attempt.leadId)) {
+      this.attempts = this.attempts.map((item) => item.id === attempt.id ? { ...item, status: 'opted_out' } : item);
+      return 'suppressed';
+    }
+    const started = { ...attempt, slotNo, status: 'sending' as const, attemptNo: 1 };
+    this.attempts = this.attempts.map((item) => item.id === attempt.id ? started : item);
+    return started;
   }
   async finalizeAttempt(input: FinalizeAttemptInput): Promise<void> {
     this.calls.push(`finalize:${input.attemptId}:${input.result.outcome}`);
@@ -108,9 +129,11 @@ class FakeStore implements CampaignStore {
       : attempt);
   }
   async heartbeat(): Promise<void> { this.calls.push('heartbeat'); }
-  async queueOperatorReports(): Promise<OperatorReport[]> { this.calls.push('queueReports'); return []; }
+  async queueOperatorReports(): Promise<OperatorReport[]> { this.calls.push('queueReports'); return this.reports; }
   async startReport(): Promise<boolean> { return true; }
-  async finalizeReport(): Promise<void> {}
+  async finalizeReport(id: string, result: CampaignTransportResult): Promise<void> {
+    this.calls.push(`finalizeReport:${id}:${result.outcome}`);
+  }
   async finishRun(_runId: string, _blocker: string | null): Promise<CampaignRun> {
     this.calls.push('finishRun');
     return { ...this.run, status: 'completed' };
@@ -118,6 +141,11 @@ class FakeStore implements CampaignStore {
   async markRecoveryRequired(_runId: string, blocker: string): Promise<void> {
     this.calls.push('markRecoveryRequired');
     this.run = { ...this.run, status: 'failed', blocker };
+  }
+  async recordAcceptedRecovery(_attemptId: string, _messageId: string, _error: string): Promise<void> {
+    this.calls.push('recordAcceptedRecovery');
+    if (this.recoveryError) throw this.recoveryError;
+    this.run = { ...this.run, status: 'failed', blocker: 'accepted send requires CRM finalization recovery' };
   }
   async createTestSend(input: TestSendInput): Promise<string> {
     this.calls.push('createTestSend'); this.testRows.push(input); return 'test-row-1';
@@ -137,6 +165,7 @@ function dependencies(store: FakeStore, overrides: Record<string, unknown> = {})
     transport: accepted,
     sleep: async () => {},
     writeRecoveryRecord: async () => {},
+    now: () => new Date('2026-07-13T04:00:00.000Z'),
     ...overrides,
   };
 }
@@ -169,6 +198,9 @@ describe('runNewsletterCampaign', () => {
 
     expect(result.status).toBe('completed');
     expect(posts).toHaveLength(5);
+    expect(store.calls.slice(0, store.calls.indexOf('start:lead-1:1'))).toEqual(expect.arrayContaining([
+      'queue:lead-1', 'queue:lead-2', 'queue:lead-3', 'queue:lead-4', 'queue:lead-5',
+    ]));
     expect(store.calls.filter((call) => call.startsWith('start:'))).toEqual([
       'start:lead-1:1', 'start:lead-2:2', 'start:lead-3:3', 'start:lead-4:4', 'start:lead-5:5',
     ]);
@@ -182,6 +214,24 @@ describe('runNewsletterCampaign', () => {
 
     expect(result.status).toBe('completed');
     expect(store.calls).toEqual(['claimToday', 'listAttempts', 'queueReports']);
+  });
+
+  test('a running same-day invocation resumes the persisted queued batch without reselection', async () => {
+    const store = new FakeStore();
+    store.attempts = [1, 2].map((number) => ({
+      id: `queued-${number}`, runId: 'run-1', leadId: `original-${number}`, slotNo: null,
+      recipientName: `Original ${number}`, recipientKey: `+659200000${number}`,
+      renderedBody: `persisted-${number}`, status: 'queued' as const, attemptNo: null, retryable: true,
+    }));
+    store.candidates = [candidate(5), candidate(6)];
+    const bodies: string[] = [];
+
+    await runNewsletterCampaign(dependencies(store, {
+      transport: async (_to: string, body: string) => { bodies.push(body); return { outcome: 'accepted', messageId: body }; },
+    }), options);
+
+    expect(store.calls.some((call) => call.startsWith('selectCandidates:'))).toBe(false);
+    expect(bodies).toEqual(['persisted-1', 'persisted-2']);
   });
 
   test('a definite failed attempt consumes its slot without a same-day replacement', async () => {
@@ -237,8 +287,8 @@ describe('runNewsletterCampaign', () => {
     await runNewsletterCampaign(dependencies(store), options);
 
     expect(store.attempts.find((attempt) => attempt.id === 'abandoned')?.status).toBe('unknown');
-    const selectionIndex = store.calls.findIndex((call) => call.startsWith('selectCandidates:'));
-    expect(store.calls.indexOf('recoverAbandoned')).toBeLessThan(selectionIndex);
+    expect(store.calls.some((call) => call.startsWith('selectCandidates:'))).toBe(false);
+    expect(store.calls).toContain('recoverAbandoned:2026-07-13T03:45:00.000Z');
   });
 
   test('retryable failure can retry on a later day but candidates at three attempts are excluded', async () => {
@@ -258,20 +308,57 @@ describe('runNewsletterCampaign', () => {
 
     const result = await runNewsletterCampaign(dependencies(store, {
       transport: async () => { posts += 1; return { outcome: 'accepted', messageId: 'provider-accepted' }; },
-      writeRecoveryRecord: async (record: unknown) => { recoveries.push(record); },
+      writeRecoveryRecord: async (record: unknown) => { store.calls.push('writeRecoveryRecord'); recoveries.push(record); },
     }), options);
 
     expect(result.status).toBe('recovery-required');
     expect(posts).toBe(1);
     expect(recoveries).toHaveLength(1);
     expect(recoveries[0]).toMatchObject({ attemptId: 'send-lead-1-1', providerMessageId: 'provider-accepted' });
-    expect(store.calls).toContain('markRecoveryRequired');
+    expect(store.calls.indexOf('recordAcceptedRecovery')).toBeLessThan(store.calls.indexOf('writeRecoveryRecord'));
 
     store.finalizeError = null;
     await runNewsletterCampaign(dependencies(store, {
       transport: async () => { posts += 1; return { outcome: 'accepted', messageId: 'must-not-send' }; },
     }), options);
     expect(posts).toBe(1);
+  });
+
+  test('database accepted recovery survives filesystem recovery write failure and stops', async () => {
+    const store = new FakeStore();
+    store.finalizeError = new Error('CRM transaction failed');
+    let posts = 0;
+    const result = await runNewsletterCampaign(dependencies(store, {
+      transport: async () => { posts += 1; return { outcome: 'accepted', messageId: 'provider-accepted' }; },
+      writeRecoveryRecord: async () => { store.calls.push('writeRecoveryRecord'); throw new Error('disk full'); },
+    }), options);
+
+    expect(result.status).toBe('recovery-required');
+    expect(posts).toBe(1);
+    expect(store.calls).toContain('recordAcceptedRecovery');
+  });
+
+  test('operator report unknown records recovery-required and is not resent automatically', async () => {
+    const store = new FakeStore();
+    store.run.status = 'completed';
+    store.reports = [{ id: 'report-1', operatorKey: '+6591051399', body: 'summary', status: 'queued' }];
+    const result = await runNewsletterCampaign(dependencies(store, {
+      transport: async () => ({ outcome: 'unknown', error: 'timeout' }),
+    }), options);
+
+    expect(result.status).toBe('recovery-required');
+    expect(store.calls).toContain('finalizeReport:report-1:unknown');
+  });
+
+  test('zero-attempt completed run still sends its summary report', async () => {
+    const store = new FakeStore();
+    store.candidates = [];
+    store.reports = [{ id: 'summary', operatorKey: '+6591051399', body: 'zero summary', status: 'queued' }];
+    const sent: string[] = [];
+    await runNewsletterCampaign(dependencies(store, {
+      transport: async (_to: string, body: string) => { sent.push(body); return { outcome: 'accepted', messageId: 'summary-id' }; },
+    }), options);
+    expect(sent).toEqual(['zero summary']);
   });
 
   test('production date override is rejected before DB or provider operations', async () => {
@@ -292,6 +379,128 @@ describe('runNewsletterCampaign', () => {
     expect(result.selectedCount).toBe(5);
     expect(posts).toBe(0);
     expect(store.calls).toEqual(['resolveIssue', 'selectCandidates:5']);
+    expect(store.referenceTimes[0]?.toISOString()).toBe('2026-07-11T16:00:00.000Z');
+  });
+
+  test('rejects impossible dry-run calendar dates before store access', async () => {
+    const store = new FakeStore();
+    await expect(runNewsletterCampaign(dependencies(store), {
+      ...options, dryRun: true, date: '2026-02-30',
+    })).rejects.toBeInstanceOf(CampaignConfigurationError);
+    expect(store.calls).toEqual([]);
+  });
+
+  test('invalid operator configuration is classified as CampaignConfigurationError', async () => {
+    const store = new FakeStore();
+    await expect(runNewsletterCampaign(dependencies(store), {
+      enabled: true, operatorRecipients: [],
+    })).rejects.toBeInstanceOf(CampaignConfigurationError);
+  });
+});
+
+class RecordingQuery implements PromiseLike<{ data: unknown[] | null; error: null }> {
+  constructor(
+    private readonly table: string,
+    private readonly calls: string[],
+    private readonly rows: Record<string, unknown>[] = [],
+  ) {}
+  private record(name: string, value?: unknown) { this.calls.push(`${this.table}.${name}${value === undefined ? '' : `:${String(value)}`}`); return this; }
+  select() { return this.record('select'); }
+  eq(name: string, value: unknown) { return this.record('eq', `${name}=${String(value)}`); }
+  in(name: string, value: unknown[]) { return this.record('in', `${name}=${value.join(',')}`); }
+  gt(name: string, value: unknown) { return this.record('gt', `${name}=${String(value)}`); }
+  lt(name: string, value: unknown) { return this.record('lt', `${name}=${String(value)}`); }
+  order(name: string) { return this.record('order', name); }
+  range(from: number, to: number) { return this.record('range', `${from}-${to}`); }
+  limit(value: number) { return this.record('limit', value); }
+  update() { return this.record('update'); }
+  insert() { return this.record('insert'); }
+  maybeSingle() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
+  single() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
+  then<TResult1 = { data: unknown[] | null; error: null }, TResult2 = never>(
+    onfulfilled?: ((value: { data: unknown[] | null; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): PromiseLike<TResult1 | TResult2> {
+    return Promise.resolve({ data: this.rows, error: null }).then(onfulfilled, onrejected);
+  }
+}
+
+function recordingClient(tableRows: Record<string, Record<string, unknown>[]> = {}) {
+  const calls: string[] = [];
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  return {
+    calls,
+    rpcCalls,
+    client: {
+      from(table: string) { return new RecordingQuery(table, calls, tableRows[table] || []); },
+      async rpc(name: string, args: Record<string, unknown>) {
+        rpcCalls.push({ name, args });
+        return { data: tableRows[`rpc:${name}`]?.[0] || null, error: null };
+      },
+    },
+  };
+}
+
+describe('campaign store RPC adapter', () => {
+  const queuedRow = {
+    id: 'send-1', run_id: 'run-1', lead_id: 'lead-1', slot_no: null,
+    recipient_name: 'Lead 1', recipient_key: '+6591000001', phone: '+6591000001',
+    rendered_body: 'body', status: 'queued', attempt_no: null, retryable: true,
+  };
+
+  test('uses exact queue/start/recovery and secured test-send RPC argument names', async () => {
+    const recording = recordingClient({
+      'rpc:queue_newsletter_attempt': [queuedRow],
+      'rpc:start_newsletter_attempt': [{ ...queuedRow, status: 'sending', slot_no: 1, attempt_no: 1 }],
+      'rpc:create_newsletter_test_send': [{ id: 'test-1' }],
+    });
+    const store = createCampaignStore(recording.client as never);
+    const run = new FakeStore().run;
+    const selected = candidate(1);
+    const queued = await store.queueAttempt(run, selected, 'claim-1', 'body');
+    await store.startAttempt(queued as NewsletterAttempt, run, 1, 'claim-1');
+    await store.recordAcceptedRecovery('send-1', 'provider-1', 'crm failed');
+    const testId = await store.createTestSend({
+      issueId: 'issue-1', sourceLeadId: 'lead-1', sourcePhone: '+6591000001',
+      overridePhone: '+6591051399', recipientName: 'Lead 1', renderedBody: 'body',
+      valuation: selected.valuation, isTest: true,
+    });
+    await store.finalizeTestSend(testId, { outcome: 'accepted', messageId: 'test-provider' });
+
+    expect(recording.rpcCalls).toEqual(expect.arrayContaining([
+      { name: 'queue_newsletter_attempt', args: { p_run_id: 'run-1', p_lead_id: 'lead-1', p_claim_token: 'claim-1', p_rendered_body: 'body', p_valuation_snapshot: selected.valuation } },
+      { name: 'start_newsletter_attempt', args: { p_send_id: 'send-1', p_slot_no: 1, p_claim_token: 'claim-1' } },
+      { name: 'record_accepted_newsletter_recovery', args: { p_send_id: 'send-1', p_provider_message_id: 'provider-1', p_error: 'crm failed' } },
+      { name: 'create_newsletter_test_send', args: { p_issue_id: 'issue-1', p_lead_id: 'lead-1', p_override_phone: '+6591051399', p_rendered_body: 'body', p_valuation_snapshot: selected.valuation } },
+      { name: 'finalize_newsletter_test_send', args: { p_send_id: 'test-1', p_provider_outcome: 'sent', p_provider_message_id: 'test-provider', p_error: null, p_retryable: false } },
+    ]));
+  });
+
+  test('orders every paginated query before range and uses dry-run reference time', async () => {
+    const recording = recordingClient({
+      crm_projects: [{ id: 'project-1', title: 'Cliften' }],
+      crm_leads: [], newsletter_sends: [], newsletter_suppressions: [], propnex_valuations: [],
+    });
+    const store = createCampaignStore(recording.client as never);
+    await store.selectCandidates({ ...issue, audienceProjectSlug: 'cliften' }, 5, new Date('2026-07-12T00:00:00Z'));
+    const rangeIndexes = recording.calls.flatMap((call, index) => call.includes('.range:') ? [index] : []);
+    expect(rangeIndexes).toHaveLength(4);
+    for (const index of rangeIndexes) expect(recording.calls[index - 1]).toContain('.order:');
+    expect(recording.calls).toContain('propnex_valuations.gt:expires_at=2026-07-12T00:00:00.000Z');
+  });
+
+  test('recovers only sending attempts older than the supplied cutoff', async () => {
+    const recording = recordingClient({ newsletter_sends: [] });
+    const store = createCampaignStore(recording.client as never);
+    await store.recoverAbandoned('run-1', new Date('2026-07-13T03:45:00Z'));
+    expect(recording.calls).toContain('newsletter_sends.lt:attempt_started_at=2026-07-13T03:45:00.000Z');
+  });
+
+  test('report failure writes newsletter_runs.report_error', async () => {
+    const recording = recordingClient({ newsletter_operator_reports: [{ id: 'report-1' }] });
+    const store = createCampaignStore(recording.client as never);
+    await store.finalizeReport('report-1', { outcome: 'unknown', error: 'report timeout' });
+    expect(recording.calls).toContain('newsletter_runs.update');
   });
 });
 
@@ -316,6 +525,22 @@ describe('runNewsletterTestSend', () => {
 });
 
 describe('campaign CLI parsing', () => {
+  test('generates a fresh cryptographically random claim token per invocation', () => {
+    const first = createProcessClaimToken();
+    const second = createProcessClaimToken();
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  test('maps configuration errors to 20 and report recovery to 30', () => {
+    expect(exitCodeForError(new CampaignConfigurationError('bad operators'))).toBe(20);
+    expect(exitCodeForResult({
+      status: 'recovery-required', recoverable: false, blocker: 'report timeout',
+      selectedCount: 0, attemptedCount: 0, acceptedCount: 0, rejectedCount: 0,
+      unknownCount: 0, skippedCount: 0,
+    })).toBe(30);
+  });
+
   test('rejects a production date before runtime dependencies are created', () => {
     expect(() => parseCampaignCliArgs(['--date', '2026-07-12'])).toThrow('Production --date is forbidden');
   });

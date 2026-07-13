@@ -37,12 +37,12 @@ export interface NewsletterAttempt {
   id: string;
   runId: string;
   leadId: string | null;
-  slotNo: number;
+  slotNo: number | null;
   recipientName: string;
   recipientKey: string;
   renderedBody: string;
   status: AttemptStatus;
-  attemptNo: number;
+  attemptNo: number | null;
   retryable: boolean;
 }
 
@@ -89,12 +89,16 @@ export interface CampaignRunnerDependencies {
   transport: (to: string, body: string) => Promise<CampaignTransportResult>;
   sleep: (milliseconds: number) => Promise<void>;
   writeRecoveryRecord: (record: RecoveryRecord) => Promise<void>;
+  now?: () => Date;
 }
 
 export class CampaignConfigurationError extends Error {}
 
 function validateDate(value: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(`${value}T00:00:00Z`).getTime())) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+  if (!match || !date || date.getUTCFullYear() !== Number(match[1]) ||
+      date.getUTCMonth() !== Number(match[2]) - 1 || date.getUTCDate() !== Number(match[3])) {
     throw new CampaignConfigurationError('--date must be a valid yyyy-mm-dd date.');
   }
 }
@@ -105,7 +109,11 @@ function validateOptions(options: CampaignRunOptions): string[] {
     throw new CampaignConfigurationError('--date is allowed only with --dry-run.');
   }
   if (options.date) validateDate(options.date);
-  return validateOperatorRecipients(options.operatorRecipients);
+  try {
+    return validateOperatorRecipients(options.operatorRecipients);
+  } catch (error) {
+    throw new CampaignConfigurationError(error instanceof Error ? error.message : 'Invalid operator configuration.');
+  }
 }
 
 function compose(issue: NewsletterIssue, candidate: CampaignCandidate, featuredUrlBase: string): string {
@@ -152,13 +160,20 @@ async function sendOperatorReports(
   dependencies: CampaignRunnerDependencies,
   run: CampaignRun,
   operators: string[],
-): Promise<void> {
+): Promise<string | null> {
   const reports = await dependencies.store.queueOperatorReports(run.id, operators);
+  let reportError: string | null = null;
   for (const report of reports) {
     if (!await dependencies.store.startReport(report.id)) continue;
     const result = await dependencies.transport(report.operatorKey, report.body);
     await dependencies.store.finalizeReport(report.id, result);
+    if (result.outcome !== 'accepted' && !reportError) {
+      reportError = result.outcome === 'unknown'
+        ? `operator report outcome unknown: ${result.error}`
+        : `operator report failed: ${result.error}`;
+    }
   }
+  return reportError;
 }
 
 export async function runNewsletterCampaign(
@@ -170,7 +185,11 @@ export async function runNewsletterCampaign(
 
   if (options.dryRun) {
     const issue = await dependencies.store.resolveIssue();
-    const candidates = (await dependencies.store.selectCandidates(issue, 5)).filter((item) => item.attemptCount < 3);
+    const referenceTime = options.date
+      ? new Date(`${options.date}T00:00:00+08:00`)
+      : (dependencies.now?.() || new Date());
+    const candidates = (await dependencies.store.selectCandidates(issue, 5, referenceTime))
+      .filter((item) => item.attemptCount < 3);
     for (const candidate of candidates) compose(issue, candidate, featuredUrlBase);
     return {
       status: 'dry-run', recoverable: false, blocker: null,
@@ -188,10 +207,15 @@ export async function runNewsletterCampaign(
     };
   }
 
-  let run = await dependencies.store.claimToday(options.claimToken || 'newsletter-runner');
+  const now = dependencies.now?.() || new Date();
+  const claimToken = options.claimToken || crypto.randomUUID();
+  let run = await dependencies.store.claimToday(claimToken);
   let attempts = await dependencies.store.listAttempts(run.id);
   if (run.status === 'completed') {
-    await sendOperatorReports(dependencies, run, operators);
+    const reportError = await sendOperatorReports(dependencies, run, operators);
+    if (reportError) {
+      return { ...resultFromRun(run, 'recovery-required'), blocker: reportError };
+    }
     return resultFromRun(run);
   }
   if (run.status === 'blocked') return { ...resultFromRun(run, 'blocked'), recoverable: true };
@@ -203,44 +227,70 @@ export async function runNewsletterCampaign(
   }
 
   const issue = await dependencies.store.resolveIssue(run.issueId);
-  await dependencies.store.recoverAbandoned(run.id);
+  await dependencies.store.recoverAbandoned(run.id, new Date(now.getTime() - 15 * 60_000));
   attempts = await dependencies.store.listAttempts(run.id);
-  const consumedSlots = new Set(attempts.map((attempt) => attempt.slotNo));
-  const remainingSlots = Math.max(0, 5 - consumedSlots.size);
-  const candidates = remainingSlots > 0
-    ? await dependencies.store.selectCandidates(issue, remainingSlots + 5)
-    : [];
-  const attemptedRecipients = new Set(attempts.map((attempt) => attempt.recipientKey));
-  let nextSlot = consumedSlots.size + 1;
-  let startedThisInvocation = 0;
+  const queuedAttempts = attempts.filter((attempt) => attempt.status === 'queued');
+  const knownRecipients = new Set(attempts.map((attempt) => attempt.recipientKey));
+  const committedCount = () => attempts.filter((attempt) =>
+    attempt.status === 'queued' || attempt.slotNo !== null).length;
 
-  for (const candidate of candidates) {
-    if (nextSlot > 5 || candidate.attemptCount >= 3 || attemptedRecipients.has(candidate.recipientKey)) continue;
-    const body = compose(issue, candidate, featuredUrlBase);
-    const started = await dependencies.store.startAttempt(run, candidate, nextSlot, body);
-    if (started === 'suppressed') continue;
+  if (attempts.length === 0) {
+    const candidates = await dependencies.store.selectCandidates(issue, 10, now);
+    for (const candidate of candidates) {
+      if (committedCount() >= 5 || candidate.attemptCount >= 3 || knownRecipients.has(candidate.recipientKey)) continue;
+      const queued = await dependencies.store.queueAttempt(
+        run, candidate, claimToken, compose(issue, candidate, featuredUrlBase),
+      );
+      if (queued === 'suppressed') continue;
+      if (!attempts.some((attempt) => attempt.id === queued.id)) attempts.push(queued);
+      queuedAttempts.push(queued);
+      knownRecipients.add(candidate.recipientKey);
+    }
+  }
 
-    startedThisInvocation += 1;
-    attemptedRecipients.add(candidate.recipientKey);
-    const transportResult = await dependencies.transport(candidate.recipientKey, body);
+  let nextSlot = Math.max(0, ...attempts.flatMap((attempt) => attempt.slotNo === null ? [] : [attempt.slotNo])) + 1;
+  for (let index = 0; index < queuedAttempts.length && nextSlot <= 5; index += 1) {
+    const queued = queuedAttempts[index];
+    const started = await dependencies.store.startAttempt(queued, run, nextSlot, claimToken);
+    if (started === 'suppressed') {
+      const replacements = await dependencies.store.selectCandidates(issue, 10, now);
+      const replacement = replacements.find((candidate) =>
+        candidate.attemptCount < 3 && !knownRecipients.has(candidate.recipientKey));
+      if (replacement) {
+        const queuedReplacement = await dependencies.store.queueAttempt(
+          run, replacement, claimToken, compose(issue, replacement, featuredUrlBase),
+        );
+        if (queuedReplacement !== 'suppressed') {
+          if (!attempts.some((attempt) => attempt.id === queuedReplacement.id)) attempts.push(queuedReplacement);
+          queuedAttempts.push(queuedReplacement);
+          knownRecipients.add(replacement.recipientKey);
+        }
+      }
+      continue;
+    }
+
+    const transportResult = await dependencies.transport(started.recipientKey, started.renderedBody);
     const finalizeInput: FinalizeAttemptInput = { attemptId: started.id, result: transportResult };
     try {
       await dependencies.store.finalizeAttempt(finalizeInput);
     } catch (error) {
       if (transportResult.outcome === 'accepted') {
-        await dependencies.writeRecoveryRecord({
+        const errorMessage = error instanceof Error ? error.message : 'Unknown CRM finalization failure';
+        await dependencies.store.recordAcceptedRecovery(started.id, transportResult.messageId, errorMessage);
+        const recoveryRecord = {
           kind: 'accepted-crm-finalization-failure',
           runId: run.id,
           attemptId: started.id,
           providerMessageId: transportResult.messageId,
-          recipientKey: candidate.recipientKey,
-          error: error instanceof Error ? error.message : 'Unknown CRM finalization failure',
+          recipientKey: started.recipientKey,
+          error: errorMessage,
           recordedAt: new Date().toISOString(),
-        });
-        await dependencies.store.markRecoveryRequired(
-          run.id,
-          `accepted send ${started.id} requires CRM finalization recovery`,
-        );
+        } as RecoveryRecord;
+        try {
+          await dependencies.writeRecoveryRecord(recoveryRecord);
+        } catch {
+          // The database recovery ledger is authoritative; the file is secondary evidence.
+        }
         return {
           ...resultFromRun(summarizeAttempts(run, [...attempts, started]), 'recovery-required'),
           blocker: 'accepted send requires CRM finalization recovery',
@@ -249,25 +299,26 @@ export async function runNewsletterCampaign(
       throw error;
     }
     await dependencies.store.heartbeat(run.id);
-    attempts.push({
+    const finalizedAttempt: NewsletterAttempt = {
       ...started,
       status: transportResult.outcome === 'accepted'
         ? 'sent'
         : transportResult.outcome === 'rejected' ? 'failed' : 'unknown',
       retryable: transportResult.outcome === 'rejected' && transportResult.retryable,
-    });
+    };
+    attempts = attempts.map((attempt) => attempt.id === started.id ? finalizedAttempt : attempt);
     nextSlot += 1;
 
-    const canStartAnother = nextSlot <= 5 && candidates.some((remaining) =>
-      remaining.attemptCount < 3 && !attemptedRecipients.has(remaining.recipientKey));
+    const canStartAnother = nextSlot <= 5 && queuedAttempts.slice(index + 1).length > 0;
     if (canStartAnother) await dependencies.sleep(60_000);
   }
 
   run = summarizeAttempts(run, attempts);
   run = await dependencies.store.finishRun(run.id, null);
   run = { ...run, ...summarizeAttempts(run, attempts) };
-  if (startedThisInvocation > 0 || attempts.length > 0) {
-    await sendOperatorReports(dependencies, run, operators);
+  const reportError = await sendOperatorReports(dependencies, run, operators);
+  if (reportError) {
+    return { ...resultFromRun(run, 'recovery-required'), blocker: reportError };
   }
   return resultFromRun(run);
 }

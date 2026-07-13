@@ -52,14 +52,20 @@ export interface CampaignStore {
   resolveIssue(issueId?: string): Promise<NewsletterIssue>;
   claimToday(claimToken: string): Promise<CampaignRun>;
   listAttempts(runId: string): Promise<NewsletterAttempt[]>;
-  recoverAbandoned(runId: string): Promise<number>;
-  selectCandidates(issue: NewsletterIssue, limit: number): Promise<CampaignCandidate[]>;
+  recoverAbandoned(runId: string, olderThan: Date): Promise<number>;
+  selectCandidates(issue: NewsletterIssue, limit: number, referenceTime?: Date): Promise<CampaignCandidate[]>;
   selectCandidate(issue: NewsletterIssue, leadId: string): Promise<CampaignCandidate | null>;
-  startAttempt(
+  queueAttempt(
     run: CampaignRun,
     candidate: CampaignCandidate,
-    slotNo: number,
+    claimToken: string,
     body: string,
+  ): Promise<NewsletterAttempt | 'suppressed'>;
+  startAttempt(
+    attempt: NewsletterAttempt,
+    run: CampaignRun,
+    slotNo: number,
+    claimToken: string,
   ): Promise<NewsletterAttempt | 'suppressed'>;
   finalizeAttempt(input: FinalizeAttemptInput): Promise<void>;
   queueOperatorReports(runId: string, operators: string[]): Promise<OperatorReport[]>;
@@ -68,6 +74,7 @@ export interface CampaignStore {
   heartbeat(runId: string): Promise<void>;
   finishRun(runId: string, blocker: string | null): Promise<CampaignRun>;
   markRecoveryRequired(runId: string, blocker: string): Promise<void>;
+  recordAcceptedRecovery(attemptId: string, providerMessageId: string, error: string): Promise<void>;
   createTestSend(input: TestSendInput): Promise<string>;
   finalizeTestSend(id: string, result: CampaignTransportResult): Promise<void>;
   resolveUnknown(sendId: string, resolver: string, resolution: 'sent' | 'failed', reason: string): Promise<void>;
@@ -121,12 +128,12 @@ function attemptFromRow(row: Record<string, unknown>): NewsletterAttempt {
     id: String(row.id),
     runId: String(row.run_id),
     leadId: typeof row.lead_id === 'string' ? row.lead_id : null,
-    slotNo: Number(row.slot_no),
+    slotNo: row.slot_no === null || row.slot_no === undefined ? null : Number(row.slot_no),
     recipientName: String(row.recipient_name || 'Unknown'),
     recipientKey: String(row.recipient_key || row.phone),
     renderedBody: String(row.rendered_body),
     status: row.status as NewsletterAttempt['status'],
-    attemptNo: Number(row.attempt_no || 1),
+    attemptNo: row.attempt_no === null || row.attempt_no === undefined ? null : Number(row.attempt_no),
     retryable: row.retryable === true,
   };
 }
@@ -190,12 +197,15 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       return (data || []).map((row) => attemptFromRow(row));
     },
 
-    async recoverAbandoned(runId) {
+    async recoverAbandoned(runId, olderThan) {
       const { data, error } = await client
         .from('newsletter_sends')
         .select('id')
         .eq('run_id', runId)
-        .eq('status', 'sending');
+        .eq('status', 'sending')
+        .lt('attempt_started_at', olderThan.toISOString())
+        .order('attempt_started_at', { ascending: true })
+        .order('id', { ascending: true });
       fail(error, 'find abandoned newsletter attempts');
       for (const row of data || []) {
         const finalized = await client.rpc('finalize_newsletter_attempt', {
@@ -210,7 +220,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       return data?.length || 0;
     },
 
-    async selectCandidates(issue, limit) {
+    async selectCandidates(issue, limit, referenceTime = new Date()) {
       if (!issue.audienceProjectSlug) return [];
       const projectResult = await client
         .from('crm_projects')
@@ -227,6 +237,8 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
           const result = await client.from('crm_leads')
             .select('id,name,phone,phone_e164,property_title,lead_code,priority,created_at,status,opt_out_at')
             .eq('project_id', project.id)
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate campaign CRM leads'),
@@ -235,19 +247,24 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
             .select('recipient_key,status,retryable,attempt_started_at')
             .eq('issue_id', issue.id)
             .eq('is_test', false)
+            .order('recipient_key', { ascending: true })
+            .order('attempt_started_at', { ascending: true, nullsFirst: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate prior campaign attempts'),
         paginatedRows(async (from, to) => {
           const result = await client.from('newsletter_suppressions')
             .select('recipient_key')
+            .order('recipient_key', { ascending: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate newsletter suppressions'),
         paginatedRows(async (from, to) => {
           const result = await client.from('propnex_valuations')
             .select('project_name,low_sgd,mid_sgd,high_sgd,comparables_count,as_of,expires_at')
-            .gt('expires_at', new Date().toISOString())
+            .gt('expires_at', referenceTime.toISOString())
+            .order('project_name', { ascending: true })
+            .order('expires_at', { ascending: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate newsletter valuations'),
@@ -256,7 +273,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       const valuation = aggregateProjectValuation(
         String(project.title),
         valuations as unknown as NewsletterValuationRow[],
-        new Date(),
+        referenceTime,
       );
       if (!valuation) return [];
       const suppressed = new Set(suppressions.map((row) => String(row.recipient_key)));
@@ -302,21 +319,31 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       return candidates.find((candidate) => candidate.id === leadId) || null;
     },
 
-    async startAttempt(run, candidate, slotNo, body) {
-      const { data, error } = await client.rpc('start_newsletter_attempt', {
+    async queueAttempt(run, candidate, claimToken, body) {
+      const { data, error } = await client.rpc('queue_newsletter_attempt', {
         p_run_id: run.id,
         p_lead_id: candidate.id,
-        p_slot_no: slotNo,
+        p_claim_token: claimToken,
         p_rendered_body: body,
+        p_valuation_snapshot: candidate.valuation,
+      });
+      if (error?.code === '42501' || error?.message.toLowerCase().includes('suppressed')) return 'suppressed';
+      fail(error, 'queue newsletter attempt');
+      const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+      if (!row) throw new Error('queue_newsletter_attempt returned no attempt.');
+      return attemptFromRow(row);
+    },
+
+    async startAttempt(attempt, _run, slotNo, claimToken) {
+      const { data, error } = await client.rpc('start_newsletter_attempt', {
+        p_send_id: attempt.id,
+        p_slot_no: slotNo,
+        p_claim_token: claimToken,
       });
       if (error?.code === '42501' || error?.message.toLowerCase().includes('suppressed')) return 'suppressed';
       fail(error, 'start newsletter attempt');
       const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
       if (!row) throw new Error('start_newsletter_attempt returned no attempt.');
-      const snapshotResult = await client.from('newsletter_sends')
-        .update({ valuation_snapshot: candidate.valuation })
-        .eq('id', row.id);
-      fail(snapshotResult.error, 'persist newsletter valuation snapshot');
       return attemptFromRow(row);
     },
 
@@ -375,7 +402,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       const queued = await client.from('newsletter_operator_reports')
         .select('id,operator_key,body,status')
         .eq('run_id', runId)
-        .in('status', ['queued', 'failed'])
+        .eq('status', 'queued')
         .order('created_at', { ascending: true });
       fail(queued.error, 'load queued operator reports');
       return (queued.data || []).map((row) => ({
@@ -390,7 +417,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       const result = await client.from('newsletter_operator_reports')
         .update({ status: 'sending', attempt_started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq('id', id)
-        .in('status', ['queued', 'failed'])
+        .eq('status', 'queued')
         .select('id');
       fail(result.error, 'start operator report');
       return (result.data?.length || 0) === 1;
@@ -405,9 +432,19 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
         error: result.outcome === 'accepted' ? null : result.error,
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      }).eq('id', id).eq('status', 'sending').select('id');
+      }).eq('id', id).eq('status', 'sending').select('id,run_id').single();
       fail(update.error, 'finalize operator report');
-      if (update.data?.length !== 1) throw new Error('finalize operator report: report is not sending.');
+      if (!update.data) throw new Error('finalize operator report: report is not sending.');
+      if (result.outcome !== 'accepted') {
+        const reportError = result.outcome === 'unknown'
+          ? `operator report outcome unknown: ${result.error}`
+          : `operator report failed: ${result.error}`;
+        const runUpdate = await client.from('newsletter_runs').update({
+          report_error: reportError,
+          updated_at: new Date().toISOString(),
+        }).eq('id', update.data.run_id);
+        fail(runUpdate.error, 'record operator report error');
+      }
     },
 
     async heartbeat(runId) {
@@ -446,36 +483,40 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       fail(update.error, 'mark newsletter run recovery required');
     },
 
+    async recordAcceptedRecovery(attemptId, providerMessageId, error) {
+      const result = await client.rpc('record_accepted_newsletter_recovery', {
+        p_send_id: attemptId,
+        p_provider_message_id: providerMessageId,
+        p_error: error,
+      });
+      fail(result.error, 'record accepted newsletter recovery');
+    },
+
     async createTestSend(input) {
-      const result = await client.from('newsletter_sends').insert({
-        issue_id: input.issueId,
-        lead_id: input.sourceLeadId,
-        phone: input.sourcePhone,
-        recipient_name: input.recipientName,
-        recipient_key: input.sourcePhone,
-        rendered_body: input.renderedBody,
-        valuation_snapshot: input.valuation,
-        status: 'test',
-        is_test: true,
-        override_phone: input.overridePhone,
-      }).select('id').single();
+      const result = await client.rpc('create_newsletter_test_send', {
+        p_issue_id: input.issueId,
+        p_lead_id: input.sourceLeadId,
+        p_override_phone: input.overridePhone,
+        p_rendered_body: input.renderedBody,
+        p_valuation_snapshot: input.valuation,
+      });
       fail(result.error, 'create newsletter test-send ledger');
-      if (!result.data) throw new Error('create newsletter test-send ledger returned no row.');
-      return String(result.data.id);
+      const row = (Array.isArray(result.data) ? result.data[0] : result.data) as Record<string, unknown> | null;
+      if (!row) throw new Error('create_newsletter_test_send returned no row.');
+      return String(row.id);
     },
 
     async finalizeTestSend(id, result) {
-      const update = await client.from('newsletter_sends').update({
-        waha_message_id: result.outcome === 'accepted' ? result.messageId : null,
-        provider_outcome: result.outcome === 'accepted' ? 'sent'
-          : result.outcome === 'rejected' ? 'failed' : 'unknown',
-        error: result.outcome === 'accepted' ? null : result.error,
-        retryable: result.outcome === 'rejected' && result.retryable,
-        sent_at: result.outcome === 'accepted' ? new Date().toISOString() : null,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', id).eq('is_test', true).eq('status', 'test');
-      fail(update.error, 'finalize newsletter test-send ledger');
+      const outcome = result.outcome === 'accepted' ? 'sent'
+        : result.outcome === 'unknown' ? 'unknown' : 'failed';
+      const finalized = await client.rpc('finalize_newsletter_test_send', {
+        p_send_id: id,
+        p_provider_outcome: outcome,
+        p_provider_message_id: result.outcome === 'accepted' ? result.messageId : null,
+        p_error: result.outcome === 'accepted' ? null : result.error,
+        p_retryable: result.outcome === 'rejected' ? result.retryable : result.outcome === 'blocked',
+      });
+      fail(finalized.error, 'finalize newsletter test-send ledger');
     },
 
     async resolveUnknown(sendId, resolver, resolution, reason) {

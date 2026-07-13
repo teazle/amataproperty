@@ -64,7 +64,8 @@ export function buildOperatorReportRows(
 ): OperatorReportDraft[] {
   const recipients = validateOperatorRecipients(operators);
   const stableAttempts = [...attempts].sort((left, right) =>
-    left.slotNo - right.slotNo || left.id.localeCompare(right.id));
+    (left.slotNo ?? Number.MAX_SAFE_INTEGER) - (right.slotNo ?? Number.MAX_SAFE_INTEGER) ||
+    left.id.localeCompare(right.id));
 
   return recipients.flatMap((operatorKey) => [
     {

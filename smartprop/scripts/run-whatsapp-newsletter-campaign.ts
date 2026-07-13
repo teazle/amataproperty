@@ -1,5 +1,4 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 import { createClient } from '@supabase/supabase-js';
@@ -10,6 +9,7 @@ import {
   CampaignConfigurationError,
   runNewsletterCampaign,
   runNewsletterTestSend,
+  type CampaignRunResult,
 } from '../src/lib/newsletter/campaign-runner';
 import { normalizeSingaporeRecipient } from '../src/lib/newsletter/recipient';
 import { getWAHAReadiness, sendCampaignWhatsApp } from '../src/lib/wa/waha';
@@ -18,6 +18,20 @@ export type CampaignCliCommand =
   | { command: 'run'; dryRun: boolean; date?: string; json: boolean }
   | { command: 'test-send'; destination: string; sourceLeadId: string; json: boolean }
   | { command: 'resolve-unknown'; sendId: string; resolver: string; resolution: 'sent' | 'failed'; reason: string; json: boolean };
+
+export function createProcessClaimToken(): string {
+  return crypto.randomUUID();
+}
+
+export function exitCodeForResult(result: CampaignRunResult): number {
+  if (result.status === 'recovery-required' || result.unknownCount > 0) return 30;
+  if (result.status === 'blocked') return 10;
+  return 0;
+}
+
+export function exitCodeForError(error: unknown): number {
+  return error instanceof CampaignConfigurationError ? 20 : 30;
+}
 
 function optionValue(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -160,13 +174,11 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     operatorRecipients: operatorRecipients(),
     dryRun: parsed.dryRun,
     date: parsed.date,
-    claimToken: process.env.SMARTPROP_NEWSLETTER_CLAIM_TOKEN || `${hostname()}:newsletter-runner`,
+    claimToken: createProcessClaimToken(),
     featuredUrlBase: process.env.SMARTPROP_NEWSLETTER_FEATURED_URL_BASE,
   });
   printResult(result, parsed.json);
-  if (result.status === 'recovery-required' || result.unknownCount > 0) return 30;
-  if (result.status === 'blocked') return 10;
-  return 0;
+  return exitCodeForResult(result);
 }
 
 if (import.meta.main) {
@@ -175,6 +187,6 @@ if (import.meta.main) {
   }).catch((error: unknown) => {
     const configuration = error instanceof CampaignConfigurationError;
     process.stderr.write(`${configuration ? 'configuration error' : 'campaign error'}: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = configuration ? 20 : 30;
+    process.exitCode = exitCodeForError(error);
   });
 }

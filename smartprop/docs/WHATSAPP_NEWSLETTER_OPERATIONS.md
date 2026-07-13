@@ -90,11 +90,12 @@ Use only a provisioned disposable Singapore test number owned by the operator. S
 ```bash
 (
 set -euo pipefail
+[[ -n "${SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE:-}" ]] || { echo "set SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE to an owned disposable +65 test number" >&2; exit 1; }
+[[ -n "${SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL:-}" ]] || { echo "set SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL to the owner/migration fixture URL" >&2; exit 1; }
+[[ -n "${SMARTPROP_NEWSLETTER_TEST_TO:-}" ]] || { echo "set SMARTPROP_NEWSLETTER_TEST_TO to the configured operator test number" >&2; exit 1; }
 umask 0077
 STOP_WORK_DIR="$(mktemp -d /tmp/newsletter-stop-proof.XXXXXX)"
 trap 'unset FIXTURE_DB_URL; rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM
-: "${SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE:?set this to an owned disposable +65 test number}"
-: "${SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL:?set this to a separately issued owner/migration-level fixture database URL}"
 FIXTURE_PHONE="$SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE"
 FIXTURE_DB_URL="$SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL"
 TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"

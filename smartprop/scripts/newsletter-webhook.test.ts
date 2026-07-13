@@ -341,4 +341,12 @@ describe('WAHA webhook', () => {
     );
     expect(compose).not.toContain('X-WAHA-Webhook-Secret=');
   });
+
+  test('requires the same non-empty API key for WAHA and SmartProp', () => {
+    const compose = readFileSync(new URL('../docker-compose.prod.yml', import.meta.url), 'utf8');
+    const example = readFileSync(new URL('../env.example', import.meta.url), 'utf8');
+
+    expect(compose).toContain('WAHA_API_KEY=${WAHA_API_KEY:?WAHA_API_KEY is required}');
+    expect(example).toContain('WAHA_API_KEY=replace-with-a-strong-random-api-key');
+  });
 });

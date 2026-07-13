@@ -12,6 +12,7 @@ services:
     restart: unless-stopped
     environment:
       - WAHA_DASHBOARD_ENABLED=true
+      - "WAHA_API_KEY=${WAHA_API_KEY:?WAHA_API_KEY is required}"
       - WHATSAPP_HOOK_URL=${PUBLIC_BASE_URL}/api/wa/webhook
       - WHATSAPP_HOOK_EVENTS=message,message.any,state.change,group.join,presence.update
       - "WHATSAPP_HOOK_CUSTOM_HEADERS=X-WAHA-Webhook-Secret:${WAHA_WEBHOOK_SECRET:?WAHA_WEBHOOK_SECRET is required}"

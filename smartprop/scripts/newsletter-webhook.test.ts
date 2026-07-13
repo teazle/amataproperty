@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { NextRequest } from 'next/server';
 
-import { createWebhookHandler } from '../src/app/api/wa/webhook/route';
+import { createWebhookHandler } from '../src/lib/wa/webhook-handler';
 
 type UnknownRowsClient = {
   rpcCalls: Array<{ name: string; args: Record<string, string> }>;

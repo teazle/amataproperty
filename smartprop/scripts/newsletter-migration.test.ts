@@ -133,8 +133,16 @@ describe('newsletter migration contract', () => {
 
   test('short-circuits replayed STOP before CRM mutation', () => {
     const stop = functionSql('record_newsletter_opt_out', 'resolve_newsletter_unknown');
-    expect(stop).toMatch(/FROM newsletter_suppressions[\s\S]+FOR UPDATE[\s\S]+IF FOUND THEN/i);
-    expect(stop).toMatch(/last_message_id IS NOT DISTINCT FROM[\s\S]+THEN[\s\S]+RETURN v_suppression[\s\S]+ELSE[\s\S]+last_message_id = COALESCE[\s\S]+last_seen_at = clock_timestamp\(\)/i);
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS newsletter_suppression_events');
+    expect(sql).toMatch(/UNIQUE\s*\(recipient_key, provider_message_id\)/i);
+    expect(sql).toContain('FUNCTION enforce_newsletter_suppression_event_append_only');
+    expectOrdered(stop, [
+      'INSERT INTO newsletter_suppression_events',
+      'ON CONFLICT (recipient_key, provider_message_id) DO NOTHING',
+      'IF v_claimed_message_id IS NULL THEN',
+      'FROM newsletter_suppressions',
+      'RETURN v_suppression',
+    ]);
   });
 
   test('compares all persisted finalization fields before accepting a replay', () => {
@@ -157,6 +165,7 @@ describe('newsletter migration contract', () => {
       'ASSERT: duplicate-phone STOP idempotency',
       'ASSERT: service-role grants and fixed search paths',
       'ASSERT: provider submission negative transitions',
+      'ASSERT: STOP event ledger A-B-A replay',
     ]) {
       expect(assertions).toContain(marker);
     }

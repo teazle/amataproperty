@@ -57,6 +57,30 @@ CREATE TABLE IF NOT EXISTS newsletter_suppressions (
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS newsletter_suppression_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipient_key TEXT NOT NULL,
+  provider_message_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (recipient_key, provider_message_id)
+);
+
+INSERT INTO newsletter_suppression_events (
+  recipient_key,
+  provider_message_id,
+  reason,
+  received_at
+)
+SELECT recipient_key, first_message_id, reason, first_seen_at
+FROM newsletter_suppressions
+WHERE first_message_id IS NOT NULL
+UNION
+SELECT recipient_key, last_message_id, reason, last_seen_at
+FROM newsletter_suppressions
+WHERE last_message_id IS NOT NULL
+ON CONFLICT (recipient_key, provider_message_id) DO NOTHING;
+
 ALTER TABLE newsletter_sends
   ADD COLUMN IF NOT EXISTS run_id UUID REFERENCES newsletter_runs(id) ON DELETE RESTRICT,
   ADD COLUMN IF NOT EXISTS slot_no INTEGER,
@@ -209,6 +233,25 @@ CREATE INDEX IF NOT EXISTS idx_newsletter_operator_reports_run_status
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_newsletter_operator_summary
   ON newsletter_operator_reports(run_id, operator_key, kind)
   WHERE send_id IS NULL;
+
+CREATE OR REPLACE FUNCTION enforce_newsletter_suppression_event_append_only()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RAISE EXCEPTION 'newsletter suppression events are append-only'
+    USING ERRCODE = '55000';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_suppression_event_append_only
+  ON newsletter_suppression_events;
+CREATE TRIGGER trg_newsletter_suppression_event_append_only
+  BEFORE UPDATE OR DELETE ON newsletter_suppression_events
+  FOR EACH ROW
+  EXECUTE FUNCTION enforce_newsletter_suppression_event_append_only();
 
 CREATE OR REPLACE FUNCTION enforce_newsletter_attempt_append_only()
 RETURNS TRIGGER
@@ -766,6 +809,7 @@ DECLARE
   v_digits TEXT;
   v_recipient_key TEXT;
   v_message_id TEXT;
+  v_claimed_message_id TEXT;
   v_suppression newsletter_suppressions%ROWTYPE;
 BEGIN
   IF p_recipient IS NULL OR btrim(p_recipient) = '' THEN
@@ -776,6 +820,10 @@ BEGIN
   END IF;
 
   v_message_id := NULLIF(btrim(p_message_id), '');
+  IF v_message_id IS NULL THEN
+    RAISE EXCEPTION 'provider message id is required for STOP deduplication'
+      USING ERRCODE = '22023';
+  END IF;
 
   v_digits := regexp_replace(p_recipient, '[^0-9]', '', 'g');
   v_recipient_key := CASE
@@ -791,21 +839,43 @@ BEGIN
   -- Lock order: SGT day -> recipient -> run -> lead -> send.
   PERFORM pg_advisory_xact_lock(hashtext('newsletter_recipient:' || v_recipient_key));
 
+  INSERT INTO newsletter_suppression_events (
+    recipient_key,
+    provider_message_id,
+    reason
+  )
+  VALUES (
+    v_recipient_key,
+    v_message_id,
+    btrim(p_reason)
+  )
+  ON CONFLICT (recipient_key, provider_message_id) DO NOTHING
+  RETURNING provider_message_id INTO v_claimed_message_id;
+
+  IF v_claimed_message_id IS NULL THEN
+    SELECT * INTO v_suppression
+    FROM newsletter_suppressions
+    WHERE recipient_key = v_recipient_key;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'suppression event exists without suppression state'
+        USING ERRCODE = '55000';
+    END IF;
+
+    RETURN v_suppression;
+  END IF;
+
   SELECT * INTO v_suppression
   FROM newsletter_suppressions
   WHERE recipient_key = v_recipient_key
   FOR UPDATE;
 
   IF FOUND THEN
-    IF v_suppression.last_message_id IS NOT DISTINCT FROM v_message_id THEN
-      RETURN v_suppression;
-    ELSE
-      UPDATE newsletter_suppressions
-      SET last_message_id = COALESCE(v_message_id, last_message_id),
-          last_seen_at = clock_timestamp()
-      WHERE recipient_key = v_recipient_key
-      RETURNING * INTO v_suppression;
-    END IF;
+    UPDATE newsletter_suppressions
+    SET last_message_id = v_message_id,
+        last_seen_at = clock_timestamp()
+    WHERE recipient_key = v_recipient_key
+    RETURNING * INTO v_suppression;
 
     RETURN v_suppression;
   END IF;
@@ -1031,6 +1101,7 @@ $$;
 
 REVOKE ALL ON FUNCTION enforce_newsletter_attempt_append_only() FROM PUBLIC;
 REVOKE ALL ON FUNCTION enforce_newsletter_attempt_submission() FROM PUBLIC;
+REVOKE ALL ON FUNCTION enforce_newsletter_suppression_event_append_only() FROM PUBLIC;
 REVOKE ALL ON FUNCTION claim_newsletter_run(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, UUID, INTEGER, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
@@ -1042,8 +1113,11 @@ GRANT EXECUTE ON FUNCTION start_newsletter_attempt(UUID, UUID, INTEGER, TEXT) TO
 GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;
+REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC;
+GRANT SELECT ON TABLE newsletter_suppression_events TO service_role;
 
 COMMENT ON TABLE newsletter_runs IS 'One globally unique Singapore-calendar-day WhatsApp newsletter run.';
 COMMENT ON TABLE newsletter_suppressions IS 'Global recipient suppression ledger; independent of CRM lead matching.';
+COMMENT ON TABLE newsletter_suppression_events IS 'Append-only STOP webhook event ledger used for replay deduplication.';
 COMMENT ON TABLE newsletter_operator_reports IS 'Operator delivery ledger, separate from the five lead-message slots.';
 COMMENT ON TABLE newsletter_sends IS 'Append-only WhatsApp newsletter attempt ledger with immutable send-time snapshots.';

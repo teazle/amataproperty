@@ -12,6 +12,9 @@ BEGIN
   IF to_regclass('public.newsletter_suppressions') IS NULL THEN
     v_missing := array_append(v_missing, 'newsletter_suppressions');
   END IF;
+  IF to_regclass('public.newsletter_suppression_events') IS NULL THEN
+    v_missing := array_append(v_missing, 'newsletter_suppression_events');
+  END IF;
   IF to_regclass('public.newsletter_operator_reports') IS NULL THEN
     v_missing := array_append(v_missing, 'newsletter_operator_reports');
   END IF;
@@ -69,6 +72,37 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1
+    FROM pg_proc AS proc
+    JOIN pg_namespace AS namespace ON namespace.oid = proc.pronamespace
+    WHERE namespace.nspname = 'public'
+      AND proc.proname = 'enforce_newsletter_suppression_event_append_only'
+      AND proc.prosecdef = TRUE
+      AND proc.proconfig @> ARRAY['search_path=public']
+      AND NOT EXISTS (
+        SELECT 1
+        FROM aclexplode(COALESCE(proc.proacl, acldefault('f', proc.proowner))) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+      )
+  ) THEN
+    RAISE EXCEPTION 'suppression event trigger function security contract is missing';
+  END IF;
+
+  IF NOT has_table_privilege('service_role', 'newsletter_suppression_events', 'SELECT')
+     OR EXISTS (
+       SELECT 1
+       FROM pg_class AS relation
+       CROSS JOIN LATERAL aclexplode(
+         COALESCE(relation.relacl, acldefault('r', relation.relowner))
+       ) AS acl
+       WHERE relation.oid = 'newsletter_suppression_events'::regclass
+         AND acl.grantee = 0
+     ) THEN
+    RAISE EXCEPTION 'suppression event table privileges are not service-role read-only';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
     FROM pg_constraint
     WHERE conrelid = 'newsletter_runs'::regclass
       AND contype = 'u'
@@ -108,6 +142,16 @@ BEGIN
       AND NOT tgisinternal
   ) THEN
     RAISE EXCEPTION 'newsletter ledger guards are missing';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_trigger
+    WHERE tgrelid = 'newsletter_suppression_events'::regclass
+      AND tgname = 'trg_newsletter_suppression_event_append_only'
+      AND NOT tgisinternal
+  ) THEN
+    RAISE EXCEPTION 'suppression event append-only guard is missing';
   END IF;
 END;
 $$;
@@ -535,6 +579,7 @@ END;
 $$;
 
 -- ASSERT: duplicate-phone STOP idempotency
+-- ASSERT: STOP event ledger A-B-A replay
 DO $$
 DECLARE
   v_project_id UUID;
@@ -546,6 +591,10 @@ DECLARE
   v_a_updated TIMESTAMPTZ;
   v_b_opt_out TIMESTAMPTZ;
   v_b_updated TIMESTAMPTZ;
+  v_seen_after_b TIMESTAMPTZ;
+  v_send_updated_after_b TIMESTAMPTZ;
+  v_run_updated_after_b TIMESTAMPTZ;
+  v_rejected BOOLEAN := FALSE;
 BEGIN
   SELECT project_id, issue_id, stop_run_id
   INTO v_project_id, v_issue_id, v_stop_run_id
@@ -582,13 +631,25 @@ BEGIN
     RAISE EXCEPTION 'STOP did not update every CRM row sharing the normalized phone';
   END IF;
 
-  PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-1', 'STOP');
+  PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-2', 'STOP again');
 
-  IF (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-1' THEN
-    RAISE EXCEPTION 'exact STOP webhook replay changed last_message_id';
+  SELECT last_seen_at INTO v_seen_after_b
+  FROM newsletter_suppressions
+  WHERE recipient_key = '+6592345678';
+
+  SELECT updated_at INTO v_send_updated_after_b
+  FROM newsletter_sends
+  WHERE recipient_key = '+6592345678';
+
+  SELECT updated_at INTO v_run_updated_after_b
+  FROM newsletter_runs
+  WHERE id = v_stop_run_id;
+
+  IF (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-2' THEN
+    RAISE EXCEPTION 'new STOP event B did not advance last_message_id';
   END IF;
 
-  PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-2', 'STOP again');
+  PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-1', 'delayed replay A');
 
   IF EXISTS (
     SELECT 1
@@ -600,8 +661,18 @@ BEGIN
   END IF;
 
   IF (SELECT count(*) FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 1
-     OR (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-2' THEN
-    RAISE EXCEPTION 'distinct STOP event did not advance suppression message bookkeeping';
+     OR (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-2'
+     OR (SELECT last_seen_at FROM newsletter_suppressions WHERE recipient_key = '+6592345678') IS DISTINCT FROM v_seen_after_b THEN
+    RAISE EXCEPTION 'delayed replay A moved suppression state backward or changed its timestamp';
+  END IF;
+
+  IF (SELECT count(*) FROM newsletter_suppression_events WHERE recipient_key = '+6592345678') <> 2 THEN
+    RAISE EXCEPTION 'A-B-A sequence did not deduplicate to two append-only events';
+  END IF;
+
+  IF (SELECT updated_at FROM newsletter_sends WHERE recipient_key = '+6592345678') IS DISTINCT FROM v_send_updated_after_b
+     OR (SELECT updated_at FROM newsletter_runs WHERE id = v_stop_run_id) IS DISTINCT FROM v_run_updated_after_b THEN
+    RAISE EXCEPTION 'delayed replay A mutated send or run timestamps';
   END IF;
 
   IF NOT EXISTS (
@@ -616,6 +687,18 @@ BEGIN
       AND skipped_count = 1
   ) THEN
     RAISE EXCEPTION 'initial STOP did not cancel and count the queued attempt exactly once';
+  END IF;
+
+  BEGIN
+    UPDATE newsletter_suppression_events
+    SET reason = 'mutated'
+    WHERE recipient_key = '+6592345678'
+      AND provider_message_id = 'stop-message-1';
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'suppression event ledger accepted an update';
   END IF;
 END;
 $$;

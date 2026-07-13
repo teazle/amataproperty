@@ -8,9 +8,17 @@ describe('normalizeSingaporeRecipient', () => {
     expect(normalizeSingaporeRecipient('9105 1399')).toBe('+6591051399');
     expect(normalizeSingaporeRecipient('6591051399@c.us')).toBe('+6591051399');
     expect(normalizeSingaporeRecipient('+65 8123-4567')).toBe('+6581234567');
+    expect(normalizeSingaporeRecipient('(9105)-1399')).toBe('+6591051399');
     expect(normalizeSingaporeRecipient('123')).toBeNull();
     expect(normalizeSingaporeRecipient('+6571234567')).toBeNull();
     expect(normalizeSingaporeRecipient('+65910513990')).toBeNull();
+  });
+
+  test('rejects text and punctuation outside documented phone syntax', () => {
+    expect(normalizeSingaporeRecipient('customer id 91051399')).toBeNull();
+    expect(normalizeSingaporeRecipient('call 9105-1399')).toBeNull();
+    expect(normalizeSingaporeRecipient('9105/1399')).toBeNull();
+    expect(normalizeSingaporeRecipient('+6591051399 ext 1')).toBeNull();
   });
 });
 
@@ -71,6 +79,15 @@ describe('aggregateProjectValuation', () => {
       as_of: '2026-07-13',
       expires_at: '2026-07-22T00:00:00Z',
     },
+    {
+      project_name: 'Cliften',
+      low_sgd: 900_000,
+      mid_sgd: 950_000,
+      high_sgd: 800_000,
+      comparables_count: 500,
+      as_of: '2026-07-13',
+      expires_at: '2026-07-22T00:00:00Z',
+    },
   ];
 
   test('aggregates only fresh project-matching supported valuations', () => {
@@ -87,5 +104,12 @@ describe('aggregateProjectValuation', () => {
   test('returns null when no fresh supported row matches the project', () => {
     expect(aggregateProjectValuation('Missing', valuationRows, now)).toBeNull();
     expect(aggregateProjectValuation('', valuationRows, now)).toBeNull();
+  });
+
+  test('does not let an inverted valuation range influence aggregation', () => {
+    const invertedOnly = valuationRows.at(-1);
+
+    expect(invertedOnly).toBeDefined();
+    expect(aggregateProjectValuation('Cliften', [invertedOnly!], now)).toBeNull();
   });
 });

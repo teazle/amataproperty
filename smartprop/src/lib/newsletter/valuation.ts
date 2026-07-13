@@ -47,10 +47,15 @@ export function aggregateProjectValuation(
       normalizedProject.includes(normalizedTitle) || normalizedTitle.includes(normalizedProject)
     );
     const expiresAt = new Date(row.expires_at).getTime();
-    const hasRange = finitePositive(row.low_sgd) !== null && finitePositive(row.high_sgd) !== null;
+    const low = finitePositive(row.low_sgd);
+    const high = finitePositive(row.high_sgd);
+    const hasCompleteRange = low !== null && high !== null;
+    const hasRange = hasCompleteRange && low <= high;
+    const hasInvertedRange = hasCompleteRange && low > high;
     const hasMidpoint = finitePositive(row.mid_sgd) !== null;
 
-    return projectMatches && Number.isFinite(expiresAt) && expiresAt > now.getTime() && (hasRange || hasMidpoint);
+    return projectMatches && Number.isFinite(expiresAt) && expiresAt > now.getTime() &&
+      !hasInvertedRange && (hasRange || hasMidpoint);
   });
 
   if (supported.length === 0) return null;

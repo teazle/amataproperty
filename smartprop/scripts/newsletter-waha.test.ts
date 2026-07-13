@@ -77,6 +77,7 @@ describe('sendCampaignWhatsApp', () => {
     expect(result).toEqual({ outcome: 'accepted', messageId: 'provider-123' });
     expect(calls[1]?.url).toBe('http://waha.test:3030/api/sendText');
     expect(calls[1]?.init?.method).toBe('POST');
+    expect(calls[1]?.init?.redirect).toBe('manual');
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
       session: 'campaign',
       chatId: '6591051399@c.us',

@@ -200,6 +200,7 @@ export async function sendCampaignWhatsApp(
       `${WAHA_URL}/api/sendText`,
       {
         method: 'POST',
+        redirect: 'manual',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session: WAHA_SESSION,

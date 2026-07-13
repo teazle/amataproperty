@@ -53,6 +53,7 @@ export interface CampaignStore {
   claimToday(claimToken: string): Promise<CampaignRun>;
   listAttempts(runId: string): Promise<NewsletterAttempt[]>;
   recoverAbandoned(runId: string, olderThan: Date): Promise<number>;
+  recoverStaleReports(runId: string, olderThan: Date): Promise<number>;
   selectCandidates(issue: NewsletterIssue, limit: number, referenceTime?: Date): Promise<CampaignCandidate[]>;
   selectCandidate(issue: NewsletterIssue, leadId: string): Promise<CampaignCandidate | null>;
   queueAttempt(
@@ -120,6 +121,7 @@ function runFromRow(row: Record<string, unknown>, issueSlug = 'unknown'): Campai
     unknownCount: Number(row.unknown_count || 0),
     skippedCount: Number(row.skipped_count || 0),
     blocker: typeof row.blocker === 'string' ? row.blocker : null,
+    reportError: typeof row.report_error === 'string' ? row.report_error : null,
   };
 }
 
@@ -244,11 +246,12 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
         }, 'paginate campaign CRM leads'),
         paginatedRows(async (from, to) => {
           const result = await client.from('newsletter_sends')
-            .select('recipient_key,status,retryable,attempt_started_at')
+            .select('id,recipient_key,status,retryable,attempt_started_at')
             .eq('issue_id', issue.id)
             .eq('is_test', false)
             .order('recipient_key', { ascending: true })
             .order('attempt_started_at', { ascending: true, nullsFirst: true })
+            .order('id', { ascending: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate prior campaign attempts'),
@@ -261,10 +264,11 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
         }, 'paginate newsletter suppressions'),
         paginatedRows(async (from, to) => {
           const result = await client.from('propnex_valuations')
-            .select('project_name,low_sgd,mid_sgd,high_sgd,comparables_count,as_of,expires_at')
+            .select('id,project_name,low_sgd,mid_sgd,high_sgd,comparables_count,as_of,expires_at')
             .gt('expires_at', referenceTime.toISOString())
             .order('project_name', { ascending: true })
             .order('expires_at', { ascending: true })
+            .order('id', { ascending: true })
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate newsletter valuations'),
@@ -340,10 +344,11 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
         p_slot_no: slotNo,
         p_claim_token: claimToken,
       });
-      if (error?.code === '42501' || error?.message.toLowerCase().includes('suppressed')) return 'suppressed';
+      if (error?.code === '42501') return 'suppressed';
       fail(error, 'start newsletter attempt');
       const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
       if (!row) throw new Error('start_newsletter_attempt returned no attempt.');
+      if (row.status === 'opted_out') return 'suppressed';
       return attemptFromRow(row);
     },
 
@@ -360,18 +365,19 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       fail(finalized.error, 'finalize newsletter attempt and CRM');
     },
 
+    async recoverStaleReports(runId, olderThan) {
+      const { data, error } = await client.rpc('recover_stale_newsletter_operator_reports', {
+        p_run_id: runId,
+        p_before: olderThan.toISOString(),
+      });
+      fail(error, 'recover stale newsletter operator reports');
+      const row = Array.isArray(data) ? data[0] : data;
+      if (typeof row === 'number') return row;
+      if (row && typeof row === 'object' && 'count' in row) return Number(row.count || 0);
+      return Number(row || 0);
+    },
+
     async queueOperatorReports(runId, operators) {
-      const abandoned = await client.from('newsletter_operator_reports')
-        .update({
-          status: 'unknown',
-          error: 'runner restarted before report outcome was finalized',
-          completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('run_id', runId)
-        .eq('status', 'sending')
-        .lt('attempt_started_at', new Date(Date.now() - 5 * 60_000).toISOString());
-      fail(abandoned.error, 'recover abandoned operator reports');
       const runResult = await client.from('newsletter_runs').select('*').eq('id', runId).single();
       fail(runResult.error, 'load run for operator reports');
       const run = runFromRow(runResult.data, await issueSlug(String(runResult.data.issue_id)));

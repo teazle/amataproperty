@@ -57,7 +57,7 @@ class FakeStore implements CampaignStore {
   run: CampaignRun = {
     id: 'run-1', runDate: '2026-07-13', issueId: issue.id, issueSlug: issue.slug,
     status: 'running', selectedCount: 0, attemptedCount: 0, sentCount: 0,
-    failedCount: 0, unknownCount: 0, skippedCount: 0, blocker: null,
+    failedCount: 0, unknownCount: 0, skippedCount: 0, blocker: null, reportError: null,
   };
   candidates = Array.from({ length: 6 }, (_, index) => candidate(index + 1));
   attempts: NewsletterAttempt[] = [];
@@ -80,6 +80,10 @@ class FakeStore implements CampaignStore {
       return { ...attempt, status: 'unknown', retryable: false };
     });
     return recovered;
+  }
+  async recoverStaleReports(_runId: string, olderThan: Date): Promise<number> {
+    this.calls.push(`recoverStaleReports:${olderThan.toISOString()}`);
+    return 0;
   }
   async selectCandidates(_issue: NewsletterIssue, limit: number, referenceTime?: Date): Promise<CampaignCandidate[]> {
     this.calls.push(`selectCandidates:${limit}`);
@@ -213,7 +217,33 @@ describe('runNewsletterCampaign', () => {
     const result = await runNewsletterCampaign(dependencies(store), options);
 
     expect(result.status).toBe('completed');
-    expect(store.calls).toEqual(['claimToday', 'listAttempts', 'queueReports']);
+    expect(store.calls).toEqual([
+      'claimToday', 'listAttempts', 'recoverStaleReports:2026-07-13T03:55:00.000Z', 'queueReports',
+    ]);
+  });
+
+  test.each(['completed', 'running'] as const)(
+    '%s rerun with persisted report_error returns recovery-required without report resend',
+    async (status) => {
+      const store = new FakeStore();
+      store.run = { ...store.run, status, reportError: 'operator report outcome unknown' };
+      const result = await runNewsletterCampaign(dependencies(store), options);
+      expect(result.status).toBe('recovery-required');
+      expect(result.blocker).toBe('operator report outcome unknown');
+      expect(store.calls).not.toContain('queueReports');
+    },
+  );
+
+  test('stale sending report recovery returns recovery-required without resend', async () => {
+    const store = new FakeStore();
+    store.run.status = 'completed';
+    store.recoverStaleReports = async (_runId: string, olderThan: Date) => {
+      store.calls.push(`recoverStaleReports:${olderThan.toISOString()}`);
+      return 1;
+    };
+    const result = await runNewsletterCampaign(dependencies(store), options);
+    expect(result.status).toBe('recovery-required');
+    expect(store.calls).not.toContain('queueReports');
   });
 
   test('a running same-day invocation resumes the persisted queued batch without reselection', async () => {
@@ -262,6 +292,27 @@ describe('runNewsletterCampaign', () => {
     expect(store.calls).toContain('start:lead-2:2');
     expect(store.calls).toContain('start:lead-6:5');
     expect(posts).not.toContain(candidate(2).recipientKey);
+  });
+
+  test('an opt-out RPC cancelled queued row releases capacity for exactly one replacement', async () => {
+    const store = new FakeStore();
+    store.run.selectedCount = 5;
+    store.attempts = [1, 2, 3, 4].map((number) => ({
+      id: `queued-${number}`, runId: 'run-1', leadId: `lead-${number}`, slotNo: null,
+      recipientName: `Lead ${number}`, recipientKey: candidate(number).recipientKey,
+      renderedBody: `body-${number}`, status: 'queued' as const, attemptNo: null, retryable: true,
+    }));
+    store.attempts.push({
+      id: 'stopped', runId: 'run-1', leadId: 'lead-5', slotNo: null,
+      recipientName: 'Lead 5', recipientKey: candidate(5).recipientKey,
+      renderedBody: 'stopped', status: 'opted_out', attemptNo: null, retryable: false,
+    });
+    const posts: string[] = [];
+    await runNewsletterCampaign(dependencies(store, {
+      transport: async (to: string) => { posts.push(to); return { outcome: 'accepted', messageId: to }; },
+    }), options);
+    expect(posts).toHaveLength(5);
+    expect(store.calls.filter((call) => call === 'queue:lead-6')).toHaveLength(1);
   });
 
   test('unknown outcomes are persisted non-retryable and never retried', async () => {
@@ -476,6 +527,20 @@ describe('campaign store RPC adapter', () => {
     ]));
   });
 
+  test('classifies an explicit opted_out start row as suppressed without message matching', async () => {
+    const recording = recordingClient({
+      'rpc:start_newsletter_attempt': [{ ...queuedRow, status: 'opted_out', retryable: false }],
+    });
+    const store = createCampaignStore(recording.client as never);
+    const outcome = await store.startAttempt(
+      { ...queuedRow, slotNo: null, runId: 'run-1', leadId: 'lead-1', recipientName: 'Lead 1', recipientKey: '+6591000001', renderedBody: 'body', status: 'queued', attemptNo: null, retryable: true } as NewsletterAttempt,
+      new FakeStore().run,
+      1,
+      'claim-1',
+    );
+    expect(outcome).toBe('suppressed');
+  });
+
   test('orders every paginated query before range and uses dry-run reference time', async () => {
     const recording = recordingClient({
       crm_projects: [{ id: 'project-1', title: 'Cliften' }],
@@ -483,9 +548,16 @@ describe('campaign store RPC adapter', () => {
     });
     const store = createCampaignStore(recording.client as never);
     await store.selectCandidates({ ...issue, audienceProjectSlug: 'cliften' }, 5, new Date('2026-07-12T00:00:00Z'));
-    const rangeIndexes = recording.calls.flatMap((call, index) => call.includes('.range:') ? [index] : []);
-    expect(rangeIndexes).toHaveLength(4);
-    for (const index of rangeIndexes) expect(recording.calls[index - 1]).toContain('.order:');
+    expect(recording.calls.filter((call) => call.startsWith('newsletter_sends.order:'))).toEqual([
+      'newsletter_sends.order:recipient_key',
+      'newsletter_sends.order:attempt_started_at',
+      'newsletter_sends.order:id',
+    ]);
+    expect(recording.calls.filter((call) => call.startsWith('propnex_valuations.order:'))).toEqual([
+      'propnex_valuations.order:project_name',
+      'propnex_valuations.order:expires_at',
+      'propnex_valuations.order:id',
+    ]);
     expect(recording.calls).toContain('propnex_valuations.gt:expires_at=2026-07-12T00:00:00.000Z');
   });
 
@@ -501,6 +573,17 @@ describe('campaign store RPC adapter', () => {
     const store = createCampaignStore(recording.client as never);
     await store.finalizeReport('report-1', { outcome: 'unknown', error: 'report timeout' });
     expect(recording.calls).toContain('newsletter_runs.update');
+  });
+
+  test('uses the secured atomic stale-report recovery RPC', async () => {
+    const recording = recordingClient({ 'rpc:recover_stale_newsletter_operator_reports': [{ count: 1 }] });
+    const store = createCampaignStore(recording.client as never);
+    const count = await store.recoverStaleReports('run-1', new Date('2026-07-13T03:55:00Z'));
+    expect(count).toBe(1);
+    expect(recording.rpcCalls).toContainEqual({
+      name: 'recover_stale_newsletter_operator_reports',
+      args: { p_run_id: 'run-1', p_before: '2026-07-13T03:55:00.000Z' },
+    });
   });
 });
 

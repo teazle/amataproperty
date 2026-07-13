@@ -86,6 +86,26 @@ describe('newsletter migration contract', () => {
     expect(start).toMatch(/FROM crm_leads[\s\S]+FOR UPDATE[\s\S]+v_current_recipient_key IS DISTINCT FROM v_identity\.recipient_key/i);
   });
 
+  test('atomically releases queued STOP recipients with an explicit start outcome', () => {
+    const start = functionSql('start_newsletter_attempt', 'finalize_newsletter_attempt');
+    expect(start).toMatch(/v_send\.status = 'opted_out'[\s\S]+RETURN v_send/i);
+    expect(start).toMatch(/IF v_lead\.opt_out_at IS NOT NULL[\s\S]+SET status = 'opted_out'[\s\S]+RETURNING \* INTO v_send[\s\S]+RETURN v_send/i);
+    expect(start).toMatch(/FROM newsletter_suppressions[\s\S]+SET status = 'opted_out'[\s\S]+RETURNING \* INTO v_send[\s\S]+RETURN v_send/i);
+    const queue = functionSql('queue_newsletter_attempt', 'start_newsletter_attempt');
+    expect(queue).toMatch(/attempt_started_at IS NOT NULL OR status = 'queued'/i);
+  });
+
+  test('atomically records stale operator-report recovery on the run', () => {
+    const recovery = functionSql(
+      'recover_stale_newsletter_operator_reports',
+      'record_newsletter_opt_out',
+    );
+    expect(recovery).toContain('p_before TIMESTAMPTZ');
+    expect(recovery).toMatch(/UPDATE newsletter_operator_reports[\s\S]+SET status = 'unknown'[\s\S]+attempt_started_at < p_before/i);
+    expect(recovery).toMatch(/UPDATE newsletter_runs[\s\S]+SET report_error = 'stale operator report outcome unknown'/i);
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION recover_stale_newsletter_operator_reports');
+  });
+
   test('transfers only stale claims after fifteen minutes', () => {
     const claim = functionSql('claim_newsletter_run', 'queue_newsletter_attempt');
     expect(claim).toMatch(/last_heartbeat_at\s*>=\s*clock_timestamp\(\)\s*-\s*INTERVAL '15 minutes'/i);
@@ -122,7 +142,10 @@ describe('newsletter migration contract', () => {
 
   test('provides secured test-send write RPCs without CRM or run mutation', () => {
     const createTest = functionSql('create_newsletter_test_send', 'finalize_newsletter_test_send');
-    const finalizeTest = functionSql('finalize_newsletter_test_send', 'record_newsletter_opt_out');
+    const finalizeTest = functionSql(
+      'finalize_newsletter_test_send',
+      'recover_stale_newsletter_operator_reports',
+    );
     for (const section of [createTest, finalizeTest]) {
       expect(section).toContain('SECURITY DEFINER');
       expect(section).toContain('SET search_path = public');
@@ -274,6 +297,8 @@ describe('newsletter migration contract', () => {
       'ASSERT: secured test-send RPCs',
       'ASSERT: post-queue phone change blocks start',
       'ASSERT: accepted recovery auto-repairs run',
+      'ASSERT: queued STOP release and replacement capacity',
+      'ASSERT: stale operator report recovery is atomic',
     ]) {
       expect(assertions).toContain(marker);
     }

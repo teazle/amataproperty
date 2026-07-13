@@ -45,6 +45,9 @@ BEGIN
   IF to_regprocedure('public.finalize_newsletter_test_send(uuid,text,text,text,boolean)') IS NULL THEN
     v_missing := array_append(v_missing, 'finalize_newsletter_test_send(uuid,text,text,text,boolean)');
   END IF;
+  IF to_regprocedure('public.recover_stale_newsletter_operator_reports(uuid,timestamp with time zone)') IS NULL THEN
+    v_missing := array_append(v_missing, 'recover_stale_newsletter_operator_reports(uuid,timestamptz)');
+  END IF;
   IF to_regprocedure('public.start_newsletter_attempt(uuid,uuid,integer,text)') IS NOT NULL THEN
     v_missing := array_append(v_missing, 'obsolete start_newsletter_attempt overload still exists');
   END IF;
@@ -73,6 +76,7 @@ BEGIN
       'record_accepted_newsletter_recovery',
       'create_newsletter_test_send',
       'finalize_newsletter_test_send',
+      'recover_stale_newsletter_operator_reports',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown'
     ])
@@ -88,8 +92,8 @@ BEGIN
         AND acl.privilege_type = 'EXECUTE'
     );
 
-  IF v_function_count <> 9 THEN
-    RAISE EXCEPTION 'RPC security contract matched % of 9 functions', v_function_count;
+  IF v_function_count <> 10 THEN
+    RAISE EXCEPTION 'RPC security contract matched % of 10 functions', v_function_count;
   END IF;
 
   IF NOT EXISTS (
@@ -456,6 +460,7 @@ $$;
 
 -- ASSERT: persisted queue restart safety
 -- ASSERT: queue suppression before start
+-- ASSERT: queued STOP release and replacement capacity
 DO $$
 DECLARE
   v_run_id UUID;
@@ -463,7 +468,6 @@ DECLARE
   v_queued newsletter_sends%ROWTYPE;
   v_resumed newsletter_sends%ROWTYPE;
   v_replacement newsletter_sends%ROWTYPE;
-  v_rejected BOOLEAN := FALSE;
 BEGIN
   SELECT run_id, lead_ids INTO v_run_id, v_lead_ids
   FROM newsletter_assertion_fixture;
@@ -502,12 +506,11 @@ BEGIN
 
   PERFORM record_newsletter_opt_out('+6591000005', 'queue-stop-A', 'STOP before POST');
 
-  BEGIN
-    PERFORM start_newsletter_attempt(v_queued.id, 1, 'schema-assertion-takeover');
-  EXCEPTION WHEN SQLSTATE '55000' OR SQLSTATE '42501' THEN
-    v_rejected := TRUE;
-  END;
-  IF NOT v_rejected OR NOT EXISTS (
+  v_resumed := start_newsletter_attempt(v_queued.id, 1, 'schema-assertion-takeover');
+  IF v_resumed.status <> 'opted_out'
+     OR v_resumed.slot_no IS NOT NULL
+     OR v_resumed.attempt_started_at IS NOT NULL
+     OR NOT EXISTS (
     SELECT 1 FROM newsletter_sends
     WHERE id = v_queued.id
       AND status = 'opted_out'
@@ -1150,6 +1153,46 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'suppression event ledger accepted an update';
+  END IF;
+END;
+$$;
+
+-- ASSERT: stale operator report recovery is atomic
+DO $$
+DECLARE
+  v_run_id UUID;
+  v_report_id UUID;
+  v_recovered INTEGER;
+BEGIN
+  SELECT run_id INTO v_run_id FROM newsletter_assertion_fixture;
+
+  INSERT INTO newsletter_operator_reports (
+    run_id, operator_key, kind, body, status, attempt_started_at
+  ) VALUES (
+    v_run_id,
+    'schema-stale-operator',
+    'summary',
+    'stale summary',
+    'sending',
+    clock_timestamp() - INTERVAL '10 minutes'
+  ) RETURNING id INTO v_report_id;
+
+  v_recovered := recover_stale_newsletter_operator_reports(
+    v_run_id,
+    clock_timestamp() - INTERVAL '5 minutes'
+  );
+
+  IF v_recovered <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM newsletter_operator_reports
+       WHERE id = v_report_id AND status = 'unknown'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM newsletter_runs
+       WHERE id = v_run_id
+         AND report_error = 'stale operator report outcome unknown'
+     ) THEN
+    RAISE EXCEPTION 'stale report and run recovery state were not committed atomically';
   END IF;
 END;
 $$;

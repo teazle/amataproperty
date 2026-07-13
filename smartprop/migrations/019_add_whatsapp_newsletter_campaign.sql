@@ -793,7 +793,7 @@ BEGIN
   FROM crm_leads
   WHERE id = v_identity.lead_id
   FOR UPDATE;
-  IF NOT FOUND OR v_lead.status = 'lost' OR v_lead.opt_out_at IS NOT NULL THEN
+  IF NOT FOUND OR v_lead.status = 'lost' THEN
     RAISE EXCEPTION 'queued attempt lead is no longer sendable'
       USING ERRCODE = '55000';
   END IF;
@@ -821,7 +821,14 @@ BEGIN
   FROM newsletter_sends
   WHERE id = p_send_id
   FOR UPDATE;
-  IF NOT FOUND OR v_send.status <> 'queued' OR v_send.attempt_started_at IS NOT NULL THEN
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter attempt is not queued'
+      USING ERRCODE = '55000';
+  END IF;
+  IF v_send.status = 'opted_out' AND v_send.attempt_started_at IS NULL THEN
+    RETURN v_send;
+  END IF;
+  IF v_send.status <> 'queued' OR v_send.attempt_started_at IS NOT NULL THEN
     RAISE EXCEPTION 'newsletter attempt is not queued'
       USING ERRCODE = '55000';
   END IF;
@@ -839,10 +846,48 @@ BEGIN
     RAISE EXCEPTION 'queued attempt identity is invalid' USING ERRCODE = '55000';
   END IF;
 
+  IF v_lead.opt_out_at IS NOT NULL THEN
+    UPDATE newsletter_sends
+    SET status = 'opted_out',
+        retryable = FALSE,
+        error = COALESCE(error, 'CRM lead opted out before provider start'),
+        completed_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE id = v_send.id
+      AND status = 'queued'
+      AND attempt_started_at IS NULL
+    RETURNING * INTO v_send;
+
+    UPDATE newsletter_runs
+    SET skipped_count = skipped_count + 1,
+        last_heartbeat_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE id = v_run.id;
+
+    RETURN v_send;
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM newsletter_suppressions WHERE recipient_key = v_send.recipient_key
   ) THEN
-    RAISE EXCEPTION 'recipient is suppressed' USING ERRCODE = '42501';
+    UPDATE newsletter_sends
+    SET status = 'opted_out',
+        retryable = FALSE,
+        error = COALESCE(error, 'recipient suppressed before provider start'),
+        completed_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE id = v_send.id
+      AND status = 'queued'
+      AND attempt_started_at IS NULL
+    RETURNING * INTO v_send;
+
+    UPDATE newsletter_runs
+    SET skipped_count = skipped_count + 1,
+        last_heartbeat_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE id = v_run.id;
+
+    RETURN v_send;
   END IF;
 
   SELECT count(*)::INTEGER INTO v_day_attempt_count
@@ -1303,6 +1348,58 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION recover_stale_newsletter_operator_reports(
+  p_run_id UUID,
+  p_before TIMESTAMPTZ
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run newsletter_runs%ROWTYPE;
+  v_recovered_count INTEGER;
+BEGIN
+  IF p_run_id IS NULL OR p_before IS NULL THEN
+    RAISE EXCEPTION 'run id and stale cutoff are required' USING ERRCODE = '22023';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_run:' || p_run_id::TEXT));
+  SELECT * INTO v_run
+  FROM newsletter_runs
+  WHERE id = p_run_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter run not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  WITH recovered AS (
+    UPDATE newsletter_operator_reports
+    SET status = 'unknown',
+        error = COALESCE(error, 'runner restarted before report outcome was finalized'),
+        completed_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE run_id = p_run_id
+      AND status = 'sending'
+      AND attempt_started_at IS NOT NULL
+      AND attempt_started_at < p_before
+    RETURNING id
+  )
+  SELECT count(*)::INTEGER INTO v_recovered_count FROM recovered;
+
+  IF v_recovered_count > 0 THEN
+    UPDATE newsletter_runs
+    SET report_error = 'stale operator report outcome unknown',
+        last_heartbeat_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE id = p_run_id;
+  END IF;
+
+  RETURN v_recovered_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION record_newsletter_opt_out(
   p_recipient TEXT,
   p_message_id TEXT,
@@ -1640,6 +1737,7 @@ REVOKE ALL ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN)
   FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
 
@@ -1650,6 +1748,7 @@ GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BO
 GRANT EXECUTE ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;
 GRANT EXECUTE ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
+GRANT EXECUTE ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;
 REVOKE ALL ON TABLE newsletter_sends FROM PUBLIC, anon, authenticated, service_role;

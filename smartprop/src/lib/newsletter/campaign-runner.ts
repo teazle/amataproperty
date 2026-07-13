@@ -59,6 +59,7 @@ export interface CampaignRun {
   unknownCount: number;
   skippedCount: number;
   blocker: string | null;
+  reportError: string | null;
 }
 
 export interface CampaignRunOptions {
@@ -211,6 +212,19 @@ export async function runNewsletterCampaign(
   const claimToken = options.claimToken || crypto.randomUUID();
   let run = await dependencies.store.claimToday(claimToken);
   let attempts = await dependencies.store.listAttempts(run.id);
+  const recoveredReports = await dependencies.store.recoverStaleReports(
+    run.id,
+    new Date(now.getTime() - 5 * 60_000),
+  );
+  if (recoveredReports > 0) {
+    return {
+      ...resultFromRun(run, 'recovery-required'),
+      blocker: 'stale operator report outcome unknown',
+    };
+  }
+  if (run.reportError) {
+    return { ...resultFromRun(run, 'recovery-required'), blocker: run.reportError };
+  }
   if (run.status === 'completed') {
     const reportError = await sendOperatorReports(dependencies, run, operators);
     if (reportError) {
@@ -234,10 +248,12 @@ export async function runNewsletterCampaign(
   const committedCount = () => attempts.filter((attempt) =>
     attempt.status === 'queued' || attempt.slotNo !== null).length;
 
-  if (attempts.length === 0) {
+  const targetCommittedCount = attempts.length === 0 ? 5 : Math.min(5, run.selectedCount);
+  if (committedCount() < targetCommittedCount) {
     const candidates = await dependencies.store.selectCandidates(issue, 10, now);
     for (const candidate of candidates) {
-      if (committedCount() >= 5 || candidate.attemptCount >= 3 || knownRecipients.has(candidate.recipientKey)) continue;
+      if (committedCount() >= targetCommittedCount || candidate.attemptCount >= 3 ||
+          knownRecipients.has(candidate.recipientKey)) continue;
       const queued = await dependencies.store.queueAttempt(
         run, candidate, claimToken, compose(issue, candidate, featuredUrlBase),
       );
@@ -253,6 +269,9 @@ export async function runNewsletterCampaign(
     const queued = queuedAttempts[index];
     const started = await dependencies.store.startAttempt(queued, run, nextSlot, claimToken);
     if (started === 'suppressed') {
+      attempts = attempts.map((attempt) => attempt.id === queued.id
+        ? { ...attempt, status: 'opted_out', retryable: false }
+        : attempt);
       const replacements = await dependencies.store.selectCandidates(issue, 10, now);
       const replacement = replacements.find((candidate) =>
         candidate.attemptCount < 3 && !knownRecipients.has(candidate.recipientKey));

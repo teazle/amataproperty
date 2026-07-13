@@ -257,8 +257,9 @@ Before every dry-run, Chloe must review the audience project's CRM leads:
   blocker, and only then treat the list as ready.
 
 The runner automatically selects up to five eligible recipients. Do not manually
-choose the five recipients. Do not send a parallel batch or retry a failed or unknown
-provider submission outside the ledger.
+choose the five recipients. Chloe must not manually send newsletter messages. Do not
+send a parallel batch or retry a failed or unknown provider submission outside the
+ledger.
 
 1. Import and manage newsletter leads in the SmartProp CRM. Keep each list in the
    correct CRM project and verify the imported/skipped/duplicate counts.
@@ -293,10 +294,11 @@ ssh smartprop-vps 'cd /opt/smartprop/app/smartprop && /root/.bun/bin/bun scripts
 ssh smartprop-vps 'systemctl status smartprop-whatsapp-newsletter.timer --no-pager'
 ```
 
-Escalate to the operator when health reports WAHA disconnected, an unknown provider
-outcome exists, the current run is stale, the approved issue is missing, or the
-daily attempt count is already five. Unknown outcomes require provider evidence and
-the audited `resolve-unknown` command in `docs/WHATSAPP_NEWSLETTER_OPERATIONS.md`.
+Escalate to the operator when health reports WAHA disconnected, the valuation is
+missing or expired, an unknown provider outcome exists, the current run is stale,
+the approved issue is missing, or the daily attempt count is already five. Unknown
+outcomes require provider evidence and the audited `resolve-unknown` command in
+`docs/WHATSAPP_NEWSLETTER_OPERATIONS.md`.
 
 ## Safety
 

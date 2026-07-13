@@ -14,6 +14,7 @@ describe('Chloe WhatsApp newsletter skill', () => {
     expect(normalizedSkill).toContain('landline');
     expect(normalizedSkill).toContain('runner automatically selects up to five eligible recipients');
     expect(normalizedSkill).toContain('Do not manually choose the five recipients');
+    expect(normalizedSkill).toContain('Chloe must not manually send newsletter messages');
   });
 
   test('teaches dry-run interpretation, reporting, and escalation', () => {
@@ -22,5 +23,6 @@ describe('Chloe WhatsApp newsletter skill', () => {
     expect(normalizedSkill).toContain('exact message body');
     expect(normalizedSkill).toContain('WAHA is not exactly `WORKING`');
     expect(normalizedSkill).toContain('current approved valuation');
+    expect(normalizedSkill).toContain('valuation is missing or expired');
   });
 });

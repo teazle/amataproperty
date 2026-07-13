@@ -109,7 +109,9 @@ The full phone remains in Supabase. Operator reports preserve the country code a
 
 ### Controls and observability
 
-The runner supports `--dry-run`, dry-run-only `--date yyyy-mm-dd`, `--json`, and an authenticated local `resolve-unknown` command. Dry-run performs selection and rendering without creating sends, updating CRM, or calling WAHA.
+The runner supports `--dry-run`, dry-run-only `--date yyyy-mm-dd`, `--json`, an authenticated local `test-send` command, and an authenticated local `resolve-unknown` command. Dry-run performs selection and rendering without creating sends, updating CRM, or calling WAHA.
+
+`test-send` renders one real campaign preview but sends it to the configured `SMARTPROP_NEWSLETTER_TEST_TO` override. It records `is_test=true` and `override_phone`, does not add the test number to CRM, does not change the source lead's CRM status/activity, and does not consume a real daily run slot. Test rows are excluded from real-recipient uniqueness indexes.
 
 The service writes structured logs and a text report artifact under `/opt/smartprop/logs/newsletter/`. Health verification must expose the latest run date/status, counts, and WAHA readiness. A `verify-newsletter-campaign.sh` script probes the timer, service, database run freshness, and WAHA state without sending messages.
 
@@ -168,7 +170,7 @@ The first binding constraint is the single WAHA linked session, not database or 
 - Runner tests with injected WAHA sender, clock, sleep, and report sender.
 - Migration assertions for constraints, states, indexes, and atomic claim behavior.
 - Focused Bun tests, full TypeScript typecheck, Next.js production build, shell syntax checks, and a dry-run against production data.
-- Controlled ledgered live test to the approved operator number only after WAHA reaches `WORKING`; no real lead send before that proof.
+- Controlled ledgered `test-send` to the approved operator number only after WAHA reaches `WORKING`; the number remains outside CRM and no real lead send occurs before that proof.
 
 ## Deployment Boundary
 

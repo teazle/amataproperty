@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
-import { sendCampaignWhatsApp } from '../src/lib/wa/waha';
+import { getWAHAHeaders, sendCampaignWhatsApp } from '../src/lib/wa/waha';
 
 const originalUrl = process.env.WAHA_URL;
 const originalSession = process.env.WAHA_SESSION;
@@ -27,6 +27,13 @@ describe('sendCampaignWhatsApp', () => {
     else process.env.WAHA_SESSION = originalSession;
     if (originalApiKey === undefined) delete process.env.WAHA_API_KEY;
     else process.env.WAHA_API_KEY = originalApiKey;
+  });
+
+  test('builds authenticated WAHA headers without dropping existing headers', () => {
+    const headers = getWAHAHeaders({ 'Content-Type': 'application/json' });
+
+    expect(headers.get('Content-Type')).toBe('application/json');
+    expect(headers.get('X-Api-Key')).toBe('test-api-key');
   });
 
   test.each([

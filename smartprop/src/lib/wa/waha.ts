@@ -43,12 +43,15 @@ function getWAHAConfig() {
   };
 }
 
-function withWAHAAuthentication(options: RequestInit): RequestInit {
+export function getWAHAHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
   const apiKey = process.env.WAHA_API_KEY?.trim();
-  if (!apiKey) return options;
-  const headers = new Headers(options.headers);
-  headers.set('X-Api-Key', apiKey);
-  return { ...options, headers };
+  if (apiKey) result.set('X-Api-Key', apiKey);
+  return result;
+}
+
+function withWAHAAuthentication(options: RequestInit): RequestInit {
+  return { ...options, headers: getWAHAHeaders(options.headers) };
 }
 
 function normalizeChatId(to: string): string {

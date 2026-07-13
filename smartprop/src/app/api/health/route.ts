@@ -8,7 +8,7 @@ import {
   parseNewsletterFreshnessMinutes,
   type NewsletterRunHealthSnapshot,
 } from '@/lib/newsletter/newsletter-health';
-import { getWAHAReadiness } from '@/lib/wa/waha';
+import { getWAHAHeaders, getWAHAReadiness } from '@/lib/wa/waha';
 
 const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
 
@@ -60,7 +60,7 @@ export async function GET(_request: NextRequest) {
       const wahaUrl = process.env.WAHA_URL || 'http://localhost:3030';
       const wahaResponse = await fetch(`${wahaUrl}/api/sessions`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getWAHAHeaders({ 'Content-Type': 'application/json' }),
         signal: AbortSignal.timeout(5000)
       });
       

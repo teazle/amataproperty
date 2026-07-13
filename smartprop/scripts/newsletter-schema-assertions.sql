@@ -257,6 +257,50 @@ BEGIN
 END;
 $$;
 
+-- ASSERT: provider submission negative transitions
+DO $$
+DECLARE
+  v_issue_id UUID;
+  v_run_id UUID;
+  v_lead_ids UUID[];
+  v_rejected BOOLEAN := FALSE;
+BEGIN
+  SELECT issue_id, run_id, lead_ids INTO v_issue_id, v_run_id, v_lead_ids
+  FROM newsletter_assertion_fixture;
+
+  BEGIN
+    INSERT INTO newsletter_sends (
+      issue_id, run_id, slot_no, lead_id, recipient_name, recipient_key,
+      attempt_no, phone, rendered_body, status, attempt_started_at, is_test
+    ) VALUES (
+      v_issue_id, v_run_id, NULL, v_lead_ids[4], 'Null slot fixture', '+6591000004',
+      1, '+6591000004', 'null slot provider submission', 'sending', clock_timestamp(), FALSE
+    );
+  EXCEPTION WHEN not_null_violation THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'real provider submission with a null slot was accepted';
+  END IF;
+
+  v_rejected := FALSE;
+  BEGIN
+    INSERT INTO newsletter_sends (
+      issue_id, run_id, slot_no, lead_id, recipient_name, recipient_key,
+      attempt_no, phone, rendered_body, status, attempt_started_at, is_test
+    ) VALUES (
+      v_issue_id, v_run_id, 1, v_lead_ids[4], 'Alternate key fixture', '65 9100 0004',
+      1, '+6591000004', 'alternate recipient key', 'sending', clock_timestamp(), FALSE
+    );
+  EXCEPTION WHEN invalid_parameter_value THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'alternate textual recipient key bypassed canonical identity';
+  END IF;
+END;
+$$;
+
 -- ASSERT: three-attempt recipient limit
 DO $$
 DECLARE
@@ -321,6 +365,30 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'conflicting finalization replay was accepted';
+  END IF;
+
+  v_rejected := FALSE;
+  BEGIN
+    UPDATE newsletter_sends
+    SET attempt_started_at = NULL
+    WHERE id = v_first_send_id;
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'provider attempt start timestamp was cleared';
+  END IF;
+
+  v_rejected := FALSE;
+  BEGIN
+    UPDATE newsletter_sends
+    SET status = 'queued'
+    WHERE id = v_first_send_id;
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'provider attempt reverted to queued';
   END IF;
 END;
 $$;
@@ -515,6 +583,11 @@ BEGIN
   END IF;
 
   PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-1', 'STOP');
+
+  IF (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-1' THEN
+    RAISE EXCEPTION 'exact STOP webhook replay changed last_message_id';
+  END IF;
+
   PERFORM record_newsletter_opt_out('+65 9234 5678', 'stop-message-2', 'STOP again');
 
   IF EXISTS (
@@ -527,8 +600,8 @@ BEGIN
   END IF;
 
   IF (SELECT count(*) FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 1
-     OR (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-1' THEN
-    RAISE EXCEPTION 'replayed STOP changed suppression identity or first accepted message';
+     OR (SELECT last_message_id FROM newsletter_suppressions WHERE recipient_key = '+6592345678') <> 'stop-message-2' THEN
+    RAISE EXCEPTION 'distinct STOP event did not advance suppression message bookkeeping';
   END IF;
 
   IF NOT EXISTS (

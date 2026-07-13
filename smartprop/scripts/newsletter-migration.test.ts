@@ -73,6 +73,22 @@ describe('newsletter migration contract', () => {
     expect(guard).toMatch(/TG_OP = 'UPDATE'[\s\S]+OLD\.attempt_started_at IS NULL[\s\S]+NEW\.attempt_started_at IS NOT NULL[\s\S]+RAISE EXCEPTION/i);
   });
 
+  test('requires immutable provider start identity and forward-only state', () => {
+    expect(sql).toMatch(/attempt_started_at IS NULL[\s\S]+slot_no IS NOT NULL/i);
+    const guard = functionSql('enforce_newsletter_attempt_submission', 'claim_newsletter_run');
+    expect(guard).toMatch(/OLD\.attempt_started_at IS NOT NULL[\s\S]+NEW\.attempt_started_at IS DISTINCT FROM OLD\.attempt_started_at[\s\S]+RAISE EXCEPTION/i);
+    expect(guard).toMatch(/OLD\.status = 'sending'[\s\S]+NEW\.status IN \('sent', 'failed', 'unknown'\)/i);
+    expect(guard).toMatch(/OLD\.status = 'unknown'[\s\S]+NEW\.status IN \('sent', 'failed'\)/i);
+    expect(guard).toContain('invalid newsletter provider state transition');
+  });
+
+  test('binds real recipient keys to canonical Singapore phone snapshots', () => {
+    expect(sql).toMatch(/recipient_key = CASE[\s\S]+length\(regexp_replace\(phone,[\s\S]+\+65[\s\S]+END/i);
+    expect(sql).toContain("recipient_key ~ '^\\+65[689][0-9]{7}$'");
+    const guard = functionSql('enforce_newsletter_attempt_submission', 'claim_newsletter_run');
+    expect(guard).toContain('recipient key must equal canonical Singapore E.164 phone snapshot');
+  });
+
   test('does not backfill queued rows as provider submissions', () => {
     expect(sql).toContain(`attempt_started_at = COALESCE(
     send.attempt_started_at,
@@ -117,7 +133,8 @@ describe('newsletter migration contract', () => {
 
   test('short-circuits replayed STOP before CRM mutation', () => {
     const stop = functionSql('record_newsletter_opt_out', 'resolve_newsletter_unknown');
-    expect(stop).toMatch(/FROM newsletter_suppressions[\s\S]+FOR UPDATE[\s\S]+IF FOUND THEN[\s\S]+last_seen_at = clock_timestamp\(\)[\s\S]+RETURN v_suppression/i);
+    expect(stop).toMatch(/FROM newsletter_suppressions[\s\S]+FOR UPDATE[\s\S]+IF FOUND THEN/i);
+    expect(stop).toMatch(/last_message_id IS NOT DISTINCT FROM[\s\S]+THEN[\s\S]+RETURN v_suppression[\s\S]+ELSE[\s\S]+last_message_id = COALESCE[\s\S]+last_seen_at = clock_timestamp\(\)/i);
   });
 
   test('compares all persisted finalization fields before accepting a replay', () => {
@@ -139,6 +156,7 @@ describe('newsletter migration contract', () => {
       'ASSERT: unknown is non-retryable',
       'ASSERT: duplicate-phone STOP idempotency',
       'ASSERT: service-role grants and fixed search paths',
+      'ASSERT: provider submission negative transitions',
     ]) {
       expect(assertions).toContain(marker);
     }

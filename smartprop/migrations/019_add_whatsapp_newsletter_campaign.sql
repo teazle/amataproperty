@@ -83,7 +83,8 @@ ALTER TABLE newsletter_sends
   DROP CONSTRAINT IF EXISTS newsletter_sends_provider_outcome_check,
   DROP CONSTRAINT IF EXISTS newsletter_sends_unknown_resolution_check,
   DROP CONSTRAINT IF EXISTS newsletter_sends_unknown_retryable_check,
-  DROP CONSTRAINT IF EXISTS newsletter_sends_submission_started_check;
+  DROP CONSTRAINT IF EXISTS newsletter_sends_submission_started_check,
+  DROP CONSTRAINT IF EXISTS newsletter_sends_submission_identity_check;
 
 ALTER TABLE newsletter_sends
   ALTER COLUMN lead_id DROP NOT NULL,
@@ -117,7 +118,8 @@ SET
     send.recipient_key,
     CASE
       WHEN length(backfill.digits) = 8 THEN '+65' || backfill.digits
-      WHEN length(backfill.digits) BETWEEN 8 AND 15 THEN '+' || backfill.digits
+      WHEN length(backfill.digits) = 10 AND left(backfill.digits, 2) = '65'
+        THEN '+' || backfill.digits
       ELSE NULL
     END
   ),
@@ -142,6 +144,24 @@ ALTER TABLE newsletter_sends
     CHECK (
       status NOT IN ('sending', 'sent', 'failed', 'unknown')
       OR attempt_started_at IS NOT NULL
+    ),
+  ADD CONSTRAINT newsletter_sends_submission_identity_check
+    CHECK (
+      is_test = TRUE
+      OR attempt_started_at IS NULL
+      OR (
+        slot_no IS NOT NULL
+        AND recipient_key IS NOT NULL
+        AND recipient_key ~ '^\+65[689][0-9]{7}$'
+        AND recipient_key = CASE
+          WHEN length(regexp_replace(phone, '[^0-9]', '', 'g')) = 8
+            THEN '+65' || regexp_replace(phone, '[^0-9]', '', 'g')
+          WHEN length(regexp_replace(phone, '[^0-9]', '', 'g')) = 10
+               AND left(regexp_replace(phone, '[^0-9]', '', 'g'), 2) = '65'
+            THEN '+' || regexp_replace(phone, '[^0-9]', '', 'g')
+          ELSE NULL
+        END
+      )
     );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_newsletter_attempt_number
@@ -247,10 +267,28 @@ DECLARE
   v_run newsletter_runs%ROWTYPE;
   v_day_attempt_count INTEGER;
   v_recipient_attempt_count INTEGER;
+  v_phone_digits TEXT;
+  v_canonical_recipient_key TEXT;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     IF OLD.attempt_started_at IS NULL AND NEW.attempt_started_at IS NOT NULL THEN
       RAISE EXCEPTION 'provider submissions must be created by start_newsletter_attempt'
+        USING ERRCODE = '55000';
+    END IF;
+
+    IF OLD.attempt_started_at IS NOT NULL THEN
+      IF NEW.attempt_started_at IS DISTINCT FROM OLD.attempt_started_at THEN
+        RAISE EXCEPTION 'attempt_started_at is immutable once provider submission begins'
+          USING ERRCODE = '55000';
+      END IF;
+
+      IF NEW.status = OLD.status
+         OR (OLD.status = 'sending' AND NEW.status IN ('sent', 'failed', 'unknown'))
+         OR (OLD.status = 'unknown' AND NEW.status IN ('sent', 'failed')) THEN
+        RETURN NEW;
+      END IF;
+
+      RAISE EXCEPTION 'invalid newsletter provider state transition: % -> %', OLD.status, NEW.status
         USING ERRCODE = '55000';
     END IF;
 
@@ -263,10 +301,26 @@ BEGIN
 
   IF NEW.run_id IS NULL
      OR NEW.issue_id IS NULL
+     OR NEW.slot_no IS NULL
      OR NEW.recipient_key IS NULL
      OR NEW.attempt_no IS NULL THEN
-    RAISE EXCEPTION 'real provider submissions require run, issue, recipient, and attempt identity'
+    RAISE EXCEPTION 'real provider submissions require run, issue, slot, recipient, and attempt identity'
       USING ERRCODE = '23502';
+  END IF;
+
+  v_phone_digits := regexp_replace(NEW.phone, '[^0-9]', '', 'g');
+  v_canonical_recipient_key := CASE
+    WHEN length(v_phone_digits) = 8 THEN '+65' || v_phone_digits
+    WHEN length(v_phone_digits) = 10 AND left(v_phone_digits, 2) = '65'
+      THEN '+' || v_phone_digits
+    ELSE NULL
+  END;
+
+  IF v_canonical_recipient_key IS NULL
+     OR v_canonical_recipient_key !~ '^\+65[689][0-9]{7}$'
+     OR NEW.recipient_key IS DISTINCT FROM v_canonical_recipient_key THEN
+    RAISE EXCEPTION 'recipient key must equal canonical Singapore E.164 phone snapshot'
+      USING ERRCODE = '22023';
   END IF;
 
   -- Lock order: SGT day -> recipient -> run -> lead -> send.
@@ -442,11 +496,11 @@ BEGIN
   v_digits := regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g');
   v_recipient_key := CASE
     WHEN length(v_digits) = 8 THEN '+65' || v_digits
-    WHEN length(v_digits) BETWEEN 8 AND 15 THEN '+' || v_digits
+    WHEN length(v_digits) = 10 AND left(v_digits, 2) = '65' THEN '+' || v_digits
     ELSE NULL
   END;
 
-  IF v_recipient_key IS NULL OR v_recipient_key !~ '^\+[1-9][0-9]{7,14}$' THEN
+  IF v_recipient_key IS NULL OR v_recipient_key !~ '^\+65[689][0-9]{7}$' THEN
     RAISE EXCEPTION 'lead does not have a valid E.164 recipient key' USING ERRCODE = '22023';
   END IF;
 
@@ -494,7 +548,8 @@ BEGIN
   IF v_recipient_key IS DISTINCT FROM CASE
     WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) = 8
       THEN '+65' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
-    WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) BETWEEN 8 AND 15
+    WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) = 10
+         AND left(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g'), 2) = '65'
       THEN '+' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
     ELSE NULL
   END THEN
@@ -710,6 +765,7 @@ AS $$
 DECLARE
   v_digits TEXT;
   v_recipient_key TEXT;
+  v_message_id TEXT;
   v_suppression newsletter_suppressions%ROWTYPE;
 BEGIN
   IF p_recipient IS NULL OR btrim(p_recipient) = '' THEN
@@ -718,6 +774,8 @@ BEGIN
   IF p_reason IS NULL OR btrim(p_reason) = '' THEN
     RAISE EXCEPTION 'opt-out reason is required' USING ERRCODE = '22023';
   END IF;
+
+  v_message_id := NULLIF(btrim(p_message_id), '');
 
   v_digits := regexp_replace(p_recipient, '[^0-9]', '', 'g');
   v_recipient_key := CASE
@@ -739,10 +797,15 @@ BEGIN
   FOR UPDATE;
 
   IF FOUND THEN
-    UPDATE newsletter_suppressions
-    SET last_seen_at = clock_timestamp()
-    WHERE recipient_key = v_recipient_key
-    RETURNING * INTO v_suppression;
+    IF v_suppression.last_message_id IS NOT DISTINCT FROM v_message_id THEN
+      RETURN v_suppression;
+    ELSE
+      UPDATE newsletter_suppressions
+      SET last_message_id = COALESCE(v_message_id, last_message_id),
+          last_seen_at = clock_timestamp()
+      WHERE recipient_key = v_recipient_key
+      RETURNING * INTO v_suppression;
+    END IF;
 
     RETURN v_suppression;
   END IF;
@@ -756,8 +819,8 @@ BEGIN
   VALUES (
     v_recipient_key,
     btrim(p_reason),
-    NULLIF(btrim(p_message_id), ''),
-    NULLIF(btrim(p_message_id), '')
+    v_message_id,
+    v_message_id
   )
   RETURNING * INTO v_suppression;
 

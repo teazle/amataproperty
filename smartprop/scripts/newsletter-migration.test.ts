@@ -162,6 +162,30 @@ describe('newsletter migration contract', () => {
     expect(resolve).toMatch(/blocker = CASE[\s\S]+THEN NULL[\s\S]+ELSE blocker\s+END/i);
   });
 
+  test('revokes every security-definer entry point from Supabase client roles', () => {
+    const normalizedSql = sql.replace(/\s+/g, ' ');
+    for (const signature of [
+      'enforce_newsletter_attempt_append_only()',
+      'enforce_newsletter_attempt_submission()',
+      'enforce_newsletter_suppression_event_append_only()',
+      'claim_newsletter_run(TEXT)',
+      'queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB)',
+      'start_newsletter_attempt(UUID, INTEGER, TEXT)',
+      'finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN)',
+      'record_accepted_newsletter_recovery(UUID, TEXT, TEXT)',
+      'create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB)',
+      'finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN)',
+      'finalize_newsletter_operator_report(UUID, TEXT, TEXT, TEXT)',
+      'recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ)',
+      'record_newsletter_opt_out(TEXT, TEXT, TEXT)',
+      'resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT)',
+    ]) {
+      expect(normalizedSql).toContain(
+        `REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated, service_role;`,
+      );
+    }
+  });
+
   test('makes the send ledger service-role read-only', () => {
     expect(sql).toContain(
       'REVOKE ALL ON TABLE newsletter_sends FROM PUBLIC, anon, authenticated, service_role;',

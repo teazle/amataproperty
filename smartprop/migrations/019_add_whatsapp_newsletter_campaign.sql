@@ -1856,22 +1856,34 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION enforce_newsletter_attempt_append_only() FROM PUBLIC;
-REVOKE ALL ON FUNCTION enforce_newsletter_attempt_submission() FROM PUBLIC;
-REVOKE ALL ON FUNCTION enforce_newsletter_suppression_event_append_only() FROM PUBLIC;
-REVOKE ALL ON FUNCTION claim_newsletter_run(TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB) FROM PUBLIC;
-REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
-REVOKE ALL ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION enforce_newsletter_attempt_append_only()
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION enforce_newsletter_attempt_submission()
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION enforce_newsletter_suppression_event_append_only()
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION claim_newsletter_run(TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN)
   FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION finalize_newsletter_operator_report(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ) FROM PUBLIC;
-REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION finalize_newsletter_operator_report(UUID, TEXT, TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated, service_role;
 
 GRANT EXECUTE ON FUNCTION claim_newsletter_run(TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;

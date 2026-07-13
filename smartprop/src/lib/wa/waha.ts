@@ -4,6 +4,8 @@
  * Docs: https://waha.devlike.pro
  */
 
+import type { CampaignTransportResult } from '../newsletter/campaign-types';
+
 interface SendMessageResponse {
   success: boolean;
   messageId?: string;
@@ -103,6 +105,140 @@ async function fetchWithTimeout(
     });
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+export interface CampaignTransportDependencies {
+  fetch?: typeof fetch;
+  preflightTimeoutMs?: number;
+  sendTimeoutMs?: number;
+}
+
+async function campaignFetchWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: options.signal || controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function parseCampaignJsonWithTimeout<T>(
+  response: Response,
+  timeoutMs: number,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      response.json() as Promise<T>,
+      new Promise<T>((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new DOMException('WAHA response body timed out', 'AbortError')),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown WAHA transport error';
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/**
+ * Campaign-only WAHA transport with fail-closed readiness and explicit
+ * ambiguity once a provider submission has started.
+ */
+export async function sendCampaignWhatsApp(
+  to: string,
+  text: string,
+  dependencies: CampaignTransportDependencies = {},
+): Promise<CampaignTransportResult> {
+  const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
+  const fetchImpl = dependencies.fetch || fetch;
+
+  try {
+    const response = await campaignFetchWithTimeout(
+      fetchImpl,
+      `${WAHA_URL}/api/sessions/${WAHA_SESSION}`,
+      {},
+      dependencies.preflightTimeoutMs ?? 5000,
+    );
+    if (!response.ok) {
+      return { outcome: 'blocked', error: `WAHA preflight failed: HTTP ${response.status}` };
+    }
+
+    const sessionData = await parseCampaignJsonWithTimeout<WAHASessionData>(
+      response,
+      dependencies.preflightTimeoutMs ?? 5000,
+    );
+    if (sessionData?.status !== 'WORKING') {
+      return {
+        outcome: 'blocked',
+        error: `WAHA preflight requires WORKING status (received ${sessionData?.status || 'unknown'})`,
+      };
+    }
+  } catch (error) {
+    return { outcome: 'blocked', error: `WAHA preflight failed: ${errorMessage(error)}` };
+  }
+
+  try {
+    const response = await campaignFetchWithTimeout(
+      fetchImpl,
+      `${WAHA_URL}/api/sendText`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session: WAHA_SESSION,
+          chatId: normalizeChatId(to),
+          text,
+        }),
+      },
+      dependencies.sendTimeoutMs ?? 15000,
+    );
+
+    if (response.status >= 400 && response.status <= 599) {
+      const errorData = await parseCampaignJsonWithTimeout<{ error?: unknown }>(
+        response,
+        dependencies.sendTimeoutMs ?? 15000,
+      ).catch((): { error?: unknown } => ({}));
+      return {
+        outcome: 'rejected',
+        retryable: isRetryableStatus(response.status),
+        error: typeof errorData.error === 'string'
+          ? errorData.error
+          : `WAHA send rejected: HTTP ${response.status}`,
+        statusCode: response.status,
+      };
+    }
+
+    if (!response.ok) {
+      return { outcome: 'unknown', error: `WAHA returned unexpected HTTP ${response.status} after send` };
+    }
+
+    const data = await parseCampaignJsonWithTimeout<{ id?: unknown }>(
+      response,
+      dependencies.sendTimeoutMs ?? 15000,
+    );
+    if (typeof data.id !== 'string' || data.id.trim().length === 0) {
+      return { outcome: 'unknown', error: 'WAHA success response did not contain a provider message id' };
+    }
+    return { outcome: 'accepted', messageId: data.id };
+  } catch (error) {
+    return { outcome: 'unknown', error: `WAHA send outcome is ambiguous: ${errorMessage(error)}` };
   }
 }
 

@@ -36,7 +36,8 @@
     "linkedin:auth": "HEADLESS=false CLEAR_LINKEDIN_SESSION=true LINKEDIN_MAX_MESSAGES=1 bun src/workers/linkedin-auth.ts",
     "linkedin:reauth": "npx --yes tsx scripts/linkedin-reauth.ts",
     "whatsapp:test-engine": "npx --yes tsx scripts/test-whatsapp-conversation-engine.ts",
-    "whatsapp:update-prompt": "bun scripts/update-whatsapp-warm-agent-prompt.ts"
+    "whatsapp:update-prompt": "bun scripts/update-whatsapp-warm-agent-prompt.ts",
+    "newsletter:campaign": "bun scripts/run-whatsapp-newsletter-campaign.ts run"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agent-runtime": "^3.922.0",

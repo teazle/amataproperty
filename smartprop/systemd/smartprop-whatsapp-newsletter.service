@@ -1,0 +1,22 @@
+[Unit]
+Description=SmartProp daily WhatsApp newsletter campaign
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/smartprop/app/smartprop
+Environment=HOME=/root
+Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/smartprop/app/smartprop/scripts/run-whatsapp-newsletter-campaign.sh
+Restart=on-failure
+RestartSec=15m
+TimeoutStartSec=15min
+UMask=0077
+MemoryHigh=512M
+MemoryMax=768M
+CPUQuota=50%
+TasksMax=128
+NoNewPrivileges=yes
+PrivateTmp=yes
+KillSignal=SIGINT

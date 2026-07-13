@@ -1,5 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
+import { readFile } from 'node:fs/promises';
 import { NextRequest,NextResponse } from 'next/server';
+
+import { deriveNewsletterHealth, type NewsletterRunHealthSnapshot } from '@/lib/newsletter/newsletter-health';
+import { getWAHAReadiness } from '@/lib/wa/waha';
+
+const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
+
+async function readSourceRevision(): Promise<string | null> {
+  try {
+    const revision = (await readFile(SOURCE_REVISION_PATH, 'utf8')).trim();
+    return revision || null;
+  } catch {
+    return null;
+  }
+}
 
 // Health check endpoint for load balancer
 export async function GET(_request: NextRequest) {
@@ -57,6 +72,70 @@ export async function GET(_request: NextRequest) {
         error: error instanceof Error ? error.message : 'Connection failed'
       };
       overallStatus = 'degraded';
+    }
+
+    // Campaign status is intentionally no-PII and does not alter generic health semantics.
+    try {
+      const newsletterClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const [runResult, sendResult, reportResult, wahaReadiness, sourceRevision] = await Promise.all([
+        newsletterClient
+          .from('newsletter_runs')
+          .select('run_date,status,attempted_count,sent_count,unknown_count,last_heartbeat_at,completed_at,blocker')
+          .order('run_date', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        newsletterClient
+          .from('newsletter_sends')
+          .select('completed_at')
+          .eq('is_test', false)
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        newsletterClient
+          .from('newsletter_operator_reports')
+          .select('completed_at')
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        getWAHAReadiness(),
+        readSourceRevision(),
+      ]);
+      const row = runResult.data as Record<string, unknown> | null;
+      const latestRun: NewsletterRunHealthSnapshot | null = row ? {
+        runDate: String(row.run_date),
+        status: String(row.status),
+        attempted: Number(row.attempted_count || 0),
+        accepted: Number(row.sent_count || 0),
+        unknown: Number(row.unknown_count || 0),
+        heartbeatAt: typeof row.last_heartbeat_at === 'string' ? row.last_heartbeat_at : null,
+        completedAt: typeof row.completed_at === 'string' ? row.completed_at : null,
+        blocker: typeof row.blocker === 'string' ? row.blocker : null,
+      } : null;
+      checks.newsletter = deriveNewsletterHealth({
+        enabled: process.env.SMARTPROP_NEWSLETTER_ENABLED === '1',
+        sourceRevision,
+        wahaReady: wahaReadiness.sessionStatus === 'WORKING',
+        latestRun,
+        latestFinalizedSendAt: typeof sendResult.data?.completed_at === 'string' ? sendResult.data.completed_at : null,
+        latestFinalizedReportAt: typeof reportResult.data?.completed_at === 'string' ? reportResult.data.completed_at : null,
+        dataError: Boolean(runResult.error || sendResult.error || reportResult.error),
+      });
+    } catch {
+      checks.newsletter = deriveNewsletterHealth({
+        enabled: process.env.SMARTPROP_NEWSLETTER_ENABLED === '1',
+        sourceRevision: await readSourceRevision(),
+        wahaReady: false,
+        latestRun: null,
+        latestFinalizedSendAt: null,
+        latestFinalizedReportAt: null,
+        dataError: true,
+      });
     }
 
     // Check environment variables

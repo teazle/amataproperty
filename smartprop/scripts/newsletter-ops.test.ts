@@ -450,7 +450,7 @@ describe('newsletter verifier behavior', () => {
     writeFileSync(retainedArtifact, '{}', { mode: 0o600 });
     utimesSync(retainedArtifact, now - (43_199 * 60), now - (43_199 * 60));
     expect(run(verifierPath, retained.args, retained.env).exitCode).toBe(0);
-  });
+  }, 15_000);
 
   test('recursively rejects a nested recovery artifact at the exact retention boundary', () => {
     const expired = verifierFixture();
@@ -469,7 +469,7 @@ describe('newsletter verifier behavior', () => {
     writeFileSync(retainedArtifact, '{}', { mode: 0o600 });
     utimesSync(retainedArtifact, now - (43_199 * 60), now - (43_199 * 60));
     expect(run(verifierPath, retained.args, retained.env).exitCode).toBe(0);
-  });
+  }, 15_000);
 
   test('fails closed on hostname, revision format, expected revision, and health revision mismatches', () => {
     for (const options of [

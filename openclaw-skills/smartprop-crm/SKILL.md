@@ -234,13 +234,59 @@ Existing customer enquiry projects (do not mix owner prospects in here):
 - Duplicates are skipped by email first, then phone (within-file and cross-file).
 - Original spreadsheet rows are stored only in import activity metadata for audit context.
 
+## Chloe's Daily WhatsApp Newsletter Workflow
+
+This ViewProperty valuation newsletter is already approved for automatic operation.
+It does not need a new approval every day. The production campaign runner, not an
+OpenClaw chat send tool, owns recipient selection, sending, CRM updates, STOP
+suppression, and the operator report.
+
+1. Import and manage newsletter leads in the SmartProp CRM. Keep each list in the
+   correct CRM project and verify the imported/skipped/duplicate counts.
+2. Confirm the newsletter issue is approved and its audience project is active.
+   Do not edit an approved issue while a run is in progress.
+3. The scheduled runner starts at 09:30 SGT and may start at most five real WAHA
+   provider sends per SGT day. Failed or unknown provider submissions still consume
+   a daily slot. Do not manually resend them or run a second unledgered batch.
+4. The runner updates the CRM after each accepted send and records every attempt in
+   the append-only newsletter ledger. Chloe must not manually mark an unsent lead as
+   contacted or alter ledger rows to make a run appear successful.
+5. Exact inbound replies `STOP`, `UNSUBSCRIBE`, `CANCEL`, `OPTOUT`, or `OPT OUT`
+   are handled before AI processing. The number is durably suppressed, matching CRM
+   rows are opted out, and queued attempts are cancelled. Do not re-import or message
+   a suppressed number through another route.
+6. After the run, relay the generated operator report. For each attempted recipient,
+   report the lead name, masked phone, exact message body, and final provider outcome.
+   Report blockers and unknown outcomes explicitly; never claim a send from WAHA
+   container health alone.
+
+The configured operator/test number is server-side only and must never be imported
+as a CRM lead. A controlled `test-send` may target only that configured number and
+must leave the source lead's CRM state unchanged. If WAHA is not exactly `WORKING`,
+report that the campaign is blocked and wait for the operator to relink it. Do not
+fall back to OpenClaw's WhatsApp channel, email, or a manual five-recipient send.
+
+Useful read-only campaign checks:
+
+```bash
+ssh smartprop-vps 'curl -fsS http://127.0.0.1:3000/api/health'
+ssh smartprop-vps 'cd /opt/smartprop/app/smartprop && /root/.bun/bin/bun scripts/run-whatsapp-newsletter-campaign.ts run --dry-run --json'
+ssh smartprop-vps 'systemctl status smartprop-whatsapp-newsletter.timer --no-pager'
+```
+
+Escalate to the operator when health reports WAHA disconnected, an unknown provider
+outcome exists, the current run is stale, the approved issue is missing, or the
+daily attempt count is already five. Unknown outcomes require provider evidence and
+the audited `resolve-unknown` command in `docs/WHATSAPP_NEWSLETTER_OPERATIONS.md`.
+
 ## Safety
 
 - Do not print full lead lists or raw personal data in chat. Summarize counts
   and a few non-sensitive examples only.
-- Do not send WhatsApp, email, LinkedIn, or newsletter outreach from imported
-  leads without using `outbound-approval` and receiving explicit approval for
-  exact copy and recipient scope.
+- Except for the approved daily ViewProperty WhatsApp newsletter workflow above,
+  do not send WhatsApp, email, LinkedIn, or other outreach from imported leads
+  without using `outbound-approval` and receiving explicit approval for exact copy
+  and recipient scope.
 - Do not expose `.env.local`, OpenClaw tokens, cookies, browser profiles, or
   WhatsApp session files.
 - The VPS has no git checkout; deploys are rsync-from-laptop (`rsync -avzR`

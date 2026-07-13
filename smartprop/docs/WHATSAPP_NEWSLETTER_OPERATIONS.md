@@ -2,6 +2,29 @@
 
 This runbook controls a five-recipient daily WhatsApp campaign. Deployment alone does not make it live. None of the backup, migration, relink, alert, or controlled-send prerequisites below are claimed as currently satisfied.
 
+## Link the production WAHA session
+
+The WAHA dashboard is bound to the SmartProp VPS loopback interface. Do not expose
+port 3030 publicly. From the operator's Mac, open an SSH tunnel and leave it running:
+
+```bash
+ssh -N -L 3030:127.0.0.1:3030 -p 2222 root@109.123.239.107
+```
+
+Then open `http://127.0.0.1:3030`, select the `default` session, and display its QR
+code. On the phone that owns the newsletter WhatsApp account, open **WhatsApp >
+Settings > Linked Devices > Link a Device** and scan the QR code. The release gate
+is the session API reporting exactly `WORKING`; container health or a visible QR is
+not sufficient:
+
+```bash
+ssh -p 2222 root@109.123.239.107 \
+  "curl -fsS http://127.0.0.1:3030/api/sessions/default"
+```
+
+Keep the campaign timer disabled until the controlled send to
+`SMARTPROP_NEWSLETTER_TEST_TO` is accepted and verified in the ledger.
+
 ## Schedule, freshness, and exit contract
 
 The timer starts at **01:30 UTC (09:30 SGT)**. Exit 10 is retryable only before **10:30 SGT**. At or after the cutoff, exit 10 is recorded as blocked and mapped to success. Lock contention is also success. Exit 20, exit 30, and unexpected runner failures require manual attention and are prevented from restarting by systemd.

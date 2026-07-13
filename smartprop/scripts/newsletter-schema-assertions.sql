@@ -88,7 +88,28 @@ BEGIN
     RAISE EXCEPTION 'suppression event trigger function security contract is missing';
   END IF;
 
+  -- ASSERT: suppression event least privilege
   IF NOT has_table_privilege('service_role', 'newsletter_suppression_events', 'SELECT')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'INSERT')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'UPDATE')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'DELETE')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'TRUNCATE')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'REFERENCES')
+     OR has_table_privilege('service_role', 'newsletter_suppression_events', 'TRIGGER')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'SELECT')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'INSERT')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'UPDATE')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'DELETE')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'TRUNCATE')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'REFERENCES')
+     OR has_table_privilege('anon', 'newsletter_suppression_events', 'TRIGGER')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'SELECT')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'INSERT')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'UPDATE')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'DELETE')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'REFERENCES')
+     OR has_table_privilege('authenticated', 'newsletter_suppression_events', 'TRIGGER')
      OR EXISTS (
        SELECT 1
        FROM pg_class AS relation
@@ -97,8 +118,21 @@ BEGIN
        ) AS acl
        WHERE relation.oid = 'newsletter_suppression_events'::regclass
          AND acl.grantee = 0
-     ) THEN
+  ) THEN
     RAISE EXCEPTION 'suppression event table privileges are not service-role read-only';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS proc
+    JOIN pg_namespace AS namespace ON namespace.oid = proc.pronamespace
+    JOIN pg_class AS relation ON relation.oid = 'newsletter_suppression_events'::regclass
+    WHERE namespace.nspname = 'public'
+      AND proc.proname = 'record_newsletter_opt_out'
+      AND proc.prosecdef = TRUE
+      AND proc.proowner = relation.relowner
+  ) THEN
+    RAISE EXCEPTION 'STOP RPC is not owner-executed for suppression event insertion';
   END IF;
 
   IF NOT EXISTS (

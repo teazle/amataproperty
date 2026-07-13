@@ -1113,7 +1113,7 @@ GRANT EXECUTE ON FUNCTION start_newsletter_attempt(UUID, UUID, INTEGER, TEXT) TO
 GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;
-REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC;
+REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE newsletter_suppression_events TO service_role;
 
 COMMENT ON TABLE newsletter_runs IS 'One globally unique Singapore-calendar-day WhatsApp newsletter run.';

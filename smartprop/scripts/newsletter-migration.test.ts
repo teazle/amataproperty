@@ -145,6 +145,19 @@ describe('newsletter migration contract', () => {
     ]);
   });
 
+  test('keeps suppression event writes owner-only and service-role read-only', () => {
+    const stop = functionSql('record_newsletter_opt_out', 'resolve_newsletter_unknown');
+    expect(stop).toContain('SECURITY DEFINER');
+    expect(stop).toContain('INSERT INTO newsletter_suppression_events');
+    expect(sql).toContain(
+      'REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(sql).toContain(
+      'GRANT SELECT ON TABLE newsletter_suppression_events TO service_role;',
+    );
+    expect(sql).not.toMatch(/GRANT\s+(INSERT|UPDATE|DELETE|ALL)[^;]+newsletter_suppression_events/i);
+  });
+
   test('compares all persisted finalization fields before accepting a replay', () => {
     const finalize = functionSql('finalize_newsletter_attempt', 'record_newsletter_opt_out');
     expect(finalize).toContain("v_send.error IS NOT DISTINCT FROM NULLIF(btrim(p_error), '')");
@@ -166,6 +179,7 @@ describe('newsletter migration contract', () => {
       'ASSERT: service-role grants and fixed search paths',
       'ASSERT: provider submission negative transitions',
       'ASSERT: STOP event ledger A-B-A replay',
+      'ASSERT: suppression event least privilege',
     ]) {
       expect(assertions).toContain(marker);
     }

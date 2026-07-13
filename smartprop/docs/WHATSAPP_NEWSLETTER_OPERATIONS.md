@@ -60,6 +60,8 @@ cd /opt/smartprop/app/smartprop
 For the controlled test, use one approved source lead and only the configured operator destination. Capture the CRM state and activity count before the send:
 
 ```bash
+(
+set -euo pipefail
 umask 0077
 WORK_DIR="$(mktemp -d /tmp/newsletter-controlled-test.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
@@ -229,6 +231,7 @@ psql "$FIXTURE_DB_URL" -X -v ON_ERROR_STOP=1 \
   -v message_id="$FIXTURE_MESSAGE_ID" \
   -v test_to="$TEST_TO" \
   -f "$STOP_SQL"
+)
 ```
 
 Required result: one queued fixture is created inside the transaction; both RPC calls return the fixture recipient; all assertions pass; and the final command is `ROLLBACK`. The transaction is the deterministic database cleanup. The shell trap removes the private SQL file. Do not replace this with a committed fixture: suppression and attempt ledgers are intentionally immutable.

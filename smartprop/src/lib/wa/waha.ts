@@ -43,6 +43,14 @@ function getWAHAConfig() {
   };
 }
 
+function withWAHAAuthentication(options: RequestInit): RequestInit {
+  const apiKey = process.env.WAHA_API_KEY?.trim();
+  if (!apiKey) return options;
+  const headers = new Headers(options.headers);
+  headers.set('X-Api-Key', apiKey);
+  return { ...options, headers };
+}
+
 function normalizeChatId(to: string): string {
   const trimmed = to.trim();
   return trimmed.includes('@') ? trimmed : `${trimmed.replace(/[^\d]/g, '')}@c.us`;
@@ -99,9 +107,10 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const authenticatedOptions = withWAHAAuthentication(options);
     return await fetch(url, {
-      ...options,
-      signal: options.signal || controller.signal,
+      ...authenticatedOptions,
+      signal: authenticatedOptions.signal || controller.signal,
     });
   } finally {
     clearTimeout(timeoutId);
@@ -123,7 +132,11 @@ async function campaignFetchWithTimeout(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { ...options, signal: options.signal || controller.signal });
+    const authenticatedOptions = withWAHAAuthentication(options);
+    return await fetchImpl(url, {
+      ...authenticatedOptions,
+      signal: authenticatedOptions.signal || controller.signal,
+    });
   } finally {
     clearTimeout(timeoutId);
   }

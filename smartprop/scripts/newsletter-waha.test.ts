@@ -4,6 +4,7 @@ import { sendCampaignWhatsApp } from '../src/lib/wa/waha';
 
 const originalUrl = process.env.WAHA_URL;
 const originalSession = process.env.WAHA_SESSION;
+const originalApiKey = process.env.WAHA_API_KEY;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -16,6 +17,7 @@ describe('sendCampaignWhatsApp', () => {
   beforeEach(() => {
     process.env.WAHA_URL = 'http://waha.test:3030';
     process.env.WAHA_SESSION = 'campaign';
+    process.env.WAHA_API_KEY = 'test-api-key';
   });
 
   afterEach(() => {
@@ -23,6 +25,8 @@ describe('sendCampaignWhatsApp', () => {
     else process.env.WAHA_URL = originalUrl;
     if (originalSession === undefined) delete process.env.WAHA_SESSION;
     else process.env.WAHA_SESSION = originalSession;
+    if (originalApiKey === undefined) delete process.env.WAHA_API_KEY;
+    else process.env.WAHA_API_KEY = originalApiKey;
   });
 
   test.each([
@@ -75,9 +79,11 @@ describe('sendCampaignWhatsApp', () => {
     const result = await sendCampaignWhatsApp('+65 9105 1399', 'hello', { fetch: fetchImpl });
 
     expect(result).toEqual({ outcome: 'accepted', messageId: 'provider-123' });
+    expect(new Headers(calls[0]?.init?.headers).get('X-Api-Key')).toBe('test-api-key');
     expect(calls[1]?.url).toBe('http://waha.test:3030/api/sendText');
     expect(calls[1]?.init?.method).toBe('POST');
     expect(calls[1]?.init?.redirect).toBe('manual');
+    expect(new Headers(calls[1]?.init?.headers).get('X-Api-Key')).toBe('test-api-key');
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
       session: 'campaign',
       chatId: '6591051399@c.us',

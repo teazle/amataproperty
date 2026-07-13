@@ -2,7 +2,12 @@ import { createClient } from '@supabase/supabase-js';
 import { readFile } from 'node:fs/promises';
 import { NextRequest,NextResponse } from 'next/server';
 
-import { deriveNewsletterHealth, type NewsletterRunHealthSnapshot } from '@/lib/newsletter/newsletter-health';
+import {
+  deriveNewsletterHealth,
+  normalizeSourceRevision,
+  parseNewsletterFreshnessMinutes,
+  type NewsletterRunHealthSnapshot,
+} from '@/lib/newsletter/newsletter-health';
 import { getWAHAReadiness } from '@/lib/wa/waha';
 
 const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
@@ -10,7 +15,7 @@ const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH |
 async function readSourceRevision(): Promise<string | null> {
   try {
     const revision = (await readFile(SOURCE_REVISION_PATH, 'utf8')).trim();
-    return revision || null;
+    return normalizeSourceRevision(revision);
   } catch {
     return null;
   }
@@ -124,6 +129,7 @@ export async function GET(_request: NextRequest) {
         latestRun,
         latestFinalizedSendAt: typeof sendResult.data?.completed_at === 'string' ? sendResult.data.completed_at : null,
         latestFinalizedReportAt: typeof reportResult.data?.completed_at === 'string' ? reportResult.data.completed_at : null,
+        freshnessMinutes: parseNewsletterFreshnessMinutes(process.env.SMARTPROP_NEWSLETTER_FRESHNESS_MINUTES),
         dataError: Boolean(runResult.error || sendResult.error || reportResult.error),
       });
     } catch {
@@ -134,6 +140,7 @@ export async function GET(_request: NextRequest) {
         latestRun: null,
         latestFinalizedSendAt: null,
         latestFinalizedReportAt: null,
+        freshnessMinutes: parseNewsletterFreshnessMinutes(process.env.SMARTPROP_NEWSLETTER_FRESHNESS_MINUTES),
         dataError: true,
       });
     }

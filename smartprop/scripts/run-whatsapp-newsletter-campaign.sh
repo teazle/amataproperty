@@ -3,10 +3,19 @@ set -u -o pipefail
 
 umask 0077
 
-APP_DIR=/opt/smartprop/app/smartprop
-LOG_DIR=/opt/smartprop/logs/newsletter
+TEST_MODE="${SMARTPROP_NEWSLETTER_TEST_MODE:-0}"
+if [[ "$TEST_MODE" == 1 ]]; then
+  APP_DIR="${SMARTPROP_NEWSLETTER_APP_DIR:?test app directory is required}"
+  LOG_DIR="${SMARTPROP_NEWSLETTER_LOG_DIR:?test log directory is required}"
+  BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:?test Bun path is required}"
+  FLOCK_BIN="${SMARTPROP_NEWSLETTER_FLOCK_BIN:?test flock path is required}"
+else
+  APP_DIR=/opt/smartprop/app/smartprop
+  LOG_DIR=/opt/smartprop/logs/newsletter
+  BUN_BIN=/root/.bun/bin/bun
+  FLOCK_BIN=/usr/bin/flock
+fi
 LOCK_PATH="$LOG_DIR/run.lock"
-BUN_BIN=/root/.bun/bin/bun
 
 prepare_log_dir() {
   mkdir -p "$LOG_DIR"
@@ -30,12 +39,17 @@ write_artifact() {
 }
 
 prune_artifacts() {
-  find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -mtime +30 -delete
+  find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -exec chmod 0600 {} +
+  find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -mmin +43200 -delete
 }
 
 before_retry_cutoff() {
   local sgt_time
-  sgt_time="$(TZ=Asia/Singapore date +%H:%M)"
+  if [[ "$TEST_MODE" == 1 ]]; then
+    sgt_time="${SMARTPROP_NEWSLETTER_TEST_SGT_TIME:?test SGT time is required}"
+  else
+    sgt_time="$(TZ=Asia/Singapore date +%H:%M)"
+  fi
   [[ "$sgt_time" < "10:30" ]]
 }
 
@@ -70,10 +84,10 @@ run_locked() {
       exit "$exit_code"
       ;;
     *)
-      write_artifact status failed "$exit_code"
-      write_artifact heartbeat failed "$exit_code"
+      write_artifact status manual-attention 30
+      write_artifact heartbeat manual-attention 30
       prune_artifacts
-      exit "$exit_code"
+      exit 30
       ;;
   esac
 
@@ -89,7 +103,7 @@ if [[ "${1:-}" == "--locked" ]]; then
 fi
 
 set +e
-/usr/bin/flock -n -E 75 "$LOCK_PATH" "$0" --locked
+"$FLOCK_BIN" -n -E 75 "$LOCK_PATH" "$0" --locked
 exit_code=$?
 set -e
 

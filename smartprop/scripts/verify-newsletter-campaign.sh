@@ -4,113 +4,261 @@ set -euo pipefail
 TARGET=root@109.123.239.107
 PORT=2222
 EXPECTED_HOSTNAME=vmi3201429
+REMOTE_SCRIPT=/opt/smartprop/app/smartprop/scripts/verify-newsletter-campaign.sh
 EXPECT=staged
+EXPECTED_REVISION="${SMARTPROP_NEWSLETTER_EXPECTED_REVISION:-}"
+FRESHNESS_MINUTES="${SMARTPROP_NEWSLETTER_FRESHNESS_MINUTES:-30}"
+MODE=controller
 
 usage() {
-  printf 'Usage: %s [--expect=staged|live]\n' "$0" >&2
+  printf 'Usage: %s --expect=staged|live --expected-revision=<7-64 hex>\n' "$0" >&2
   exit 64
 }
-
-for argument in "$@"; do
-  case "$argument" in
-    --expect=staged) EXPECT=staged ;;
-    --expect=live) EXPECT=live ;;
-    *) usage ;;
-  esac
-done
-
-ssh -p "$PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET" /bin/bash -s -- "$EXPECT" "$EXPECTED_HOSTNAME" <<'REMOTE'
-set -euo pipefail
-
-expect="$1"
-expected_hostname="$2"
-app_dir=/opt/smartprop/app/smartprop
-log_dir=/opt/smartprop/logs/newsletter
-bun_bin=/root/.bun/bin/bun
-readonly_db_env=/etc/smartprop/newsletter-readonly-db.env
 
 fail() {
   printf 'newsletter verification failed: %s\n' "$1" >&2
   exit 1
 }
 
-[[ "$(hostname -s)" == "$expected_hostname" ]] || fail 'hostname mismatch'
-[[ -s "$app_dir/.deploy-source-revision" ]] || fail 'missing deploy source revision'
-revision="$(tr -d '[:space:]' < "$app_dir/.deploy-source-revision")"
-[[ -n "$revision" ]] || fail 'empty deploy source revision'
-printf 'sourceRevision=%s\n' "$revision"
+singapore_date() {
+  local value="$1"
+  VERIFY_NOW="$value" "$BUN_BIN" -e '
+const value = new Date(process.env.VERIFY_NOW);
+if (Number.isNaN(value.getTime())) process.exit(1);
+const singapore = new Date(value.getTime() + 8 * 60 * 60 * 1000);
+console.log(`${singapore.getUTCFullYear()}-${String(singapore.getUTCMonth() + 1).padStart(2, "0")}-${String(singapore.getUTCDate()).padStart(2, "0")}`);
+'
+}
 
-health="$(curl --fail --silent --show-error http://127.0.0.1:3000/api/health)"
-printf '%s\n' "$health"
-printf '%s' "$health" | VERIFY_EXPECT="$expect" "$bun_bin" -e '
+verify_target() {
+  local expect="$1"
+  local expected_revision="$2"
+  local freshness_minutes="$3"
+  local test_mode="$4"
+  local app_dir log_dir db_env actual_hostname now
+  local curl_bin psql_bin systemctl_bin stat_bin find_bin
+
+  if [[ "$test_mode" == 1 ]]; then
+    app_dir="${SMARTPROP_NEWSLETTER_TEST_APP_DIR:?test app directory is required}"
+    log_dir="${SMARTPROP_NEWSLETTER_TEST_LOG_DIR:?test log directory is required}"
+    db_env="${SMARTPROP_NEWSLETTER_TEST_DB_ENV:?test DB env path is required}"
+    actual_hostname="${SMARTPROP_NEWSLETTER_TEST_HOSTNAME:?test hostname is required}"
+    now="${SMARTPROP_NEWSLETTER_TEST_NOW:?test clock is required}"
+    curl_bin="${SMARTPROP_NEWSLETTER_CURL_BIN:?test curl path is required}"
+    psql_bin="${SMARTPROP_NEWSLETTER_PSQL_BIN:?test psql path is required}"
+    systemctl_bin="${SMARTPROP_NEWSLETTER_SYSTEMCTL_BIN:?test systemctl path is required}"
+    stat_bin="${SMARTPROP_NEWSLETTER_STAT_BIN:?test stat path is required}"
+    find_bin="${SMARTPROP_NEWSLETTER_FIND_BIN:-/usr/bin/find}"
+    BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:?test Bun path is required}"
+  else
+    app_dir=/opt/smartprop/app/smartprop
+    log_dir=/opt/smartprop/logs/newsletter
+    db_env=/etc/smartprop/newsletter-db.env
+    actual_hostname="$(hostname -s)"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    curl_bin=/usr/bin/curl
+    psql_bin=/usr/bin/psql
+    systemctl_bin=/usr/bin/systemctl
+    stat_bin=/usr/bin/stat
+    find_bin=/usr/bin/find
+    BUN_BIN=/root/.bun/bin/bun
+  fi
+
+  [[ "$actual_hostname" == "$EXPECTED_HOSTNAME" ]] || fail 'hostname mismatch'
+  [[ "$expected_revision" =~ ^[0-9a-fA-F]{7,64}$ ]] || fail 'expected revision format is invalid'
+  [[ -s "$app_dir/.deploy-source-revision" ]] || fail 'missing deploy source revision'
+  local revision
+  revision="$(tr -d '\r\n' < "$app_dir/.deploy-source-revision")"
+  [[ "$revision" =~ ^[0-9a-fA-F]{7,64}$ ]] || fail 'deploy source revision format is invalid'
+  [[ "$revision" == "$expected_revision" ]] || fail 'deploy source revision does not match expected revision'
+  printf 'sourceRevision=%s\n' "$revision"
+
+  local expected_run_date health
+  expected_run_date="$(singapore_date "$now")"
+  health="$("$curl_bin" --fail --silent --show-error http://127.0.0.1:3000/api/health)"
+  printf '%s\n' "$health"
+  printf '%s' "$health" | \
+    VERIFY_EXPECT="$expect" \
+    VERIFY_EXPECTED_REVISION="$expected_revision" \
+    VERIFY_EXPECTED_RUN_DATE="$expected_run_date" \
+    VERIFY_FRESHNESS_MINUTES="$freshness_minutes" \
+    VERIFY_NOW="$now" \
+    "$BUN_BIN" -e '
 const value = JSON.parse(await Bun.stdin.text());
 const check = value?.checks?.newsletter;
-if (!check || !["healthy", "quiet", "blocked", "stale", "unknown"].includes(check.status)) process.exit(1);
-for (const key of ["enabled", "sourceRevision", "latestRunDate", "latestRunStatus", "lastHeartbeatAt", "lastMeaningfulWorkAt", "attempted", "accepted", "unknown", "wahaReady"]) {
+const expected = process.env.VERIFY_EXPECT;
+const expectedRevision = process.env.VERIFY_EXPECTED_REVISION;
+const expectedRunDate = process.env.VERIFY_EXPECTED_RUN_DATE;
+const freshnessMinutes = Number(process.env.VERIFY_FRESHNESS_MINUTES);
+const now = new Date(process.env.VERIFY_NOW);
+if (!check || !Number.isInteger(freshnessMinutes) || freshnessMinutes <= 0 || Number.isNaN(now.getTime())) process.exit(1);
+for (const key of ["status", "enabled", "sourceRevision", "latestRunDate", "latestRunStatus", "lastHeartbeatAt", "lastMeaningfulWorkAt", "freshnessMinutes", "attempted", "accepted", "unknown", "wahaReady"]) {
   if (!(key in check)) process.exit(1);
 }
-const expect = process.env.VERIFY_EXPECT;
-const sgtDate = (value) => {
-  const date = new Date(value);
-  const singapore = new Date(date.getTime() + (8 * 60 * 60 * 1000));
-  return `${singapore.getUTCFullYear()}-${String(singapore.getUTCMonth() + 1).padStart(2, "0")}-${String(singapore.getUTCDate()).padStart(2, "0")}`;
+if (!/^[0-9a-f]{7,64}$/i.test(check.sourceRevision || "") || check.sourceRevision !== expectedRevision) process.exit(1);
+if (check.freshnessMinutes !== freshnessMinutes) process.exit(1);
+const fresh = (timestamp) => {
+  if (!timestamp) return false;
+  const age = now.getTime() - Date.parse(timestamp);
+  return Number.isFinite(age) && age >= 0 && age <= freshnessMinutes * 60_000;
 };
-if (expect === "staged" && (check.status !== "quiet" || check.enabled !== false)) process.exit(1);
-if (expect === "live" && (
-  check.status !== "healthy" || check.wahaReady !== true || !check.lastHeartbeatAt || !check.lastMeaningfulWorkAt
-  || sgtDate(check.lastHeartbeatAt) !== sgtDate(new Date()) || sgtDate(check.lastMeaningfulWorkAt) !== sgtDate(new Date())
-)) process.exit(1);
-' || fail 'newsletter health is not fresh for live mode'
+if (expected === "staged") {
+  if (check.status !== "quiet" || check.enabled !== false) process.exit(1);
+} else {
+  const completedQuiet = check.status === "quiet" && check.latestRunStatus === "completed" && check.latestRunDate === expectedRunDate;
+  const activeFresh = check.status === "healthy" && fresh(check.lastHeartbeatAt) && fresh(check.lastMeaningfulWorkAt);
+  if (check.enabled !== true || check.wahaReady !== true || (!completedQuiet && !activeFresh)) process.exit(1);
+}
+' || fail 'newsletter health revision or freshness verification failed'
 
-session="$(curl --fail --silent --show-error http://127.0.0.1:3030/api/sessions/default)"
-printf '%s' "$session" | "$bun_bin" -e 'const value = JSON.parse(await Bun.stdin.text()); process.exit(value?.status === "WORKING" ? 0 : 1)' \
-  || fail 'WAHA default session is not WORKING'
+  local session
+  session="$("$curl_bin" --fail --silent --show-error http://127.0.0.1:3030/api/sessions/default)"
+  printf '%s' "$session" | "$BUN_BIN" -e '
+const value = JSON.parse(await Bun.stdin.text());
+process.exit(value?.status === "WORKING" ? 0 : 1);
+' || fail 'WAHA default session is not WORKING'
 
-[[ -r "$readonly_db_env" ]] || fail "missing documented read-only DB env: $readonly_db_env"
-# This file must set SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL to a read-only role URL.
-set -a
-. "$readonly_db_env"
-set +a
-: "${SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL:?missing read-only newsletter DB URL}"
-export PGOPTIONS='-c default_transaction_read_only=on'
+  [[ -f "$db_env" ]] || fail 'missing newsletter database environment file'
+  [[ "$("$stat_bin" -c %U "$db_env")" == root ]] || fail 'newsletter database environment file must be root-owned'
+  [[ "$("$stat_bin" -c %a "$db_env")" == 600 ]] || fail 'newsletter database environment file must be mode 0600'
+  local -a db_lines=()
+  local db_line
+  while IFS= read -r db_line || [[ -n "$db_line" ]]; do
+    db_lines+=("$db_line")
+  done < "$db_env"
+  [[ "${#db_lines[@]}" -eq 1 ]] || fail 'database environment file must contain exactly one assignment'
+  [[ "${db_lines[0]}" =~ ^SMARTPROP_NEWSLETTER_DATABASE_URL=(postgres(ql)?://[^[:space:]]+)$ ]] \
+    || fail 'database environment assignment is invalid'
+  local database_url="${BASH_REMATCH[1]}"
 
-schema_ok="$(psql "$SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "
-  SELECT to_regclass('public.newsletter_runs') IS NOT NULL
-     AND to_regclass('public.newsletter_sends') IS NOT NULL
-     AND to_regclass('public.newsletter_operator_reports') IS NOT NULL
-     AND to_regprocedure('public.claim_newsletter_run(text)') IS NOT NULL
-     AND to_regprocedure('public.finalize_newsletter_attempt(uuid,text,text,text,boolean)') IS NOT NULL;
-")"
-[[ "$schema_ok" == t ]] || fail 'newsletter migration tables or RPCs are absent'
+  local database_sql database_json
+  database_sql="$(cat <<'SQL'
+BEGIN READ ONLY;
+WITH schema_contract AS (
+  SELECT
+    to_regclass('public.newsletter_runs') IS NOT NULL
+    AND to_regclass('public.newsletter_sends') IS NOT NULL
+    AND to_regclass('public.newsletter_operator_reports') IS NOT NULL
+    AND to_regclass('public.newsletter_suppressions') IS NOT NULL
+    AND to_regclass('public.newsletter_suppression_events') IS NOT NULL
+    AND to_regprocedure('public.claim_newsletter_run(text)') IS NOT NULL
+    AND to_regprocedure('public.queue_newsletter_attempt(uuid,uuid,text,text,jsonb)') IS NOT NULL
+    AND to_regprocedure('public.start_newsletter_attempt(uuid,integer,text)') IS NOT NULL
+    AND to_regprocedure('public.finalize_newsletter_attempt(uuid,text,text,text,boolean)') IS NOT NULL
+    AND to_regprocedure('public.record_accepted_newsletter_recovery(uuid,text,text)') IS NOT NULL
+    AND to_regprocedure('public.finalize_newsletter_operator_report(uuid,text,text,text)') IS NOT NULL
+    AND to_regprocedure('public.recover_stale_newsletter_operator_reports(uuid,timestamp with time zone)') IS NOT NULL
+    AND to_regprocedure('public.record_newsletter_opt_out(text,text,text)') IS NOT NULL
+    AND to_regprocedure('public.resolve_newsletter_unknown(uuid,text,text,text)') IS NOT NULL
+    AND to_regprocedure('public.create_newsletter_test_send(uuid,uuid,text,text,jsonb)') IS NOT NULL
+    AND to_regprocedure('public.finalize_newsletter_test_send(uuid,text,text,text,boolean)') IS NOT NULL AS ok
+), current_run AS (
+  SELECT * FROM newsletter_runs
+  WHERE run_date = (clock_timestamp() AT TIME ZONE 'Asia/Singapore')::date
+  ORDER BY created_at DESC
+  LIMIT 1
+), report_counts AS (
+  SELECT
+    count(DISTINCT operator_key)::integer AS operators,
+    count(*)::integer AS total,
+    count(*) FILTER (WHERE status IN ('sent','failed','unknown'))::integer AS terminal,
+    count(*) FILTER (WHERE status = 'sent')::integer AS accepted
+  FROM newsletter_operator_reports
+  WHERE run_id = (SELECT id FROM current_run)
+), all_time AS (
+  SELECT
+    count(*) FILTER (WHERE is_test = false AND attempt_started_at IS NOT NULL)::integer AS attempted,
+    count(*) FILTER (WHERE is_test = false AND status = 'sent')::integer AS accepted
+  FROM newsletter_sends
+)
+SELECT json_build_object(
+  'schemaOk', (SELECT ok FROM schema_contract),
+  'currentRunExists', EXISTS (SELECT 1 FROM current_run),
+  'runDate', (SELECT run_date::text FROM current_run),
+  'runStatus', (SELECT status FROM current_run),
+  'selected', COALESCE((SELECT selected_count FROM current_run), 0),
+  'attempted', COALESCE((SELECT attempted_count FROM current_run), 0),
+  'accepted', COALESCE((SELECT sent_count FROM current_run), 0),
+  'failed', COALESCE((SELECT failed_count FROM current_run), 0),
+  'unknown', COALESCE((SELECT unknown_count FROM current_run), 0),
+  'skipped', COALESCE((SELECT skipped_count FROM current_run), 0),
+  'reportOperators', (SELECT operators FROM report_counts),
+  'reportTotal', (SELECT total FROM report_counts),
+  'reportTerminal', (SELECT terminal FROM report_counts),
+  'reportAccepted', (SELECT accepted FROM report_counts),
+  'allTimeAttempted', (SELECT attempted FROM all_time),
+  'allTimeAccepted', (SELECT accepted FROM all_time)
+)::text;
+COMMIT;
+SQL
+)"
+  database_json="$(PGOPTIONS='-c default_transaction_read_only=on' "$psql_bin" "$database_url" -XqAt -v ON_ERROR_STOP=1 -c "$database_sql")"
+  printf '%s' "$database_json" | \
+    VERIFY_EXPECT="$expect" VERIFY_EXPECTED_RUN_DATE="$expected_run_date" "$BUN_BIN" -e '
+const value = JSON.parse(await Bun.stdin.text());
+if (value.schemaOk !== true) process.exit(1);
+if (process.env.VERIFY_EXPECT !== "live") process.exit(0);
+const numeric = ["selected", "attempted", "accepted", "failed", "unknown", "skipped", "reportOperators", "reportTotal", "reportTerminal", "reportAccepted", "allTimeAttempted", "allTimeAccepted"];
+if (numeric.some((key) => !Number.isInteger(value[key]) || value[key] < 0)) process.exit(1);
+if (!value.currentRunExists || value.runDate !== process.env.VERIFY_EXPECTED_RUN_DATE || value.runStatus !== "completed") process.exit(1);
+if (value.selected > 5 || value.attempted > 5 || value.accepted + value.failed + value.unknown !== value.attempted) process.exit(1);
+if (value.selected !== value.attempted + value.skipped || value.unknown !== 0) process.exit(1);
+if (value.reportOperators < 1 || value.reportOperators > 2 || value.reportTotal !== value.reportOperators * (value.selected + 1)) process.exit(1);
+if (value.reportTerminal !== value.reportTotal || value.reportAccepted !== value.reportTotal) process.exit(1);
+if (value.allTimeAttempted < 1 || value.allTimeAccepted < 1 || value.allTimeAccepted > value.allTimeAttempted) process.exit(1);
+console.log(`latestRun=${value.runDate}|${value.runStatus}|${value.attempted}|${value.accepted}|${value.unknown}`);
+console.log(`operatorReports=${value.reportAccepted}/${value.reportTotal}`);
+console.log(`allTimeAccepted=${value.allTimeAccepted} allTimeAttempted=${value.allTimeAttempted}`);
+console.log(`allTimeSuccessRate=${(value.allTimeAccepted / value.allTimeAttempted * 100).toFixed(2)}%`);
+' || fail 'newsletter schema, current run, reports, or success-rate verification failed'
 
-latest_counts="$(psql "$SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -F '|' -c "
-  SELECT COALESCE(run_date::text, 'none'), COALESCE(status, 'none'), attempted_count, sent_count, unknown_count
-  FROM newsletter_runs ORDER BY run_date DESC LIMIT 1;
-")"
-printf 'latestRun=%s\n' "${latest_counts:-none}"
-report_count="$(psql "$SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM newsletter_operator_reports;")"
-printf 'operatorReportCount=%s\n' "$report_count"
+  local timer_enabled timer_active service_state
+  timer_enabled="$("$systemctl_bin" is-enabled smartprop-whatsapp-newsletter.timer 2>/dev/null || true)"
+  timer_active="$("$systemctl_bin" is-active smartprop-whatsapp-newsletter.timer 2>/dev/null || true)"
+  service_state="$("$systemctl_bin" is-active smartprop-whatsapp-newsletter.service 2>/dev/null || true)"
+  printf 'timerEnabled=%s timerActive=%s serviceActive=%s\n' "$timer_enabled" "$timer_active" "$service_state"
+  if [[ "$expect" == staged ]]; then
+    [[ "$timer_enabled" == disabled && "$timer_active" == inactive ]] || fail 'staged mode requires disabled/inactive timer'
+  else
+    [[ "$timer_enabled" == enabled && "$timer_active" == active ]] || fail 'live mode requires enabled/active timer'
+  fi
 
-timer_enabled="$(systemctl is-enabled smartprop-whatsapp-newsletter.timer 2>/dev/null || true)"
-timer_active="$(systemctl is-active smartprop-whatsapp-newsletter.timer 2>/dev/null || true)"
-service_state="$(systemctl is-active smartprop-whatsapp-newsletter.service 2>/dev/null || true)"
-printf 'timerEnabled=%s timerActive=%s serviceActive=%s\n' "$timer_enabled" "$timer_active" "$service_state"
-if [[ "$expect" == staged ]]; then
-  [[ "$timer_enabled" == disabled && "$timer_active" == inactive ]] || fail 'staged mode requires disabled/inactive timer'
-else
-  [[ "$timer_enabled" == enabled && "$timer_active" == active ]] || fail 'live mode requires enabled/active timer'
-  accepted_all_time="$(psql "$SMARTPROP_NEWSLETTER_READONLY_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "
-    SELECT count(*) FROM newsletter_sends WHERE is_test = false AND status = 'sent';
-  ")"
-  [[ "$accepted_all_time" =~ ^[1-9][0-9]*$ ]] || fail 'live mode requires nonzero non-test accepted sends'
-  printf 'acceptedAllTime=%s\n' "$accepted_all_time"
-fi
+  [[ -d "$log_dir" ]] || fail 'newsletter log directory is absent'
+  [[ "$("$stat_bin" -c %a "$log_dir")" == 700 ]] || fail 'newsletter log directory is not mode 0700'
+  local artifact
+  while IFS= read -r -d '' artifact; do
+    [[ "$("$stat_bin" -c %a "$artifact")" == 600 ]] || fail 'newsletter artifact is not mode 0600'
+  done < <("$find_bin" "$log_dir" -type f -name '*.json' ! -name run.lock -print0)
+  if "$find_bin" "$log_dir" -type f -name '*.json' ! -name run.lock -mmin +43200 -print -quit | grep -q .; then
+    fail 'newsletter artifact retention exceeds 43200 minutes'
+  fi
+}
 
-[[ "$(stat -c %a "$log_dir")" == 700 ]] || fail 'newsletter log directory is not mode 0700'
-if find "$log_dir" -type f ! -name run.lock -printf '%m\n' | grep -v '^600$' >/dev/null; then
-  fail 'newsletter artifacts are not mode 0600'
-fi
-if find "$log_dir" -type f -name '*.json' ! -name run.lock -mtime +30 -print -quit | grep -q .; then
-  fail 'newsletter artifact retention exceeds 30 days'
-fi
-REMOTE
+for argument in "$@"; do
+  case "$argument" in
+    --expect=staged) EXPECT=staged ;;
+    --expect=live) EXPECT=live ;;
+    --expected-revision=*) EXPECTED_REVISION="${argument#*=}" ;;
+    --freshness-minutes=*) FRESHNESS_MINUTES="${argument#*=}" ;;
+    --remote) MODE=remote ;;
+    --local-test) MODE=local ;;
+    *) usage ;;
+  esac
+done
+
+[[ "$EXPECTED_REVISION" =~ ^[0-9a-fA-F]{7,64}$ ]] || usage
+[[ "$FRESHNESS_MINUTES" =~ ^[0-9]+$ ]] && (( FRESHNESS_MINUTES > 0 && FRESHNESS_MINUTES <= 1440 )) || usage
+
+case "$MODE" in
+  local)
+    [[ "${SMARTPROP_NEWSLETTER_VERIFIER_TEST_MODE:-0}" == 1 ]] || usage
+    verify_target "$EXPECT" "$EXPECTED_REVISION" "$FRESHNESS_MINUTES" 1
+    ;;
+  remote)
+    verify_target "$EXPECT" "$EXPECTED_REVISION" "$FRESHNESS_MINUTES" 0
+    ;;
+  controller)
+    ssh -p "$PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$TARGET" \
+      "$REMOTE_SCRIPT" --remote --expect="$EXPECT" --expected-revision="$EXPECTED_REVISION" --freshness-minutes="$FRESHNESS_MINUTES"
+    ;;
+esac

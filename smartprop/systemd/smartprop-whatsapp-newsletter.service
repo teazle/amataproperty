@@ -10,6 +10,7 @@ Environment=HOME=/root
 Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/smartprop/app/smartprop/scripts/run-whatsapp-newsletter-campaign.sh
 Restart=on-failure
+RestartPreventExitStatus=20 30
 RestartSec=15m
 TimeoutStartSec=15min
 UMask=0077

@@ -18,6 +18,7 @@ export interface NewsletterHealthInput {
   latestRun: NewsletterRunHealthSnapshot | null;
   latestFinalizedSendAt: string | null;
   latestFinalizedReportAt: string | null;
+  freshnessMinutes: number;
   dataError?: boolean;
 }
 
@@ -33,6 +34,21 @@ export interface NewsletterHealthCheck {
   accepted: number;
   unknown: number;
   wahaReady: boolean;
+  freshnessMinutes: number;
+}
+
+export const DEFAULT_NEWSLETTER_FRESHNESS_MINUTES = 30;
+
+export function parseNewsletterFreshnessMinutes(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 24 * 60
+    ? parsed
+    : DEFAULT_NEWSLETTER_FRESHNESS_MINUTES;
+}
+
+export function normalizeSourceRevision(value: string | null): string | null {
+  const revision = value?.trim() || '';
+  return /^[0-9a-f]{7,64}$/i.test(revision) ? revision : null;
 }
 
 function singaporeDate(value: Date): string {
@@ -55,15 +71,21 @@ function latestTimestamp(...values: Array<string | null>): string | null {
   return valid.reduce((latest, value) => Date.parse(value) > Date.parse(latest) ? value : latest);
 }
 
-function heartbeatIsCurrent(heartbeatAt: string | null, now: Date): boolean {
-  return Boolean(heartbeatAt) && singaporeDate(new Date(heartbeatAt!)) === singaporeDate(now);
+function timestampIsFresh(timestamp: string | null, now: Date, freshnessMinutes: number): boolean {
+  if (!timestamp) return false;
+  const ageMilliseconds = now.getTime() - Date.parse(timestamp);
+  return Number.isFinite(ageMilliseconds) && ageMilliseconds >= 0 && ageMilliseconds <= freshnessMinutes * 60_000;
 }
 
 export function deriveNewsletterHealth(input: NewsletterHealthInput, now = new Date()): NewsletterHealthCheck {
   const run = input.latestRun;
+  const freshnessMinutes = Number.isInteger(input.freshnessMinutes) && input.freshnessMinutes > 0
+    ? input.freshnessMinutes
+    : DEFAULT_NEWSLETTER_FRESHNESS_MINUTES;
+  const sourceRevision = normalizeSourceRevision(input.sourceRevision);
   const statusBase = {
     enabled: input.enabled,
-    sourceRevision: input.sourceRevision,
+    sourceRevision,
     latestRunDate: run?.runDate || null,
     latestRunStatus: run?.status || null,
     lastHeartbeatAt: run?.heartbeatAt || null,
@@ -76,12 +98,17 @@ export function deriveNewsletterHealth(input: NewsletterHealthInput, now = new D
     accepted: run?.accepted || 0,
     unknown: run?.unknown || 0,
     wahaReady: input.wahaReady,
+    freshnessMinutes,
   };
 
   if (!input.enabled || beforeSendWindow(now)) return { status: 'quiet', ...statusBase };
-  if (input.dataError || run?.status === 'failed' || (run?.unknown || 0) > 0) return { status: 'unknown', ...statusBase };
+  if (input.dataError || !sourceRevision || run?.status === 'failed' || (run?.unknown || 0) > 0) return { status: 'unknown', ...statusBase };
   if (run?.runDate === singaporeDate(now) && (run.status === 'blocked' || Boolean(run.blocker))) return { status: 'blocked', ...statusBase };
-  if (!heartbeatIsCurrent(run?.heartbeatAt || null, now)) return { status: 'stale', ...statusBase };
+  const heartbeatFresh = timestampIsFresh(run?.heartbeatAt || null, now, freshnessMinutes);
+  if (run?.runDate === singaporeDate(now) && run.status === 'completed' && !heartbeatFresh) {
+    return { status: 'quiet', ...statusBase };
+  }
+  if (!heartbeatFresh) return { status: 'stale', ...statusBase };
   if (!input.wahaReady) return { status: 'blocked', ...statusBase };
   return { status: 'healthy', ...statusBase };
 }

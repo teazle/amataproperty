@@ -36,7 +36,7 @@ verify_target() {
   local freshness_minutes="$3"
   local test_mode="$4"
   local app_dir log_dir db_env actual_hostname now
-  local curl_bin psql_bin systemctl_bin stat_bin find_bin
+  local curl_bin psql_bin systemctl_bin stat_bin
 
   if [[ "$test_mode" == 1 ]]; then
     app_dir="${SMARTPROP_NEWSLETTER_TEST_APP_DIR:?test app directory is required}"
@@ -48,7 +48,6 @@ verify_target() {
     psql_bin="${SMARTPROP_NEWSLETTER_PSQL_BIN:?test psql path is required}"
     systemctl_bin="${SMARTPROP_NEWSLETTER_SYSTEMCTL_BIN:?test systemctl path is required}"
     stat_bin="${SMARTPROP_NEWSLETTER_STAT_BIN:?test stat path is required}"
-    find_bin="${SMARTPROP_NEWSLETTER_FIND_BIN:-/usr/bin/find}"
     BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:?test Bun path is required}"
   else
     app_dir=/opt/smartprop/app/smartprop
@@ -60,7 +59,6 @@ verify_target() {
     psql_bin=/usr/bin/psql
     systemctl_bin=/usr/bin/systemctl
     stat_bin=/usr/bin/stat
-    find_bin=/usr/bin/find
     BUN_BIN=/root/.bun/bin/bun
   fi
 
@@ -228,10 +226,16 @@ console.log(`allTimeSuccessRate=${(value.allTimeAccepted / value.allTimeAttempte
   local artifact
   while IFS= read -r -d '' artifact; do
     [[ "$("$stat_bin" -c %a "$artifact")" == 600 ]] || fail 'newsletter artifact is not mode 0600'
-  done < <("$find_bin" "$log_dir" -type f -name '*.json' ! -name run.lock -print0)
-  if "$find_bin" "$log_dir" -type f -name '*.json' ! -name run.lock -mmin +43200 -print -quit | grep -q .; then
-    fail 'newsletter artifact retention exceeds 43200 minutes'
-  fi
+  done < <(find "$log_dir" -type f -name '*.json' ! -name run.lock -print0)
+  VERIFY_LOG_DIR="$log_dir" "$BUN_BIN" -e '
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+const cutoff = Date.now() - 2_592_000_000;
+for (const name of await readdir(process.env.VERIFY_LOG_DIR)) {
+  if (!name.endsWith(".json") || name === "run.lock") continue;
+  if ((await stat(join(process.env.VERIFY_LOG_DIR, name))).mtimeMs <= cutoff) process.exit(1);
+}
+' || fail 'newsletter artifact retention exceeds 43200 minutes'
 }
 
 for argument in "$@"; do

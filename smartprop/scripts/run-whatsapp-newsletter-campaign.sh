@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-set -u -o pipefail
+set -Euo pipefail
 
 umask 0077
 
 TEST_MODE="${SMARTPROP_NEWSLETTER_TEST_MODE:-0}"
 if [[ "$TEST_MODE" == 1 ]]; then
-  APP_DIR="${SMARTPROP_NEWSLETTER_APP_DIR:?test app directory is required}"
-  LOG_DIR="${SMARTPROP_NEWSLETTER_LOG_DIR:?test log directory is required}"
-  BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:?test Bun path is required}"
-  FLOCK_BIN="${SMARTPROP_NEWSLETTER_FLOCK_BIN:?test flock path is required}"
+  APP_DIR="${SMARTPROP_NEWSLETTER_APP_DIR:-}"
+  LOG_DIR="${SMARTPROP_NEWSLETTER_LOG_DIR:-}"
+  BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:-}"
+  FLOCK_BIN="${SMARTPROP_NEWSLETTER_FLOCK_BIN:-}"
 else
   APP_DIR=/opt/smartprop/app/smartprop
   LOG_DIR=/opt/smartprop/logs/newsletter
@@ -39,8 +39,31 @@ write_artifact() {
 }
 
 prune_artifacts() {
-  find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -exec chmod 0600 {} +
-  find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -mmin +43200 -delete
+  local artifact cutoff_epoch mtime_epoch now_epoch
+  now_epoch="$(date +%s)"
+  cutoff_epoch=$((now_epoch - 2592000))
+  while IFS= read -r -d '' artifact; do
+    chmod 0600 "$artifact"
+    if [[ "$TEST_MODE" == 1 && "$(uname -s)" == Darwin ]]; then
+      mtime_epoch="$(stat -f %m "$artifact")"
+    else
+      mtime_epoch="$(stat -c %Y "$artifact")"
+    fi
+    if (( mtime_epoch <= cutoff_epoch )); then
+      rm -f -- "$artifact"
+    fi
+  done < <(find "$LOG_DIR" -type f -name '*.json' ! -name run.lock -print0)
+}
+
+manual_attention_exit() {
+  trap - ERR HUP INT QUIT TERM
+  set +e
+  if [[ -n "${LOG_DIR:-}" && -d "$LOG_DIR" && -w "$LOG_DIR" ]]; then
+    write_artifact status manual-attention 30 >/dev/null 2>&1
+    write_artifact heartbeat manual-attention 30 >/dev/null 2>&1
+    prune_artifacts >/dev/null 2>&1
+  fi
+  exit 30
 }
 
 before_retry_cutoff() {
@@ -56,13 +79,14 @@ before_retry_cutoff() {
 run_locked() {
   local exit_code
   write_artifact heartbeat running 0
-  set +e
-  (
+  if (
     cd "$APP_DIR"
     "$BUN_BIN" scripts/run-whatsapp-newsletter-campaign.ts run --json
-  )
-  exit_code=$?
-  set -e
+  ); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
 
   case "$exit_code" in
     0)
@@ -95,6 +119,14 @@ run_locked() {
   prune_artifacts
 }
 
+trap 'manual_attention_exit' ERR
+trap 'manual_attention_exit' HUP INT QUIT TERM
+set -e
+
+if [[ "$TEST_MODE" == 1 ]]; then
+  [[ -n "$APP_DIR" && -n "$LOG_DIR" && -n "$BUN_BIN" && -n "$FLOCK_BIN" ]] || manual_attention_exit
+fi
+
 prepare_log_dir
 
 if [[ "${1:-}" == "--locked" ]]; then
@@ -102,10 +134,11 @@ if [[ "${1:-}" == "--locked" ]]; then
   exit $?
 fi
 
-set +e
-"$FLOCK_BIN" -n -E 75 "$LOCK_PATH" "$0" --locked
-exit_code=$?
-set -e
+if "$FLOCK_BIN" -n -E 75 "$LOCK_PATH" "$0" --locked; then
+  exit_code=0
+else
+  exit_code=$?
+fi
 
 if [[ "$exit_code" -eq 75 ]]; then
   write_artifact status lock-contended 0
@@ -113,4 +146,7 @@ if [[ "$exit_code" -eq 75 ]]; then
   exit 0
 fi
 
-exit "$exit_code"
+case "$exit_code" in
+  0|10|20|30) exit "$exit_code" ;;
+  *) manual_attention_exit ;;
+esac

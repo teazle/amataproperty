@@ -101,14 +101,14 @@ export function deriveNewsletterHealth(input: NewsletterHealthInput, now = new D
     freshnessMinutes,
   };
 
-  if (!input.enabled || beforeSendWindow(now)) return { status: 'quiet', ...statusBase };
   if (input.dataError || !sourceRevision || run?.status === 'failed' || (run?.unknown || 0) > 0) return { status: 'unknown', ...statusBase };
   if (run?.runDate === singaporeDate(now) && (run.status === 'blocked' || Boolean(run.blocker))) return { status: 'blocked', ...statusBase };
+  if (!input.wahaReady) return { status: 'blocked', ...statusBase };
+  if (!input.enabled || beforeSendWindow(now)) return { status: 'quiet', ...statusBase };
   const heartbeatFresh = timestampIsFresh(run?.heartbeatAt || null, now, freshnessMinutes);
   if (run?.runDate === singaporeDate(now) && run.status === 'completed' && !heartbeatFresh) {
     return { status: 'quiet', ...statusBase };
   }
   if (!heartbeatFresh) return { status: 'stale', ...statusBase };
-  if (!input.wahaReady) return { status: 'blocked', ...statusBase };
   return { status: 'healthy', ...statusBase };
 }

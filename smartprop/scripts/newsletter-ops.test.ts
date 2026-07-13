@@ -112,7 +112,7 @@ describe('WhatsApp newsletter operations contract', () => {
     expect(wrapper).toContain('exit 10');
     expect(wrapper).toContain('exit 0');
     expect(wrapper).toContain('find "$LOG_DIR" -type f -name');
-    expect(wrapper).toContain('-mmin +43200');
+    expect(wrapper).toContain('2592000');
     expect(wrapper).toContain('! -name run.lock');
   });
 
@@ -152,7 +152,7 @@ describe('WhatsApp newsletter operations contract', () => {
     expect(verifier).toContain('check.lastHeartbeatAt');
     expect(verifier).toContain('check.lastMeaningfulWorkAt');
     expect(verifier).toContain('SMARTPROP_NEWSLETTER_FRESHNESS_MINUTES');
-    expect(verifier).toContain('-mmin +43200');
+    expect(verifier).toContain('2_592_000_000');
     for (const table of [
       'newsletter_runs', 'newsletter_sends', 'newsletter_operator_reports',
       'newsletter_suppressions', 'newsletter_suppression_events',
@@ -194,7 +194,16 @@ describe('WhatsApp newsletter operations contract', () => {
       'systemctl disable --now smartprop-whatsapp-newsletter.timer',
       'SMARTPROP_NEWSLETTER_DATABASE_URL=',
       'resolve-unknown --send-id "$SEND_ID" --resolver "$OPERATOR_ID" --resolution "$RESOLUTION" --reason "$REASON" --json',
+      'umask 0077',
+      'mktemp -d',
+      "trap 'rm -rf",
+      'SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE',
+      'record_newsletter_opt_out',
+      'ROLLBACK',
+      'timeout 20m',
+      'before the 09:30 SGT window',
     ]) expect(runbook).toContain(phrase);
+    expect(runbook).not.toContain('FIXTURE_PHONE=6590000001');
   });
 });
 
@@ -206,7 +215,10 @@ function wrapperFixture() {
   mkdirSync(appDir, { recursive: true });
   const bun = join(directory, 'bun');
   const flock = join(directory, 'flock');
-  executable(bun, 'exit "${STUB_BUN_EXIT:-0}"');
+  executable(bun, `
+if [[ -n "\${STUB_BUN_SIGNAL:-}" ]]; then kill -s "$STUB_BUN_SIGNAL" "$$"; fi
+exit "\${STUB_BUN_EXIT:-0}"
+`);
   executable(flock, `
 if [[ "\${STUB_FLOCK_EXIT:-0}" != 0 ]]; then exit "\$STUB_FLOCK_EXIT"; fi
 shift 4
@@ -260,6 +272,29 @@ describe('newsletter wrapper behavior', () => {
     expect(statusArtifacts(fixture.logDir).some((item) => item.status === 'manual-attention')).toBe(true);
   });
 
+  test('maps a non-contention flock failure to non-retryable manual-attention exit 30', () => {
+    const fixture = wrapperFixture();
+    const result = run(wrapperPath, [], { ...fixture.env, STUB_FLOCK_EXIT: '9' });
+    expect(result.exitCode).toBe(30);
+    expect(statusArtifacts(fixture.logDir).some((item) => item.status === 'manual-attention')).toBe(true);
+  });
+
+  test('maps setup failures and runner signals to non-retryable manual-attention exit 30', () => {
+    const setupFixture = wrapperFixture();
+    const obstruction = join(setupFixture.directory, 'not-a-directory');
+    writeFileSync(obstruction, 'occupied');
+    const setupResult = run(wrapperPath, [], {
+      ...setupFixture.env,
+      SMARTPROP_NEWSLETTER_LOG_DIR: join(obstruction, 'logs'),
+    });
+    expect(setupResult.exitCode).toBe(30);
+
+    const signalFixture = wrapperFixture();
+    const signalResult = run(wrapperPath, [], { ...signalFixture.env, STUB_BUN_SIGNAL: 'TERM' });
+    expect(signalResult.exitCode).toBe(30);
+    expect(statusArtifacts(signalFixture.logDir).some((item) => item.status === 'manual-attention')).toBe(true);
+  });
+
   test('lock contention maps to success without running Bun', () => {
     const fixture = wrapperFixture();
     const result = run(wrapperPath, [], { ...fixture.env, STUB_FLOCK_EXIT: '75', STUB_BUN_EXIT: '30' });
@@ -268,20 +303,20 @@ describe('newsletter wrapper behavior', () => {
     expect(statusArtifacts(fixture.logDir).some((item) => item.status === 'manual-attention')).toBe(false);
   });
 
-  test('creates private artifacts and prunes only files older than 43200 minutes', () => {
+  test('creates private artifacts and prunes files at the exact 43200-minute boundary', () => {
     const fixture = wrapperFixture();
     mkdirSync(fixture.logDir, { recursive: true });
-    const old = join(fixture.logDir, 'old.json');
-    const fresh = join(fixture.logDir, 'fresh.json');
-    writeFileSync(old, '{}');
-    writeFileSync(fresh, '{}');
+    const boundary = join(fixture.logDir, 'boundary.json');
+    const justUnder = join(fixture.logDir, 'just-under.json');
+    writeFileSync(boundary, '{}');
+    writeFileSync(justUnder, '{}');
     const now = Date.now() / 1000;
-    utimesSync(old, now - (31 * 24 * 60 * 60), now - (31 * 24 * 60 * 60));
-    utimesSync(fresh, now - (29 * 24 * 60 * 60), now - (29 * 24 * 60 * 60));
+    utimesSync(boundary, now - (43_200 * 60), now - (43_200 * 60));
+    utimesSync(justUnder, now - (43_199 * 60), now - (43_199 * 60));
 
     expect(run(wrapperPath, [], fixture.env).exitCode).toBe(0);
-    expect(existsSync(old)).toBe(false);
-    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(boundary)).toBe(false);
+    expect(existsSync(justUnder)).toBe(true);
     expect(statSync(fixture.logDir).mode & 0o777).toBe(0o700);
     for (const name of readdirSync(fixture.logDir).filter((value) => value.endsWith('.json'))) {
       expect(statSync(join(fixture.logDir, name)).mode & 0o777).toBe(0o600);
@@ -395,6 +430,21 @@ describe('newsletter verifier behavior', () => {
     expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|TRUNCATE|GRANT|REVOKE)\b/i);
   });
 
+  test('rejects artifacts at the exact retention boundary but accepts one minute under it', () => {
+    const expired = verifierFixture();
+    const expiredArtifact = join(expired.logDir, 'boundary.json');
+    writeFileSync(expiredArtifact, '{}', { mode: 0o600 });
+    const now = Date.now() / 1000;
+    utimesSync(expiredArtifact, now - (43_200 * 60), now - (43_200 * 60));
+    expect(run(verifierPath, expired.args, expired.env).exitCode).not.toBe(0);
+
+    const retained = verifierFixture();
+    const retainedArtifact = join(retained.logDir, 'just-under.json');
+    writeFileSync(retainedArtifact, '{}', { mode: 0o600 });
+    utimesSync(retainedArtifact, now - (43_199 * 60), now - (43_199 * 60));
+    expect(run(verifierPath, retained.args, retained.env).exitCode).toBe(0);
+  });
+
   test('fails closed on hostname, revision format, expected revision, and health revision mismatches', () => {
     for (const options of [
       { hostname: 'wrong-host' },
@@ -506,6 +556,22 @@ describe('deriveNewsletterHealth', () => {
     }), new Date('2026-07-13T01:40:00.000Z'));
     expect(result.status).toBe('unknown');
     expect(result.unknown).toBe(1);
+  });
+
+  test('evaluates fatal and blocker states before pre-window quiet state', () => {
+    const beforeWindow = new Date('2026-07-13T01:00:00.000Z');
+    for (const overrides of [
+      { sourceRevision: null },
+      { sourceRevision: 'malformed' },
+      { dataError: true },
+      { latestRun: { ...healthInput().latestRun!, status: 'failed' } },
+      { latestRun: { ...healthInput().latestRun!, unknown: 1 } },
+    ]) {
+      expect(deriveNewsletterHealth(healthInput(overrides), beforeWindow).status).toBe('unknown');
+    }
+    expect(deriveNewsletterHealth(healthInput({
+      latestRun: { ...healthInput().latestRun!, status: 'blocked', blocker: 'recovery required' },
+    }), beforeWindow).status).toBe('blocked');
   });
 
   test('requires a current SGT-date heartbeat and WORKING readiness to be healthy', () => {

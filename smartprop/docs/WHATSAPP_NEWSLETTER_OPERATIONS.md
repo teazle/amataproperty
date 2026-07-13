@@ -60,36 +60,123 @@ cd /opt/smartprop/app/smartprop
 For the controlled test, use one approved source lead and only the configured operator destination. Capture the CRM state and activity count before the send:
 
 ```bash
+umask 0077
+WORK_DIR="$(mktemp -d /tmp/newsletter-controlled-test.XXXXXX)"
+trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
 SOURCE_LEAD_ID=<approved-source-lead-uuid>
 TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"
 DB_URL="$(sudo sed -n 's/^SMARTPROP_NEWSLETTER_DATABASE_URL=//p' /etc/smartprop/newsletter-db.env)"
-install -m 0600 /dev/null /tmp/newsletter-test-before.txt
-psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN READ ONLY; SELECT status,last_activity_at FROM crm_leads WHERE id = :'lead_id'::uuid; SELECT count(*) FROM crm_lead_activities WHERE lead_id = :'lead_id'::uuid; COMMIT;" > /tmp/newsletter-test-before.txt
+BEFORE="$WORK_DIR/before.txt"
+AFTER="$WORK_DIR/after.txt"
+psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN READ ONLY; SELECT status,last_activity_at FROM crm_leads WHERE id = :'lead_id'::uuid; SELECT count(*) FROM crm_lead_activities WHERE lead_id = :'lead_id'::uuid; COMMIT;" > "$BEFORE"
 /root/.bun/bin/bun scripts/run-whatsapp-newsletter-campaign.ts test-send --to "$TEST_TO" --lead-id "$SOURCE_LEAD_ID" --json
-psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN READ ONLY; SELECT status,last_activity_at FROM crm_leads WHERE id = :'lead_id'::uuid; SELECT count(*) FROM crm_lead_activities WHERE lead_id = :'lead_id'::uuid; COMMIT;" > /tmp/newsletter-test-after.txt
-diff -u /tmp/newsletter-test-before.txt /tmp/newsletter-test-after.txt
+psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN READ ONLY; SELECT status,last_activity_at FROM crm_leads WHERE id = :'lead_id'::uuid; SELECT count(*) FROM crm_lead_activities WHERE lead_id = :'lead_id'::uuid; COMMIT;" > "$AFTER"
+diff -u "$BEFORE" "$AFTER"
 psql "$DB_URL" -X -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -v test_to="$TEST_TO" -c "BEGIN READ ONLY; SELECT id,is_test,override_phone,provider_outcome,(waha_message_id IS NOT NULL) AS provider_id_recorded FROM newsletter_sends WHERE lead_id = :'lead_id'::uuid AND is_test = true ORDER BY created_at DESC LIMIT 1; SELECT count(*) AS operator_crm_rows FROM crm_leads WHERE phone_e164 = :'test_to'; COMMIT;"
-rm -f /tmp/newsletter-test-before.txt /tmp/newsletter-test-after.txt
 ```
 
 Required result: the test ledger row has `is_test=true`, the configured override, `provider_outcome='sent'`, and a provider ID; the CRM snapshot diff is empty; `operator_crm_rows` is zero.
 
 ## STOP disposable-fixture proof
 
-Use a disposable non-operator CRM fixture and a unique provider message ID. Never use a real lead or the operator number.
+Use only a provisioned disposable Singapore test number owned by the operator. Set it explicitly through `SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE`; never invent a plausible fixed number, use a real lead, or reuse the operator-report number. The following fixture-only SQL path checks every campaign/CRM collision, creates a CRM lead plus a queued attempt, calls the production `record_newsletter_opt_out` RPC twice with the same provider message ID to model repeated webhook delivery, asserts idempotency and cancellation, and rolls the entire proof back. It sends no WhatsApp message and leaves no ledger row.
 
 ```bash
-FIXTURE_PHONE=6590000001
-FIXTURE_MESSAGE_ID="stop-fixture-$(date +%s)"
-test "+$FIXTURE_PHONE" != "$TEST_TO"
-curl --fail --show-error --silent http://127.0.0.1:3000/api/wa/webhook \
-  -H 'Content-Type: application/json' \
-  -H "X-WAHA-Webhook-Secret: $WAHA_WEBHOOK_SECRET" \
-  --data "{\"from\":\"${FIXTURE_PHONE}@c.us\",\"to\":\"6599999999@c.us\",\"body\":\"STOP\",\"id\":{\"_serialized\":\"${FIXTURE_MESSAGE_ID}\"},\"fromMe\":false}"
-psql "$DB_URL" -X -v ON_ERROR_STOP=1 -v phone="+$FIXTURE_PHONE" -v message_id="$FIXTURE_MESSAGE_ID" -v test_to="$TEST_TO" -c "BEGIN READ ONLY; SELECT recipient_key,reason FROM newsletter_suppressions WHERE recipient_key = :'phone'; SELECT count(*) AS event_rows FROM newsletter_suppression_events WHERE recipient_key = :'phone' AND provider_message_id = :'message_id'; SELECT count(*) AS still_queued FROM newsletter_sends WHERE recipient_key = :'phone' AND status = 'queued'; SELECT count(*) AS operator_crm_rows FROM crm_leads WHERE phone_e164 = :'test_to'; COMMIT;"
+umask 0077
+STOP_WORK_DIR="$(mktemp -d /tmp/newsletter-stop-proof.XXXXXX)"
+trap 'rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM
+: "${SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE:?set this to an owned disposable +65 test number}"
+FIXTURE_PHONE="$SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE"
+TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"
+[[ "$FIXTURE_PHONE" =~ ^\+65[689][0-9]{7}$ ]]
+[[ "$FIXTURE_PHONE" != "$TEST_TO" ]]
+FIXTURE_MESSAGE_ID="stop-fixture-$(date +%s)-$$"
+STOP_SQL="$(mktemp "$STOP_WORK_DIR/proof.XXXXXX.sql")"
+cat >"$STOP_SQL" <<'SQL'
+\set ON_ERROR_STOP on
+BEGIN;
+SELECT set_config('app.stop_fixture_phone', :'fixture_phone', true);
+SELECT set_config('app.stop_fixture_message_id', :'message_id', true);
+SELECT set_config('app.stop_fixture_test_to', :'test_to', true);
+
+DO $$
+DECLARE
+  fixture_phone text := current_setting('app.stop_fixture_phone');
+  test_to text := current_setting('app.stop_fixture_test_to');
+BEGIN
+  IF fixture_phone = test_to
+     OR EXISTS (SELECT 1 FROM crm_leads WHERE phone_e164 = fixture_phone OR regexp_replace(phone, '[^0-9]', '', 'g') = regexp_replace(fixture_phone, '[^0-9]', '', 'g'))
+     OR EXISTS (SELECT 1 FROM newsletter_sends WHERE recipient_key = fixture_phone OR phone = fixture_phone OR override_phone = fixture_phone)
+     OR EXISTS (SELECT 1 FROM newsletter_suppressions WHERE recipient_key = fixture_phone)
+     OR EXISTS (SELECT 1 FROM newsletter_suppression_events WHERE recipient_key = fixture_phone) THEN
+    RAISE EXCEPTION 'STOP fixture collision; choose another provisioned disposable number';
+  END IF;
+END;
+$$;
+
+WITH fixture_project AS (
+  INSERT INTO crm_projects (slug, title, source, is_active)
+  VALUES ('newsletter-stop-fixture-' || gen_random_uuid(), 'Disposable STOP proof', 'manual-stop-proof', true)
+  RETURNING id, slug
+), fixture_issue AS (
+  INSERT INTO newsletter_issues (slug, status, audience_project_slug, featured_projects, copy_template, created_by, approved_by, approved_at)
+  SELECT 'newsletter-stop-issue-' || gen_random_uuid(), 'approved', slug, '[]'::jsonb, 'Disposable STOP proof', 'stop-proof', 'stop-proof', clock_timestamp()
+  FROM fixture_project
+  RETURNING id
+), fixture_lead AS (
+  INSERT INTO crm_leads (project_id, name, phone, phone_e164, email, message, property_title, source_path)
+  SELECT id, 'Disposable STOP proof', current_setting('app.stop_fixture_phone'), current_setting('app.stop_fixture_phone'),
+         'stop-proof@example.invalid', 'Disposable rollback-only fixture', 'Disposable STOP proof', '/ops/stop-proof'
+  FROM fixture_project
+  RETURNING id
+), queued_attempt AS (
+  INSERT INTO newsletter_sends (
+    issue_id, lead_id, recipient_name, recipient_key, phone, rendered_body,
+    valuation_snapshot, status, retryable, is_test
+  )
+  SELECT fixture_issue.id, fixture_lead.id, 'Disposable STOP proof', current_setting('app.stop_fixture_phone'),
+         current_setting('app.stop_fixture_phone'), 'Disposable STOP proof', '{"fixture":true}'::jsonb,
+         'queued', true, false
+  FROM fixture_issue CROSS JOIN fixture_lead
+  RETURNING id
+)
+SELECT count(*) AS queued_fixture_created FROM queued_attempt;
+
+SELECT (record_newsletter_opt_out(
+  current_setting('app.stop_fixture_phone'),
+  current_setting('app.stop_fixture_message_id'),
+  'STOP'
+)).recipient_key AS first_delivery;
+SELECT (record_newsletter_opt_out(
+  current_setting('app.stop_fixture_phone'),
+  current_setting('app.stop_fixture_message_id'),
+  'STOP'
+)).recipient_key AS repeated_delivery;
+
+DO $$
+DECLARE
+  fixture_phone text := current_setting('app.stop_fixture_phone');
+  message_id text := current_setting('app.stop_fixture_message_id');
+BEGIN
+  IF (SELECT count(*) FROM newsletter_suppressions WHERE recipient_key = fixture_phone) <> 1
+     OR (SELECT count(*) FROM newsletter_suppression_events WHERE recipient_key = fixture_phone AND provider_message_id = message_id) <> 1
+     OR (SELECT count(*) FROM newsletter_sends WHERE recipient_key = fixture_phone AND status = 'opted_out') <> 1
+     OR (SELECT count(*) FROM newsletter_sends WHERE recipient_key = fixture_phone AND status = 'queued') <> 0
+     OR (SELECT count(*) FROM crm_leads WHERE phone_e164 = fixture_phone AND opt_out_at IS NOT NULL) <> 1 THEN
+    RAISE EXCEPTION 'STOP fixture proof failed';
+  END IF;
+END;
+$$;
+ROLLBACK;
+SQL
+psql "$DB_URL" -X -v ON_ERROR_STOP=1 \
+  -v fixture_phone="$FIXTURE_PHONE" \
+  -v message_id="$FIXTURE_MESSAGE_ID" \
+  -v test_to="$TEST_TO" \
+  -f "$STOP_SQL"
 ```
 
-Required result: one suppression, one deduplicated event, zero still-queued sends, and zero operator CRM rows. Remove the disposable CRM fixture only through the approved cleanup workflow after preserving proof.
+Required result: one queued fixture is created inside the transaction; both RPC calls return the fixture recipient; all assertions pass; and the final command is `ROLLBACK`. The transaction is the deterministic database cleanup. The shell trap removes the private SQL file. Do not replace this with a committed fixture: suppression and attempt ledgers are intentionally immutable.
 
 ## Resolve an unknown outcome
 
@@ -110,7 +197,47 @@ REASON='provider dashboard confirms the message was accepted'
 Only after all staged gates pass:
 
 ```bash
+SGT_HHMM="$(TZ=Asia/Singapore date +%H%M)"
+if (( 10#$SGT_HHMM < 930 )); then
+  echo 'before the 09:30 SGT window: leave the timer disabled and rerun this gate at or after 09:30 SGT' >&2
+  exit 64
+fi
 sudo systemctl enable --now smartprop-whatsapp-newsletter.timer
+if ! timeout 20m bash -c '
+  DB_URL="$1"
+  while true; do
+    service_state="$(sudo systemctl is-active smartprop-whatsapp-newsletter.service 2>/dev/null || true)"
+    service_result="$(sudo systemctl show smartprop-whatsapp-newsletter.service --property=Result --value)"
+    terminal="$(psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -c "
+      BEGIN READ ONLY;
+      WITH current_run AS (
+        SELECT * FROM newsletter_runs
+        WHERE run_date = (clock_timestamp() AT TIME ZONE '\''Asia/Singapore'\'')::date
+        ORDER BY created_at DESC LIMIT 1
+      ), reports AS (
+        SELECT count(*) AS total, count(*) FILTER (WHERE status = '\''sent'\'') AS accepted
+        FROM newsletter_operator_reports WHERE run_id = (SELECT id FROM current_run)
+      )
+      SELECT EXISTS (
+        SELECT 1 FROM current_run, reports
+        WHERE current_run.status = '\''completed'\''
+          AND current_run.unknown_count = 0
+          AND reports.total > 0
+          AND reports.accepted = reports.total
+      );
+      COMMIT;")"
+    if [[ "$service_state" == inactive && "$service_result" == success && "$terminal" == t ]]; then
+      exit 0
+    fi
+    if [[ "$service_state" == failed || "$service_result" =~ ^(exit-code|signal|timeout|watchdog|resources)$ ]]; then
+      exit 1
+    fi
+    sleep 5
+  done
+' _ "$DB_URL"; then
+  echo 'oneshot or current run/report terminal-state gate did not complete within 20 minutes' >&2
+  exit 1
+fi
 sudo /opt/smartprop/app/smartprop/scripts/verify-newsletter-campaign.sh --expect=live --expected-revision="$EXPECTED_REVISION"
 ```
 

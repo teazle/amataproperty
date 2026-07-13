@@ -227,14 +227,22 @@ console.log(`allTimeSuccessRate=${(value.allTimeAccepted / value.allTimeAttempte
   while IFS= read -r -d '' artifact; do
     [[ "$("$stat_bin" -c %a "$artifact")" == 600 ]] || fail 'newsletter artifact is not mode 0600'
   done < <(find "$log_dir" -type f -name '*.json' ! -name run.lock -print0)
-  VERIFY_LOG_DIR="$log_dir" "$BUN_BIN" -e '
+VERIFY_LOG_DIR="$log_dir" "$BUN_BIN" -e '
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 const cutoff = Date.now() - 2_592_000_000;
-for (const name of await readdir(process.env.VERIFY_LOG_DIR)) {
-  if (!name.endsWith(".json") || name === "run.lock") continue;
-  if ((await stat(join(process.env.VERIFY_LOG_DIR, name))).mtimeMs <= cutoff) process.exit(1);
+async function verifyRetention(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await verifyRetention(path);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === "run.lock") continue;
+    if ((await stat(path)).mtimeMs <= cutoff) process.exit(1);
+  }
 }
+await verifyRetention(process.env.VERIFY_LOG_DIR);
 ' || fail 'newsletter artifact retention exceeds 43200 minutes'
 }
 

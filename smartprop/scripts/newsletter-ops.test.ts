@@ -198,12 +198,19 @@ describe('WhatsApp newsletter operations contract', () => {
       'mktemp -d',
       "trap 'rm -rf",
       'SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE',
+      'SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL',
+      'has_table_privilege',
+      'has_function_privilege',
+      'current_user',
       'record_newsletter_opt_out',
       'ROLLBACK',
       'timeout 20m',
       'before the 09:30 SGT window',
     ]) expect(runbook).toContain(phrase);
     expect(runbook).not.toContain('FIXTURE_PHONE=6590000001');
+    const stopProof = runbook.match(/## STOP disposable-fixture proof[\s\S]*?(?=\n## )/)?.[0] ?? '';
+    expect(stopProof).toContain('psql "$FIXTURE_DB_URL"');
+    expect(stopProof).not.toContain('psql "$DB_URL"');
   });
 });
 
@@ -440,6 +447,25 @@ describe('newsletter verifier behavior', () => {
 
     const retained = verifierFixture();
     const retainedArtifact = join(retained.logDir, 'just-under.json');
+    writeFileSync(retainedArtifact, '{}', { mode: 0o600 });
+    utimesSync(retainedArtifact, now - (43_199 * 60), now - (43_199 * 60));
+    expect(run(verifierPath, retained.args, retained.env).exitCode).toBe(0);
+  });
+
+  test('recursively rejects a nested recovery artifact at the exact retention boundary', () => {
+    const expired = verifierFixture();
+    const recoveryDir = join(expired.logDir, 'recovery', '2026-07-13');
+    mkdirSync(recoveryDir, { recursive: true });
+    const expiredArtifact = join(recoveryDir, 'boundary.json');
+    writeFileSync(expiredArtifact, '{}', { mode: 0o600 });
+    const now = Date.now() / 1000;
+    utimesSync(expiredArtifact, now - (43_200 * 60), now - (43_200 * 60));
+    expect(run(verifierPath, expired.args, expired.env).exitCode).not.toBe(0);
+
+    const retained = verifierFixture();
+    const retainedRecoveryDir = join(retained.logDir, 'recovery', '2026-07-13');
+    mkdirSync(retainedRecoveryDir, { recursive: true });
+    const retainedArtifact = join(retainedRecoveryDir, 'just-under.json');
     writeFileSync(retainedArtifact, '{}', { mode: 0o600 });
     utimesSync(retainedArtifact, now - (43_199 * 60), now - (43_199 * 60));
     expect(run(verifierPath, retained.args, retained.env).exitCode).toBe(0);

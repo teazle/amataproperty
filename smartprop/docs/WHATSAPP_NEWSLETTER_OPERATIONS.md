@@ -79,17 +79,22 @@ Required result: the test ledger row has `is_test=true`, the configured override
 
 ## STOP disposable-fixture proof
 
-Use only a provisioned disposable Singapore test number owned by the operator. Set it explicitly through `SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE`; never invent a plausible fixed number, use a real lead, or reuse the operator-report number. The following fixture-only SQL path checks every campaign/CRM collision, creates a CRM lead plus a queued attempt, calls the production `record_newsletter_opt_out` RPC twice with the same provider message ID to model repeated webhook delivery, asserts idempotency and cancellation, and rolls the entire proof back. It sends no WhatsApp message and leaves no ledger row.
+Use only a provisioned disposable Singapore test number owned by the operator. Set it explicitly through `SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE`; never invent a plausible fixed number, use a real lead, or reuse the operator-report number. This proof also requires a separately issued owner/migration-level connection in `SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL`. The command verifies that its connected `current_user` owns (or is a member of the owner role for) every required relation and RPC, or has the exact required table and function privileges, before creating anything.
+
+`SMARTPROP_NEWSLETTER_DATABASE_URL` remains the read-only verifier/query connection. Never use that read-only URL or assume the application `service_role` can insert fixture rows. Do not point the fixture-owner variable at either role unless the privilege check below independently passes. The rollback-only SQL checks every campaign/CRM collision, creates a CRM lead plus a queued attempt, calls the production `record_newsletter_opt_out` RPC twice with the same provider message ID, asserts idempotency and cancellation, and rolls the entire proof back. It sends no WhatsApp message and leaves no ledger row.
 
 ```bash
 umask 0077
 STOP_WORK_DIR="$(mktemp -d /tmp/newsletter-stop-proof.XXXXXX)"
-trap 'rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM
+trap 'unset FIXTURE_DB_URL; rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM
 : "${SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE:?set this to an owned disposable +65 test number}"
+: "${SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL:?set this to a separately issued owner/migration-level fixture database URL}"
 FIXTURE_PHONE="$SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE"
+FIXTURE_DB_URL="$SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL"
 TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"
 [[ "$FIXTURE_PHONE" =~ ^\+65[689][0-9]{7}$ ]]
 [[ "$FIXTURE_PHONE" != "$TEST_TO" ]]
+[[ "$FIXTURE_DB_URL" =~ ^postgres(ql)?://[^[:space:]]+$ ]]
 FIXTURE_MESSAGE_ID="stop-fixture-$(date +%s)-$$"
 STOP_SQL="$(mktemp "$STOP_WORK_DIR/proof.XXXXXX.sql")"
 cat >"$STOP_SQL" <<'SQL'
@@ -98,6 +103,56 @@ BEGIN;
 SELECT set_config('app.stop_fixture_phone', :'fixture_phone', true);
 SELECT set_config('app.stop_fixture_message_id', :'message_id', true);
 SELECT set_config('app.stop_fixture_test_to', :'test_to', true);
+
+DO $$
+DECLARE
+  missing_privileges text;
+  opt_out_function oid := to_regprocedure('public.record_newsletter_opt_out(text,text,text)');
+BEGIN
+  WITH required_relations(relation_name, needs_insert) AS (
+    VALUES
+      ('crm_projects', true),
+      ('newsletter_issues', true),
+      ('crm_leads', true),
+      ('newsletter_sends', true),
+      ('newsletter_suppressions', false),
+      ('newsletter_suppression_events', false)
+  )
+  SELECT string_agg(required_relations.relation_name, ', ' ORDER BY required_relations.relation_name)
+  INTO missing_privileges
+  FROM required_relations
+  LEFT JOIN pg_class AS relation
+    ON relation.oid = to_regclass('public.' || required_relations.relation_name)
+  WHERE relation.oid IS NULL
+     OR NOT (
+       pg_has_role(current_user, relation.relowner, 'USAGE')
+       OR (
+         has_table_privilege(current_user, relation.oid, 'SELECT')
+         AND (
+           NOT required_relations.needs_insert
+           OR has_table_privilege(current_user, relation.oid, 'INSERT')
+         )
+       )
+     );
+
+  IF missing_privileges IS NOT NULL THEN
+    RAISE EXCEPTION 'fixture DB role lacks ownership or required table privileges: %', missing_privileges;
+  END IF;
+
+  IF opt_out_function IS NULL
+     OR NOT EXISTS (
+       SELECT 1
+       FROM pg_proc AS proc
+       WHERE proc.oid = opt_out_function
+         AND (
+           pg_has_role(current_user, proc.proowner, 'USAGE')
+           OR has_function_privilege(current_user, proc.oid, 'EXECUTE')
+         )
+     ) THEN
+    RAISE EXCEPTION 'fixture DB role lacks ownership or EXECUTE on record_newsletter_opt_out';
+  END IF;
+END;
+$$;
 
 DO $$
 DECLARE
@@ -169,7 +224,7 @@ END;
 $$;
 ROLLBACK;
 SQL
-psql "$DB_URL" -X -v ON_ERROR_STOP=1 \
+psql "$FIXTURE_DB_URL" -X -v ON_ERROR_STOP=1 \
   -v fixture_phone="$FIXTURE_PHONE" \
   -v message_id="$FIXTURE_MESSAGE_ID" \
   -v test_to="$TEST_TO" \

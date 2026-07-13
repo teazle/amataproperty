@@ -98,9 +98,9 @@ trap 'unset FIXTURE_DB_URL; rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM
 FIXTURE_PHONE="$SMARTPROP_NEWSLETTER_STOP_FIXTURE_PHONE"
 FIXTURE_DB_URL="$SMARTPROP_NEWSLETTER_FIXTURE_OWNER_DATABASE_URL"
 TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"
-[[ "$FIXTURE_PHONE" =~ ^\+65[689][0-9]{7}$ ]]
-[[ "$FIXTURE_PHONE" != "$TEST_TO" ]]
-[[ "$FIXTURE_DB_URL" =~ ^postgres(ql)?://[^[:space:]]+$ ]]
+[[ "$FIXTURE_PHONE" =~ ^\+65[689][0-9]{7}$ ]] || { echo "invalid disposable STOP fixture phone" >&2; exit 1; }
+[[ "$FIXTURE_PHONE" != "$TEST_TO" ]] || { echo "STOP fixture phone must differ from the operator test number" >&2; exit 1; }
+[[ "$FIXTURE_DB_URL" =~ ^postgres(ql)?://[^[:space:]]+$ ]] || { echo "invalid fixture-owner database URL" >&2; exit 1; }
 FIXTURE_MESSAGE_ID="stop-fixture-$(date +%s)-$$"
 STOP_SQL="$(mktemp "$STOP_WORK_DIR/proof.XXXXXX.sql")"
 cat >"$STOP_SQL" <<'SQL'

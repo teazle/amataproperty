@@ -65,7 +65,8 @@ set -euo pipefail
 umask 0077
 WORK_DIR="$(mktemp -d /tmp/newsletter-controlled-test.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
-SOURCE_LEAD_ID=<approved-source-lead-uuid>
+: "${SMARTPROP_NEWSLETTER_TEST_SOURCE_LEAD_ID:?set this to the approved source lead UUID}"
+SOURCE_LEAD_ID="$SMARTPROP_NEWSLETTER_TEST_SOURCE_LEAD_ID"
 TEST_TO="$SMARTPROP_NEWSLETTER_TEST_TO"
 DB_URL="$(sudo sed -n 's/^SMARTPROP_NEWSLETTER_DATABASE_URL=//p' /etc/smartprop/newsletter-db.env)"
 BEFORE="$WORK_DIR/before.txt"
@@ -75,6 +76,7 @@ psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN R
 psql "$DB_URL" -XqAt -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -c "BEGIN READ ONLY; SELECT status,last_activity_at FROM crm_leads WHERE id = :'lead_id'::uuid; SELECT count(*) FROM crm_lead_activities WHERE lead_id = :'lead_id'::uuid; COMMIT;" > "$AFTER"
 diff -u "$BEFORE" "$AFTER"
 psql "$DB_URL" -X -v ON_ERROR_STOP=1 -v lead_id="$SOURCE_LEAD_ID" -v test_to="$TEST_TO" -c "BEGIN READ ONLY; SELECT id,is_test,override_phone,provider_outcome,(waha_message_id IS NOT NULL) AS provider_id_recorded FROM newsletter_sends WHERE lead_id = :'lead_id'::uuid AND is_test = true ORDER BY created_at DESC LIMIT 1; SELECT count(*) AS operator_crm_rows FROM crm_leads WHERE phone_e164 = :'test_to'; COMMIT;"
+)
 ```
 
 Required result: the test ledger row has `is_test=true`, the configured override, `provider_outcome='sent'`, and a provider ID; the CRM snapshot diff is empty; `operator_crm_rows` is zero.
@@ -86,6 +88,8 @@ Use only a provisioned disposable Singapore test number owned by the operator. S
 `SMARTPROP_NEWSLETTER_DATABASE_URL` remains the read-only verifier/query connection. Never use that read-only URL or assume the application `service_role` can insert fixture rows. Do not point the fixture-owner variable at either role unless the privilege check below independently passes. The rollback-only SQL checks every campaign/CRM collision, creates a CRM lead plus a queued attempt, calls the production `record_newsletter_opt_out` RPC twice with the same provider message ID, asserts idempotency and cancellation, and rolls the entire proof back. It sends no WhatsApp message and leaves no ledger row.
 
 ```bash
+(
+set -euo pipefail
 umask 0077
 STOP_WORK_DIR="$(mktemp -d /tmp/newsletter-stop-proof.XXXXXX)"
 trap 'unset FIXTURE_DB_URL; rm -rf "$STOP_WORK_DIR"' EXIT HUP INT TERM

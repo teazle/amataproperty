@@ -7,7 +7,7 @@ version: '3.8'
 services:
   # WhatsApp Business API (WAHA)
   waha:
-    image: devlikeapro/waha:latest-2025.9.8
+    image: devlikeapro/waha:latest-2026.6.2
     container_name: smartprop-waha
     restart: unless-stopped
     environment:
@@ -16,8 +16,6 @@ services:
       - WHATSAPP_HOOK_URL=${PUBLIC_BASE_URL}/api/wa/webhook
       - WHATSAPP_HOOK_EVENTS=message,message.any,state.change,group.join,presence.update
       - "WHATSAPP_HOOK_CUSTOM_HEADERS=X-WAHA-Webhook-Secret:${WAHA_WEBHOOK_SECRET:?WAHA_WEBHOOK_SECRET is required}"
-      - WAHA_SESSION_STORE_ENABLED=true
-      - WAHA_SESSION_STORE_PATH=/app/sessions
       - WAHA_FILES_STORE_ENABLED=true
       - WAHA_FILES_STORE_PATH=/app/files
       - WAHA_LOG_LEVEL=info
@@ -25,7 +23,7 @@ services:
     ports:
       - "127.0.0.1:3030:3000"
     volumes:
-      - waha-sessions:/app/sessions
+      - waha-sessions:/app/.sessions
       - waha-files:/app/files
     networks:
       - smartprop-network

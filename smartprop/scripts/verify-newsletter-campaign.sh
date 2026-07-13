@@ -35,7 +35,7 @@ verify_target() {
   local expected_revision="$2"
   local freshness_minutes="$3"
   local test_mode="$4"
-  local app_dir log_dir db_env actual_hostname now
+  local app_dir log_dir db_env actual_hostname now waha_api_key
   local curl_bin psql_bin systemctl_bin stat_bin
 
   if [[ "$test_mode" == 1 ]]; then
@@ -49,6 +49,7 @@ verify_target() {
     systemctl_bin="${SMARTPROP_NEWSLETTER_SYSTEMCTL_BIN:?test systemctl path is required}"
     stat_bin="${SMARTPROP_NEWSLETTER_STAT_BIN:?test stat path is required}"
     BUN_BIN="${SMARTPROP_NEWSLETTER_BUN_BIN:?test Bun path is required}"
+    waha_api_key="${SMARTPROP_NEWSLETTER_TEST_WAHA_API_KEY:?test WAHA API key is required}"
   else
     app_dir=/opt/smartprop/app/smartprop
     log_dir=/opt/smartprop/logs/newsletter
@@ -60,7 +61,15 @@ verify_target() {
     systemctl_bin=/usr/bin/systemctl
     stat_bin=/usr/bin/stat
     BUN_BIN=/root/.bun/bin/bun
+    waha_api_key=''
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+      case "$env_line" in
+        WAHA_API_KEY=*) waha_api_key="${env_line#WAHA_API_KEY=}" ;;
+      esac
+    done < "$app_dir/.env.local"
   fi
+
+  [[ -n "$waha_api_key" ]] || fail 'WAHA API key is missing'
 
   [[ "$actual_hostname" == "$EXPECTED_HOSTNAME" ]] || fail 'hostname mismatch'
   [[ "$expected_revision" =~ ^[0-9a-fA-F]{7,64}$ ]] || fail 'expected revision format is invalid'
@@ -110,7 +119,7 @@ if (expected === "staged") {
 ' || fail 'newsletter health revision or freshness verification failed'
 
   local session
-  session="$("$curl_bin" --fail --silent --show-error http://127.0.0.1:3030/api/sessions/default)"
+  session="$("$curl_bin" --fail --silent --show-error --header "X-Api-Key: $waha_api_key" http://127.0.0.1:3030/api/sessions/default)"
   printf '%s' "$session" | "$BUN_BIN" -e '
 const value = JSON.parse(await Bun.stdin.text());
 process.exit(value?.status === "WORKING" ? 0 : 1);

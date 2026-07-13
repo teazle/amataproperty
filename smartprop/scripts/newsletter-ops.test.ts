@@ -171,6 +171,12 @@ describe('WhatsApp newsletter operations contract', () => {
     expect(verifier).not.toMatch(/\b(enable|start|restart|daemon-reload|preset)\b/);
   });
 
+  test('authenticates the WAHA session probe', () => {
+    const verifier = read(verifierPath);
+    expect(verifier).toContain('SMARTPROP_NEWSLETTER_TEST_WAHA_API_KEY');
+    expect(verifier).toContain('--header "X-Api-Key: $waha_api_key"');
+  });
+
   test('documents installation without enabling and all required readiness controls', () => {
     const runbook = read(runbookPath);
     for (const phrase of [
@@ -413,6 +419,7 @@ esac
     SMARTPROP_NEWSLETTER_SYSTEMCTL_BIN: systemctl,
     SMARTPROP_NEWSLETTER_STAT_BIN: stat,
     SMARTPROP_NEWSLETTER_BUN_BIN: process.execPath,
+    SMARTPROP_NEWSLETTER_TEST_WAHA_API_KEY: 'test-waha-api-key',
     STUB_HEALTH_FILE: healthFile,
     STUB_WAHA_FILE: wahaFile,
     STUB_DB_FILE: dbFile,

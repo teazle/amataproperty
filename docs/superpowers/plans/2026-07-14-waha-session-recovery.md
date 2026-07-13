@@ -37,7 +37,10 @@
 - [ ] Stop only the `default` WAHA session and archive `/app/.sessions` with a SHA-256 checksum.
 - [ ] Restore the archive into a temporary directory and verify archive readability, file count, and SQLite integrity.
 - [ ] Copy the verified profile into the existing `smartprop_waha-sessions` volume.
+- [ ] Lock the backup directory to `0700`, lock artifacts to `0600`, and record the old image ID plus Compose and environment hashes.
+- [ ] Capture `wa_messages` and newsletter outbound counters, then use a one-time WAHA API key and sink webhook for the first upgrade boot so neither SmartProp nor inbound webhooks can send.
 - [ ] Pull `devlikeapro/waha:latest-2026.6.2` and recreate only `smartprop-waha`.
+- [ ] After the isolated boot reaches `WORKING`, recreate WAHA with the production API key and webhook, then confirm outbound counters did not change.
 - [ ] Verify container health, authenticated API `200`, anonymous API `401`, session `WORKING`, linked account identity, webhook configuration, and current image/version.
 - [ ] Verify `SMARTPROP_NEWSLETTER_ENABLED=0` and no campaign messages were sent.
-- [ ] If verification fails, restore the previous compose file and `latest-2025.9.8` image, then restore the archived profile.
+- [ ] If verification fails, run the retained old image `sha256:02da9fa891f8d0258b2803bfcc9ca63e7be3c0a5b491edd28167a76b76e2db31` while keeping `smartprop_waha-sessions:/app/.sessions`; do not restore the incorrect `/app/sessions` mount. Restore the archived profile if the volume integrity check fails.

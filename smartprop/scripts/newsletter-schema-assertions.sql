@@ -21,8 +21,11 @@ BEGIN
   IF to_regprocedure('public.claim_newsletter_run(text)') IS NULL THEN
     v_missing := array_append(v_missing, 'claim_newsletter_run(text)');
   END IF;
-  IF to_regprocedure('public.start_newsletter_attempt(uuid,uuid,integer,text)') IS NULL THEN
-    v_missing := array_append(v_missing, 'start_newsletter_attempt(uuid,uuid,integer,text)');
+  IF to_regprocedure('public.queue_newsletter_attempt(uuid,uuid,text,text,jsonb)') IS NULL THEN
+    v_missing := array_append(v_missing, 'queue_newsletter_attempt(uuid,uuid,text,text,jsonb)');
+  END IF;
+  IF to_regprocedure('public.start_newsletter_attempt(uuid,integer,text)') IS NULL THEN
+    v_missing := array_append(v_missing, 'start_newsletter_attempt(uuid,integer,text)');
   END IF;
   IF to_regprocedure('public.finalize_newsletter_attempt(uuid,text,text,text,boolean)') IS NULL THEN
     v_missing := array_append(v_missing, 'finalize_newsletter_attempt(uuid,text,text,text,boolean)');
@@ -33,6 +36,12 @@ BEGIN
   IF to_regprocedure('public.resolve_newsletter_unknown(uuid,text,text,text)') IS NULL THEN
     v_missing := array_append(v_missing, 'resolve_newsletter_unknown(uuid,text,text,text)');
   END IF;
+  IF to_regprocedure('public.record_accepted_newsletter_recovery(uuid,text,text)') IS NULL THEN
+    v_missing := array_append(v_missing, 'record_accepted_newsletter_recovery(uuid,text,text)');
+  END IF;
+  IF to_regprocedure('public.start_newsletter_attempt(uuid,uuid,integer,text)') IS NOT NULL THEN
+    v_missing := array_append(v_missing, 'obsolete start_newsletter_attempt overload still exists');
+  END IF;
 
   IF cardinality(v_missing) > 0 THEN
     RAISE EXCEPTION 'missing newsletter schema objects: %', array_to_string(v_missing, ', ');
@@ -41,6 +50,7 @@ END;
 $$;
 
 -- ASSERT: service-role grants and fixed search paths
+-- ASSERT: Task 1.1 secured RPC grants
 DO $$
 DECLARE
   v_function_count INTEGER;
@@ -51,8 +61,10 @@ BEGIN
   WHERE namespace.nspname = 'public'
     AND proc.proname = ANY (ARRAY[
       'claim_newsletter_run',
+      'queue_newsletter_attempt',
       'start_newsletter_attempt',
       'finalize_newsletter_attempt',
+      'record_accepted_newsletter_recovery',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown'
     ])
@@ -66,8 +78,8 @@ BEGIN
         AND acl.privilege_type = 'EXECUTE'
     );
 
-  IF v_function_count <> 5 THEN
-    RAISE EXCEPTION 'RPC security contract matched % of 5 functions', v_function_count;
+  IF v_function_count <> 7 THEN
+    RAISE EXCEPTION 'RPC security contract matched % of 7 functions', v_function_count;
   END IF;
 
   IF NOT EXISTS (
@@ -251,10 +263,13 @@ BEGIN
     v_lead_ids := array_append(v_lead_ids, v_lead_id);
   END LOOP;
 
-  INSERT INTO newsletter_issues (slug, status, created_by, approved_by, approved_at)
+  INSERT INTO newsletter_issues (
+    slug, status, audience_project_slug, created_by, approved_by, approved_at
+  )
   VALUES (
     'newsletter-assertion-' || txid_current(),
     'approved',
+    'newsletter-assertion-' || txid_current(),
     'schema_assertion',
     'schema_assertion',
     clock_timestamp()
@@ -279,7 +294,32 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.queue_and_start_newsletter_assertion(
+  p_run_id UUID,
+  p_lead_id UUID,
+  p_slot_no INTEGER,
+  p_claim_token TEXT,
+  p_body TEXT
+)
+RETURNS newsletter_sends
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_send newsletter_sends%ROWTYPE;
+BEGIN
+  v_send := queue_newsletter_attempt(
+    p_run_id,
+    p_lead_id,
+    p_claim_token,
+    p_body,
+    jsonb_build_object('assertion', p_body)
+  );
+  RETURN start_newsletter_attempt(v_send.id, p_slot_no, p_claim_token);
+END;
+$$;
+
 -- ASSERT: stale-run rejection and resume safety
+-- ASSERT: stale claim takeover
 DO $$
 DECLARE
   v_issue_id UUID;
@@ -294,7 +334,13 @@ BEGIN
   FROM newsletter_assertion_fixture;
 
   BEGIN
-    PERFORM start_newsletter_attempt(v_stale_run_id, v_lead_ids[4], 1, 'stale run must fail');
+    PERFORM queue_newsletter_attempt(
+      v_stale_run_id,
+      v_lead_ids[4],
+      'schema-assertion-stale',
+      'stale run must fail',
+      '{"assertion":"stale"}'::JSONB
+    );
   EXCEPTION WHEN SQLSTATE '55000' THEN
     v_rejected := TRUE;
   END;
@@ -332,6 +378,104 @@ BEGIN
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'conflicting claim token resumed a running SGT-day run';
   END IF;
+
+  UPDATE newsletter_runs
+  SET last_heartbeat_at = clock_timestamp() - INTERVAL '16 minutes'
+  WHERE id = v_run_id;
+
+  v_resumed := claim_newsletter_run('schema-assertion-takeover');
+  IF v_resumed.id <> v_run_id
+     OR v_resumed.claim_token <> 'schema-assertion-takeover'
+     OR v_resumed.last_heartbeat_at < clock_timestamp() - INTERVAL '1 minute' THEN
+    RAISE EXCEPTION 'stale claim was not transferred atomically';
+  END IF;
+
+  v_resumed := claim_newsletter_run('schema-assertion-takeover');
+  IF v_resumed.id <> v_run_id OR v_resumed.claim_token <> 'schema-assertion-takeover' THEN
+    RAISE EXCEPTION 'same-token takeover resume was not idempotent';
+  END IF;
+END;
+$$;
+
+-- ASSERT: persisted queue restart safety
+-- ASSERT: queue suppression before start
+DO $$
+DECLARE
+  v_run_id UUID;
+  v_lead_ids UUID[];
+  v_queued newsletter_sends%ROWTYPE;
+  v_resumed newsletter_sends%ROWTYPE;
+  v_replacement newsletter_sends%ROWTYPE;
+  v_rejected BOOLEAN := FALSE;
+BEGIN
+  SELECT run_id, lead_ids INTO v_run_id, v_lead_ids
+  FROM newsletter_assertion_fixture;
+
+  v_queued := queue_newsletter_attempt(
+    v_run_id,
+    v_lead_ids[5],
+    'schema-assertion-takeover',
+    'persisted queue body A',
+    '{"value":500000,"source":"assertion-A"}'::JSONB
+  );
+
+  IF v_queued.status <> 'queued'
+     OR v_queued.slot_no IS NOT NULL
+     OR v_queued.attempt_no IS NOT NULL
+     OR v_queued.attempt_started_at IS NOT NULL
+     OR v_queued.valuation_snapshot ->> 'source' <> 'assertion-A' THEN
+    RAISE EXCEPTION 'queued selection did not persist complete pre-POST snapshots';
+  END IF;
+
+  UPDATE crm_leads SET name = 'Changed Candidate Name' WHERE id = v_lead_ids[5];
+
+  v_resumed := queue_newsletter_attempt(
+    v_run_id,
+    v_lead_ids[5],
+    'schema-assertion-takeover',
+    'changed body must not replace snapshot',
+    '{"value":1,"source":"changed"}'::JSONB
+  );
+  IF v_resumed.id <> v_queued.id
+     OR v_resumed.recipient_name <> v_queued.recipient_name
+     OR v_resumed.rendered_body <> 'persisted queue body A'
+     OR v_resumed.valuation_snapshot ->> 'source' <> 'assertion-A' THEN
+    RAISE EXCEPTION 'restart did not preserve the original queued selection';
+  END IF;
+
+  PERFORM record_newsletter_opt_out('+6591000005', 'queue-stop-A', 'STOP before POST');
+
+  BEGIN
+    PERFORM start_newsletter_attempt(v_queued.id, 1, 'schema-assertion-takeover');
+  EXCEPTION WHEN SQLSTATE '55000' OR SQLSTATE '42501' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected OR NOT EXISTS (
+    SELECT 1 FROM newsletter_sends
+    WHERE id = v_queued.id
+      AND status = 'opted_out'
+      AND slot_no IS NULL
+      AND attempt_started_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'suppression before start did not preserve a no-POST opted-out row';
+  END IF;
+
+  v_replacement := queue_newsletter_attempt(
+    v_run_id,
+    v_lead_ids[6],
+    'schema-assertion-takeover',
+    'replacement queue body B',
+    '{"value":600000,"source":"assertion-B"}'::JSONB
+  );
+  IF v_replacement.status <> 'queued' OR v_replacement.id = v_queued.id THEN
+    RAISE EXCEPTION 'replacement was not queued after pre-POST suppression';
+  END IF;
+
+  UPDATE newsletter_sends
+  SET status = 'skipped',
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_replacement.id;
 END;
 $$;
 
@@ -394,7 +538,13 @@ BEGIN
   FROM newsletter_assertion_fixture;
 
   FOR v_i IN 1..3 LOOP
-    v_send := start_newsletter_attempt(v_run_id, v_lead_ids[1], v_i, 'recipient attempt ' || v_i);
+    v_send := pg_temp.queue_and_start_newsletter_assertion(
+      v_run_id,
+      v_lead_ids[1],
+      v_i,
+      'schema-assertion-takeover',
+      'recipient attempt ' || v_i
+    );
     IF v_i = 1 THEN
       v_first_send_id := v_send.id;
     END IF;
@@ -402,8 +552,14 @@ BEGIN
   END LOOP;
 
   BEGIN
-    PERFORM start_newsletter_attempt(v_run_id, v_lead_ids[1], 4, 'fourth recipient attempt');
-  EXCEPTION WHEN SQLSTATE '54000' THEN
+    PERFORM pg_temp.queue_and_start_newsletter_assertion(
+      v_run_id,
+      v_lead_ids[1],
+      4,
+      'schema-assertion-takeover',
+      'fourth recipient attempt'
+    );
+  EXCEPTION WHEN SQLSTATE '54000' OR SQLSTATE '55000' THEN
     v_rejected := TRUE;
   END;
   IF NOT v_rejected THEN
@@ -419,7 +575,7 @@ BEGIN
       v_issue_id, v_run_id, 4, v_lead_ids[1], 'Recipient bypass fixture', '+6591000001',
       4, '+6591000001', 'direct fourth recipient submission', 'sending', clock_timestamp(), FALSE
     );
-  EXCEPTION WHEN SQLSTATE '54000' THEN
+  EXCEPTION WHEN SQLSTATE '54000' OR SQLSTATE '55000' THEN
     v_rejected := TRUE;
   END;
   IF NOT v_rejected THEN
@@ -472,6 +628,7 @@ END;
 $$;
 
 -- ASSERT: unknown is non-retryable
+-- ASSERT: accepted recovery persistence
 DO $$
 DECLARE
   v_run_id UUID;
@@ -481,10 +638,75 @@ BEGIN
   SELECT run_id, lead_ids INTO v_run_id, v_lead_ids
   FROM newsletter_assertion_fixture;
 
-  v_send := start_newsletter_attempt(v_run_id, v_lead_ids[2], 4, 'fourth global attempt');
-  v_send := finalize_newsletter_attempt(v_send.id, 'failed', NULL, 'fourth-global', FALSE);
+  v_send := pg_temp.queue_and_start_newsletter_assertion(
+    v_run_id,
+    v_lead_ids[2],
+    4,
+    'schema-assertion-takeover',
+    'fourth global attempt'
+  );
+  v_send := record_accepted_newsletter_recovery(
+    v_send.id,
+    'accepted-recovery-message',
+    'CRM finalization unavailable after provider acceptance'
+  );
 
-  v_send := start_newsletter_attempt(v_run_id, v_lead_ids[3], 5, 'unknown global attempt');
+  IF v_send.status <> 'unknown'
+     OR v_send.provider_outcome <> 'sent'
+     OR v_send.waha_message_id <> 'accepted-recovery-message'
+     OR v_send.crm_sync_error <> 'CRM finalization unavailable after provider acceptance'
+     OR v_send.retryable <> FALSE
+     OR EXISTS (
+       SELECT 1 FROM crm_leads
+       WHERE id = v_lead_ids[2] AND status <> 'new'
+     )
+     OR EXISTS (
+       SELECT 1 FROM crm_lead_activities
+       WHERE lead_id = v_lead_ids[2]
+         AND metadata ->> 'newsletter_send_id' = v_send.id::TEXT
+     ) THEN
+    RAISE EXCEPTION 'accepted recovery did not preserve evidence without CRM mutation';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM newsletter_runs
+    WHERE id = v_run_id
+      AND status = 'failed'
+      AND blocker = 'accepted send requires CRM finalization recovery'
+      AND unknown_count = 1
+  ) THEN
+    RAISE EXCEPTION 'accepted recovery did not fail and block the run with counters';
+  END IF;
+
+  v_send := resolve_newsletter_unknown(
+    v_send.id,
+    'schema_assertion',
+    'sent',
+    'accepted provider evidence confirmed'
+  );
+  IF v_send.status <> 'sent'
+     OR v_send.provider_outcome <> 'sent'
+     OR v_send.unknown_resolution <> 'sent'
+     OR NOT EXISTS (
+       SELECT 1 FROM crm_leads
+       WHERE id = v_lead_ids[2] AND status = 'contacted'
+     ) THEN
+    RAISE EXCEPTION 'accepted recovery resolution did not finalize CRM safely';
+  END IF;
+
+  UPDATE newsletter_runs
+  SET status = 'running',
+      blocker = NULL,
+      updated_at = clock_timestamp()
+  WHERE id = v_run_id;
+
+  v_send := pg_temp.queue_and_start_newsletter_assertion(
+    v_run_id,
+    v_lead_ids[3],
+    5,
+    'schema-assertion-takeover',
+    'unknown global attempt'
+  );
   v_send := finalize_newsletter_attempt(v_send.id, 'unknown', NULL, 'provider timeout', TRUE);
   IF v_send.retryable <> FALSE OR v_send.provider_outcome <> 'unknown' THEN
     RAISE EXCEPTION 'unknown outcome was retryable or lost its provider outcome';
@@ -512,7 +734,13 @@ BEGIN
   FROM newsletter_assertion_fixture;
 
   BEGIN
-    PERFORM start_newsletter_attempt(v_run_id, v_lead_ids[4], 1, 'sixth global attempt');
+    PERFORM pg_temp.queue_and_start_newsletter_assertion(
+      v_run_id,
+      v_lead_ids[4],
+      1,
+      'schema-assertion-takeover',
+      'sixth global attempt'
+    );
   EXCEPTION WHEN SQLSTATE '54000' THEN
     v_rejected := TRUE;
   END;
@@ -550,7 +778,7 @@ BEGIN
       clock_timestamp(),
       FALSE
     );
-  EXCEPTION WHEN SQLSTATE '54000' THEN
+  EXCEPTION WHEN SQLSTATE '54000' OR SQLSTATE '55000' THEN
     v_rejected := TRUE;
   END;
   IF NOT v_rejected THEN

@@ -261,6 +261,7 @@ SET search_path = public
 AS $$
 DECLARE
   v_fk_lead_nulling BOOLEAN := FALSE;
+  v_authorized_start BOOLEAN := FALSE;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'newsletter attempts are append-only'
@@ -282,14 +283,21 @@ BEGIN
     END IF;
   END IF;
 
+  v_authorized_start := OLD.status = 'queued'
+    AND NEW.status = 'sending'
+    AND OLD.attempt_started_at IS NULL
+    AND NEW.attempt_started_at IS NOT NULL
+    AND current_setting('app.newsletter_start_send_id', TRUE) = NEW.id::TEXT;
+
   IF NEW.issue_id IS DISTINCT FROM OLD.issue_id
      OR NEW.run_id IS DISTINCT FROM OLD.run_id
-     OR NEW.slot_no IS DISTINCT FROM OLD.slot_no
+     OR (NEW.slot_no IS DISTINCT FROM OLD.slot_no AND NOT v_authorized_start)
      OR NEW.recipient_name IS DISTINCT FROM OLD.recipient_name
      OR NEW.recipient_key IS DISTINCT FROM OLD.recipient_key
-     OR NEW.attempt_no IS DISTINCT FROM OLD.attempt_no
+     OR (NEW.attempt_no IS DISTINCT FROM OLD.attempt_no AND NOT v_authorized_start)
      OR NEW.phone IS DISTINCT FROM OLD.phone
      OR NEW.rendered_body IS DISTINCT FROM OLD.rendered_body
+     OR NEW.valuation_snapshot IS DISTINCT FROM OLD.valuation_snapshot
      OR NEW.is_test IS DISTINCT FROM OLD.is_test THEN
     RAISE EXCEPTION 'newsletter attempt identity and send-time snapshots are immutable'
       USING ERRCODE = '55000';
@@ -312,11 +320,18 @@ DECLARE
   v_recipient_attempt_count INTEGER;
   v_phone_digits TEXT;
   v_canonical_recipient_key TEXT;
+  v_is_start_transition BOOLEAN := FALSE;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     IF OLD.attempt_started_at IS NULL AND NEW.attempt_started_at IS NOT NULL THEN
-      RAISE EXCEPTION 'provider submissions must be created by start_newsletter_attempt'
-        USING ERRCODE = '55000';
+      IF OLD.status <> 'queued'
+         OR NEW.status <> 'sending'
+         OR current_setting('app.newsletter_start_send_id', TRUE) IS DISTINCT FROM NEW.id::TEXT THEN
+        RAISE EXCEPTION 'provider submissions must be created by start_newsletter_attempt'
+          USING ERRCODE = '55000';
+      END IF;
+
+      v_is_start_transition := TRUE;
     END IF;
 
     IF OLD.attempt_started_at IS NOT NULL THEN
@@ -335,7 +350,9 @@ BEGIN
         USING ERRCODE = '55000';
     END IF;
 
-    RETURN NEW;
+    IF NOT v_is_start_transition THEN
+      RETURN NEW;
+    END IF;
   END IF;
 
   IF NEW.is_test = TRUE OR NEW.attempt_started_at IS NULL THEN
@@ -364,6 +381,11 @@ BEGIN
      OR NEW.recipient_key IS DISTINCT FROM v_canonical_recipient_key THEN
     RAISE EXCEPTION 'recipient key must equal canonical Singapore E.164 phone snapshot'
       USING ERRCODE = '22023';
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    RAISE EXCEPTION 'real provider submissions must transition from a persisted queued row'
+      USING ERRCODE = '55000';
   END IF;
 
   -- Lock order: SGT day -> recipient -> run -> lead -> send.
@@ -462,8 +484,17 @@ BEGIN
   IF FOUND THEN
     IF v_run.status = 'running'
        AND v_run.claim_token IS DISTINCT FROM btrim(p_claim_token) THEN
-      RAISE EXCEPTION 'newsletter run is already claimed'
-        USING ERRCODE = '55006';
+      IF v_run.last_heartbeat_at >= clock_timestamp() - INTERVAL '15 minutes' THEN
+        RAISE EXCEPTION 'newsletter run is already claimed'
+          USING ERRCODE = '55006';
+      END IF;
+
+      UPDATE newsletter_runs
+      SET claim_token = btrim(p_claim_token),
+          last_heartbeat_at = clock_timestamp(),
+          updated_at = clock_timestamp()
+      WHERE id = v_run.id
+      RETURNING * INTO v_run;
     END IF;
     RETURN v_run;
   END IF;
@@ -496,11 +527,12 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION start_newsletter_attempt(
+CREATE OR REPLACE FUNCTION queue_newsletter_attempt(
   p_run_id UUID,
   p_lead_id UUID,
-  p_slot_no INTEGER,
-  p_rendered_body TEXT
+  p_claim_token TEXT,
+  p_rendered_body TEXT,
+  p_valuation_snapshot JSONB
 )
 RETURNS newsletter_sends
 LANGUAGE plpgsql
@@ -510,28 +542,30 @@ AS $$
 DECLARE
   v_sgt_date DATE := (clock_timestamp() AT TIME ZONE 'Asia/Singapore')::DATE;
   v_run newsletter_runs%ROWTYPE;
+  v_issue newsletter_issues%ROWTYPE;
   v_lead crm_leads%ROWTYPE;
   v_send newsletter_sends%ROWTYPE;
   v_digits TEXT;
   v_recipient_key TEXT;
-  v_attempt_no INTEGER;
-  v_day_attempt_count INTEGER;
   v_recipient_attempt_count INTEGER;
+  v_committed_count INTEGER;
 BEGIN
   IF p_run_id IS NULL OR p_lead_id IS NULL THEN
     RAISE EXCEPTION 'run id and lead id are required' USING ERRCODE = '22023';
   END IF;
-  IF p_slot_no IS NULL OR p_slot_no NOT BETWEEN 1 AND 5 THEN
-    RAISE EXCEPTION 'slot number must be between 1 and 5' USING ERRCODE = '22023';
+  IF p_claim_token IS NULL OR btrim(p_claim_token) = '' THEN
+    RAISE EXCEPTION 'claim token is required' USING ERRCODE = '22023';
   END IF;
   IF p_rendered_body IS NULL OR btrim(p_rendered_body) = '' THEN
     RAISE EXCEPTION 'rendered body is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_valuation_snapshot IS NULL THEN
+    RAISE EXCEPTION 'valuation snapshot is required' USING ERRCODE = '22023';
   END IF;
 
   SELECT * INTO v_lead
   FROM crm_leads
   WHERE id = p_lead_id;
-
   IF NOT FOUND THEN
     RAISE EXCEPTION 'CRM lead not found' USING ERRCODE = 'P0002';
   END IF;
@@ -542,9 +576,9 @@ BEGIN
     WHEN length(v_digits) = 10 AND left(v_digits, 2) = '65' THEN '+' || v_digits
     ELSE NULL
   END;
-
   IF v_recipient_key IS NULL OR v_recipient_key !~ '^\+65[689][0-9]{7}$' THEN
-    RAISE EXCEPTION 'lead does not have a valid E.164 recipient key' USING ERRCODE = '22023';
+    RAISE EXCEPTION 'lead does not have a canonical Singapore recipient key'
+      USING ERRCODE = '22023';
   END IF;
 
   -- Lock order: SGT day -> recipient -> run -> lead -> send.
@@ -559,35 +593,40 @@ BEGIN
   FROM newsletter_runs
   WHERE id = p_run_id
   FOR UPDATE;
-
   IF NOT FOUND THEN
     RAISE EXCEPTION 'newsletter run not found' USING ERRCODE = 'P0002';
   END IF;
   IF v_run.status <> 'running'
+     OR v_run.run_date <> v_sgt_date
      OR v_run.issue_id IS NULL
-     OR v_run.run_date <> v_sgt_date THEN
-    RAISE EXCEPTION 'newsletter run is not sendable' USING ERRCODE = '55000';
+     OR v_run.claim_token IS DISTINCT FROM btrim(p_claim_token) THEN
+    RAISE EXCEPTION 'newsletter run is not claimed and queueable'
+      USING ERRCODE = '55000';
   END IF;
 
-  SELECT count(*)::INTEGER INTO v_day_attempt_count
-  FROM newsletter_sends AS send
-  JOIN newsletter_runs AS run ON run.id = send.run_id
-  WHERE run.run_date = v_sgt_date
-    AND send.is_test = FALSE
-    AND send.attempt_started_at IS NOT NULL;
-
-  IF v_day_attempt_count >= 5 OR v_run.attempted_count >= 5 THEN
-    RAISE EXCEPTION 'SGT day has consumed all five provider submissions' USING ERRCODE = '54000';
-  END IF;
-
-  SELECT * INTO v_lead
-  FROM crm_leads
-  WHERE id = p_lead_id
-  FOR SHARE;
-
+  SELECT issue.* INTO v_issue
+  FROM newsletter_issues AS issue
+  WHERE issue.id = v_run.issue_id
+    AND issue.status IN ('approved', 'sending');
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'CRM lead not found' USING ERRCODE = 'P0002';
+    RAISE EXCEPTION 'newsletter issue is not active' USING ERRCODE = '55000';
   END IF;
+
+  SELECT lead.* INTO v_lead
+  FROM crm_leads AS lead
+  JOIN crm_projects AS project ON project.id = lead.project_id
+  JOIN newsletter_issues AS issue ON issue.id = v_run.issue_id
+  WHERE lead.id = p_lead_id
+    AND project.is_active = TRUE
+    AND issue.audience_project_slug = project.slug
+    AND lead.status <> 'lost'
+    AND lead.opt_out_at IS NULL
+  FOR UPDATE OF lead;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'lead is not active in the newsletter audience'
+      USING ERRCODE = '55000';
+  END IF;
+
   IF v_recipient_key IS DISTINCT FROM CASE
     WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) = 8
       THEN '+65' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
@@ -596,63 +635,229 @@ BEGIN
       THEN '+' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
     ELSE NULL
   END THEN
-    RAISE EXCEPTION 'lead recipient changed during attempt start; retry'
+    RAISE EXCEPTION 'lead recipient changed while queueing; retry'
       USING ERRCODE = '40001';
   END IF;
 
-  IF v_lead.opt_out_at IS NOT NULL OR EXISTS (
-    SELECT 1
-    FROM newsletter_suppressions
-    WHERE recipient_key = v_recipient_key
+  IF EXISTS (
+    SELECT 1 FROM newsletter_suppressions WHERE recipient_key = v_recipient_key
   ) THEN
     RAISE EXCEPTION 'recipient is suppressed' USING ERRCODE = '42501';
   END IF;
 
-  SELECT
-    count(*)::INTEGER,
-    COALESCE(max(attempt_no), 0) + 1
-  INTO v_recipient_attempt_count, v_attempt_no
+  SELECT count(*)::INTEGER INTO v_recipient_attempt_count
   FROM newsletter_sends
   WHERE issue_id = v_run.issue_id
     AND recipient_key = v_recipient_key
     AND is_test = FALSE
     AND attempt_started_at IS NOT NULL;
-
-  IF v_recipient_attempt_count >= 3 OR v_attempt_no > 3 THEN
+  IF v_recipient_attempt_count >= 3 THEN
     RAISE EXCEPTION 'recipient has consumed all three provider submissions for this issue'
+      USING ERRCODE = '54000';
+  END IF;
+
+  SELECT * INTO v_send
+  FROM newsletter_sends
+  WHERE issue_id = v_run.issue_id
+    AND recipient_key = v_recipient_key
+    AND is_test = FALSE
+    AND status IN ('queued', 'sending', 'sent', 'unknown')
+  FOR UPDATE;
+  IF FOUND THEN
+    IF v_send.run_id = v_run.id AND v_send.status = 'queued' THEN
+      RETURN v_send;
+    END IF;
+    RAISE EXCEPTION 'recipient already has an active newsletter attempt'
+      USING ERRCODE = '23505';
+  END IF;
+
+  SELECT count(*)::INTEGER INTO v_committed_count
+  FROM newsletter_sends
+  WHERE run_id = v_run.id
+    AND is_test = FALSE
+    AND (attempt_started_at IS NOT NULL OR status = 'queued');
+  IF v_committed_count >= 5 THEN
+    RAISE EXCEPTION 'newsletter run already has five persisted or started attempts'
       USING ERRCODE = '54000';
   END IF;
 
   INSERT INTO newsletter_sends (
     issue_id,
     run_id,
-    slot_no,
     lead_id,
     recipient_name,
     recipient_key,
     attempt_no,
     phone,
     rendered_body,
+    valuation_snapshot,
     status,
-    attempt_started_at,
     retryable,
     is_test
   )
   VALUES (
     v_run.issue_id,
     v_run.id,
-    p_slot_no,
     v_lead.id,
     v_lead.name,
     v_recipient_key,
-    v_attempt_no,
+    NULL,
     v_recipient_key,
     p_rendered_body,
-    'sending',
-    clock_timestamp(),
+    p_valuation_snapshot,
+    'queued',
     TRUE,
     FALSE
   )
+  RETURNING * INTO v_send;
+
+  UPDATE newsletter_runs
+  SET selected_count = v_committed_count + 1,
+      last_heartbeat_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_run.id;
+
+  RETURN v_send;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS start_newsletter_attempt(UUID, UUID, INTEGER, TEXT);
+DROP FUNCTION IF EXISTS start_newsletter_attempt(UUID, INTEGER, TEXT);
+
+CREATE OR REPLACE FUNCTION start_newsletter_attempt(
+  p_send_id UUID,
+  p_slot_no INTEGER,
+  p_claim_token TEXT
+)
+RETURNS newsletter_sends
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_sgt_date DATE := (clock_timestamp() AT TIME ZONE 'Asia/Singapore')::DATE;
+  v_identity newsletter_sends%ROWTYPE;
+  v_send newsletter_sends%ROWTYPE;
+  v_run newsletter_runs%ROWTYPE;
+  v_lead crm_leads%ROWTYPE;
+  v_day_attempt_count INTEGER;
+  v_recipient_attempt_count INTEGER;
+  v_attempt_no INTEGER;
+BEGIN
+  IF p_send_id IS NULL THEN
+    RAISE EXCEPTION 'send id is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_slot_no IS NULL OR p_slot_no NOT BETWEEN 1 AND 5 THEN
+    RAISE EXCEPTION 'slot number must be between 1 and 5' USING ERRCODE = '22023';
+  END IF;
+  IF p_claim_token IS NULL OR btrim(p_claim_token) = '' THEN
+    RAISE EXCEPTION 'claim token is required' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_identity
+  FROM public.newsletter_sends
+  WHERE id = p_send_id;
+  IF NOT FOUND OR v_identity.run_id IS NULL OR v_identity.recipient_key IS NULL THEN
+    RAISE EXCEPTION 'queued newsletter attempt not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Lock order: SGT day -> recipient -> run -> lead -> send.
+  PERFORM pg_advisory_xact_lock(
+    hashtext('newsletter_sgt_day'),
+    v_sgt_date - DATE '2000-01-01'
+  );
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_recipient:' || v_identity.recipient_key));
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_run:' || v_identity.run_id::TEXT));
+
+  SELECT * INTO v_run
+  FROM newsletter_runs
+  WHERE id = v_identity.run_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter run not found' USING ERRCODE = 'P0002';
+  END IF;
+  IF v_run.status <> 'running'
+     OR v_run.run_date <> v_sgt_date
+     OR v_run.claim_token IS DISTINCT FROM btrim(p_claim_token) THEN
+    RAISE EXCEPTION 'newsletter run claim is not valid for start'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF v_identity.lead_id IS NULL THEN
+    RAISE EXCEPTION 'queued attempt no longer has an active CRM lead'
+      USING ERRCODE = '55000';
+  END IF;
+  SELECT * INTO v_lead
+  FROM crm_leads
+  WHERE id = v_identity.lead_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_lead.status = 'lost' OR v_lead.opt_out_at IS NOT NULL THEN
+    RAISE EXCEPTION 'queued attempt lead is no longer sendable'
+      USING ERRCODE = '55000';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_send:' || p_send_id::TEXT));
+  SELECT * INTO v_send
+  FROM newsletter_sends
+  WHERE id = p_send_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_send.status <> 'queued' OR v_send.attempt_started_at IS NOT NULL THEN
+    RAISE EXCEPTION 'newsletter attempt is not queued'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF v_send.run_id IS DISTINCT FROM v_run.id
+     OR v_send.issue_id IS DISTINCT FROM v_run.issue_id
+     OR v_send.recipient_key IS DISTINCT FROM CASE
+       WHEN length(regexp_replace(v_send.phone, '[^0-9]', '', 'g')) = 8
+         THEN '+65' || regexp_replace(v_send.phone, '[^0-9]', '', 'g')
+       WHEN length(regexp_replace(v_send.phone, '[^0-9]', '', 'g')) = 10
+            AND left(regexp_replace(v_send.phone, '[^0-9]', '', 'g'), 2) = '65'
+         THEN '+' || regexp_replace(v_send.phone, '[^0-9]', '', 'g')
+       ELSE NULL
+     END THEN
+    RAISE EXCEPTION 'queued attempt identity is invalid' USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM newsletter_suppressions WHERE recipient_key = v_send.recipient_key
+  ) THEN
+    RAISE EXCEPTION 'recipient is suppressed' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT count(*)::INTEGER INTO v_day_attempt_count
+  FROM newsletter_sends AS send
+  JOIN newsletter_runs AS run ON run.id = send.run_id
+  WHERE run.run_date = v_sgt_date
+    AND send.is_test = FALSE
+    AND send.attempt_started_at IS NOT NULL;
+  IF v_day_attempt_count >= 5 OR v_run.attempted_count >= 5 THEN
+    RAISE EXCEPTION 'SGT day has consumed all five provider submissions'
+      USING ERRCODE = '54000';
+  END IF;
+
+  SELECT count(*)::INTEGER, COALESCE(max(attempt_no), 0) + 1
+  INTO v_recipient_attempt_count, v_attempt_no
+  FROM newsletter_sends
+  WHERE issue_id = v_send.issue_id
+    AND recipient_key = v_send.recipient_key
+    AND is_test = FALSE
+    AND attempt_started_at IS NOT NULL;
+  IF v_recipient_attempt_count >= 3 OR v_attempt_no > 3 THEN
+    RAISE EXCEPTION 'recipient has consumed all three provider submissions for this issue'
+      USING ERRCODE = '54000';
+  END IF;
+
+  PERFORM set_config('app.newsletter_start_send_id', v_send.id::TEXT, TRUE);
+
+  UPDATE newsletter_sends
+  SET status = 'sending',
+      slot_no = p_slot_no,
+      attempt_no = v_attempt_no,
+      attempt_started_at = clock_timestamp(),
+      retryable = TRUE,
+      updated_at = clock_timestamp()
+  WHERE id = v_send.id
   RETURNING * INTO v_send;
 
   RETURN v_send;
@@ -787,6 +992,107 @@ BEGIN
   SET sent_count = sent_count + CASE WHEN p_provider_outcome = 'sent' THEN 1 ELSE 0 END,
       failed_count = failed_count + CASE WHEN p_provider_outcome = 'failed' THEN 1 ELSE 0 END,
       unknown_count = unknown_count + CASE WHEN p_provider_outcome = 'unknown' THEN 1 ELSE 0 END,
+      last_heartbeat_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_send.run_id;
+
+  RETURN v_send;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION record_accepted_newsletter_recovery(
+  p_send_id UUID,
+  p_provider_message_id TEXT,
+  p_error TEXT
+)
+RETURNS newsletter_sends
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_identity newsletter_sends%ROWTYPE;
+  v_send newsletter_sends%ROWTYPE;
+  v_run newsletter_runs%ROWTYPE;
+  v_locked_lead_id UUID;
+BEGIN
+  IF p_send_id IS NULL THEN
+    RAISE EXCEPTION 'send id is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_message_id IS NULL OR btrim(p_provider_message_id) = '' THEN
+    RAISE EXCEPTION 'accepted provider message id is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_error IS NULL OR btrim(p_error) = '' THEN
+    RAISE EXCEPTION 'accepted recovery error is required' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_identity
+  FROM public.newsletter_sends
+  WHERE id = p_send_id;
+  IF NOT FOUND OR v_identity.run_id IS NULL OR v_identity.recipient_key IS NULL THEN
+    RAISE EXCEPTION 'newsletter attempt not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Lock order: SGT day -> recipient -> run -> lead -> send.
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_recipient:' || v_identity.recipient_key));
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_run:' || v_identity.run_id::TEXT));
+
+  SELECT * INTO v_run
+  FROM newsletter_runs
+  WHERE id = v_identity.run_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter run not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_identity.lead_id IS NOT NULL THEN
+    SELECT id INTO v_locked_lead_id
+    FROM crm_leads
+    WHERE id = v_identity.lead_id
+    FOR UPDATE;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_send:' || p_send_id::TEXT));
+  SELECT * INTO v_send
+  FROM newsletter_sends
+  WHERE id = p_send_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter attempt not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_send.status = 'unknown' THEN
+    IF v_send.provider_outcome = 'sent'
+       AND v_send.waha_message_id = btrim(p_provider_message_id)
+       AND v_send.error = btrim(p_error)
+       AND v_send.crm_sync_error = btrim(p_error)
+       AND v_send.retryable = FALSE THEN
+      RETURN v_send;
+    END IF;
+    RAISE EXCEPTION 'conflicting accepted recovery replay'
+      USING ERRCODE = '55000';
+  END IF;
+  IF v_send.status <> 'sending' THEN
+    RAISE EXCEPTION 'accepted recovery requires a sending attempt'
+      USING ERRCODE = '55000';
+  END IF;
+
+  UPDATE newsletter_sends
+  SET status = 'unknown',
+      provider_outcome = 'sent',
+      waha_message_id = btrim(p_provider_message_id),
+      error = btrim(p_error),
+      crm_sync_error = btrim(p_error),
+      retryable = FALSE,
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_send.id
+  RETURNING * INTO v_send;
+
+  UPDATE newsletter_runs
+  SET status = 'failed',
+      blocker = 'accepted send requires CRM finalization recovery',
+      unknown_count = unknown_count + 1,
       last_heartbeat_at = clock_timestamp(),
       updated_at = clock_timestamp()
   WHERE id = v_send.run_id;
@@ -1103,14 +1409,18 @@ REVOKE ALL ON FUNCTION enforce_newsletter_attempt_append_only() FROM PUBLIC;
 REVOKE ALL ON FUNCTION enforce_newsletter_attempt_submission() FROM PUBLIC;
 REVOKE ALL ON FUNCTION enforce_newsletter_suppression_event_append_only() FROM PUBLIC;
 REVOKE ALL ON FUNCTION claim_newsletter_run(TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, UUID, INTEGER, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
+REVOKE ALL ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION claim_newsletter_run(TEXT) TO service_role;
-GRANT EXECUTE ON FUNCTION start_newsletter_attempt(UUID, UUID, INTEGER, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION queue_newsletter_attempt(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;
+GRANT EXECUTE ON FUNCTION start_newsletter_attempt(UUID, INTEGER, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
+GRANT EXECUTE ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;
 REVOKE ALL ON TABLE newsletter_suppression_events FROM PUBLIC, anon, authenticated, service_role;

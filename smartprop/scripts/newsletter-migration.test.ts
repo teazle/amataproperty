@@ -45,13 +45,61 @@ describe('newsletter migration contract', () => {
   test('defines atomic run, attempt, STOP, finalization and resolution RPCs', () => {
     for (const name of [
       'claim_newsletter_run',
+      'queue_newsletter_attempt',
       'start_newsletter_attempt',
       'finalize_newsletter_attempt',
+      'record_accepted_newsletter_recovery',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown',
     ]) {
       expect(sql).toContain(`FUNCTION ${name}`);
     }
+  });
+
+  test('persists selected candidates before assigning provider slots', () => {
+    const queue = functionSql('queue_newsletter_attempt', 'start_newsletter_attempt');
+    expect(queue).toContain('p_claim_token TEXT');
+    expect(queue).toContain('p_valuation_snapshot JSONB');
+    expect(queue).toMatch(/INSERT INTO newsletter_sends[\s\S]+valuation_snapshot[\s\S]+status[\s\S]+'queued'/i);
+    expect(queue).toMatch(/v_run\.claim_token IS DISTINCT FROM btrim\(p_claim_token\)/i);
+    expect(queue).toMatch(/issue\.audience_project_slug = project\.slug/i);
+    expect(queue).toMatch(/lead\.status <> 'lost'/i);
+    expect(queue).toMatch(/attempt_started_at IS NOT NULL/i);
+    const queuedInsertColumns = queue.match(/INSERT INTO newsletter_sends\s*\(([^)]+)\)/i)?.[1] || '';
+    expect(queuedInsertColumns).not.toContain('slot_no');
+    expect(queuedInsertColumns).not.toContain('attempt_started_at');
+  });
+
+  test('starts only a persisted queued row with the current claim token', () => {
+    expect(sql).toContain(
+      'DROP FUNCTION IF EXISTS start_newsletter_attempt(UUID, UUID, INTEGER, TEXT);',
+    );
+    const start = functionSql('start_newsletter_attempt', 'finalize_newsletter_attempt');
+    expect(start).toContain('p_send_id UUID');
+    expect(start).toContain('p_slot_no INTEGER');
+    expect(start).toContain('p_claim_token TEXT');
+    expect(start).toMatch(/v_send\.status <> 'queued'/i);
+    expect(start).toMatch(/v_run\.claim_token IS DISTINCT FROM btrim\(p_claim_token\)/i);
+    expect(start).toMatch(/SET status = 'sending'[\s\S]+slot_no = p_slot_no[\s\S]+attempt_started_at = clock_timestamp\(\)/i);
+  });
+
+  test('transfers only stale claims after fifteen minutes', () => {
+    const claim = functionSql('claim_newsletter_run', 'queue_newsletter_attempt');
+    expect(claim).toMatch(/last_heartbeat_at\s*>=\s*clock_timestamp\(\)\s*-\s*INTERVAL '15 minutes'/i);
+    expect(claim).toMatch(/SET claim_token = btrim\(p_claim_token\)[\s\S]+last_heartbeat_at = clock_timestamp\(\)/i);
+  });
+
+  test('persists accepted recovery without mutating CRM', () => {
+    const recovery = functionSql(
+      'record_accepted_newsletter_recovery',
+      'record_newsletter_opt_out',
+    );
+    expect(recovery).toContain('p_provider_message_id TEXT');
+    expect(recovery).toMatch(/SET status = 'unknown'[\s\S]+provider_outcome = 'sent'[\s\S]+retryable = FALSE/i);
+    expect(recovery).toContain('crm_sync_error = btrim(p_error)');
+    expect(recovery).toMatch(/UPDATE newsletter_runs[\s\S]+SET status = 'failed'[\s\S]+unknown_count = unknown_count \+ 1/i);
+    expect(recovery).not.toContain('UPDATE crm_leads');
+    expect(recovery).not.toContain('INSERT INTO crm_lead_activities');
   });
 
   test('gates provider submissions to the current SGT day and five globally', () => {
@@ -180,6 +228,11 @@ describe('newsletter migration contract', () => {
       'ASSERT: provider submission negative transitions',
       'ASSERT: STOP event ledger A-B-A replay',
       'ASSERT: suppression event least privilege',
+      'ASSERT: persisted queue restart safety',
+      'ASSERT: queue suppression before start',
+      'ASSERT: stale claim takeover',
+      'ASSERT: accepted recovery persistence',
+      'ASSERT: Task 1.1 secured RPC grants',
     ]) {
       expect(assertions).toContain(marker);
     }

@@ -28,7 +28,7 @@ The active campaign is the oldest `approved` or `sending` newsletter issue. Its 
 
 ### Daily operation
 
-A systemd timer starts one runner daily at 10:30 SGT. The runner:
+A systemd timer starts one runner daily at 09:30 SGT. The runner:
 
 1. Resolves the approved campaign and verifies WAHA is `WORKING` before any lead send.
 2. Creates or resumes the one global run for the Singapore date.
@@ -60,9 +60,21 @@ Selection order is deterministic: failed recipients that are safe to retry first
 
 The current CRM records identify the project but do not contain a reliable unit-to-valuation key. The runner must not pretend it has a unit-specific match.
 
-For an audience project, it resolves fresh `propnex_valuations` rows whose `project_name` matches the CRM project title. It creates a project-level snapshot using the minimum supported low value, median supported midpoint, maximum supported high value, total comparable count, and newest `as_of` date. The rendered copy remains an indicative project/property update. The exact snapshot used is stored on `newsletter_sends`.
+For an audience project, it resolves fresh `propnex_valuations` rows whose
+canonical `project_slug` equals `newsletter_issues.audience_project_slug` and
+whose evidence status and contract version are accepted by the current
+valuation workflow. It does not rely on fuzzy display-title matching or
+grandfather legacy cache rows. It creates a project-level snapshot using the
+minimum supported low value, median supported midpoint, maximum supported high
+value, total comparable count, and newest `as_of` date. The rendered copy
+remains an indicative project/property update. The exact snapshot and evidence
+item identifier used are stored on `newsletter_sends`.
 
-Fresh means `expires_at > now()` and at least a valid range or midpoint exists. If no supported current valuation exists, the lead is skipped and no WhatsApp message is sent.
+Fresh means `expires_at > now()`, confidence is `medium` or `high`, the current
+evidence contract is accepted, and at least a valid range or midpoint exists.
+If no supported current valuation exists, the lead is skipped and no WhatsApp
+message is sent. A campaign issue is not marked `sent` while otherwise eligible
+audience leads remain blocked only by missing or expired valuation evidence.
 
 ### Idempotency and delivery certainty
 
@@ -115,7 +127,7 @@ The runner supports `--dry-run`, dry-run-only `--date yyyy-mm-dd`, `--json`, an 
 
 The service writes structured logs and a text report artifact under `/opt/smartprop/logs/newsletter/`. Health verification must expose the latest run date/status, counts, and WAHA readiness. A `verify-newsletter-campaign.sh` script probes the timer, service, database run freshness, and WAHA state without sending messages.
 
-The timer starts at 02:30 UTC and the oneshot service retries recoverable blockers every 15 minutes until the SGT-day cutoff. It uses `flock`, bounded memory/runtime, `UMask=0077`, persistent logs, and a kill switch `SMARTPROP_NEWSLETTER_ENABLED=1`. The timer is installed but remains disabled until WAHA is relinked and a controlled ledgered send to the previously approved test number succeeds.
+The timer starts at 01:30 UTC and the oneshot service retries recoverable blockers every 15 minutes until the 10:30 SGT cutoff. It uses `flock`, bounded memory/runtime, `UMask=0077`, persistent logs, and a kill switch `SMARTPROP_NEWSLETTER_ENABLED=1`. The timer is installed but remains disabled until WAHA is relinked and a controlled ledgered send to the previously approved test number succeeds.
 
 ## Alternatives Considered
 
@@ -135,7 +147,10 @@ Selected. It uses the existing database and composer, keeps Chloe's workflow int
 
 - WAHA not ready: record a blocked run, select/send no leads, return a recoverable failure, and allow the same date to resume after relink.
 - No approved issue: exit nonzero with a clear operator error and no writes except a local log.
-- No eligible leads: complete the run with zero selected and mark the issue `sent` only when no queued, failed-retryable, or unknown rows remain.
+- No eligible leads: complete the daily run with zero selected. Mark the issue
+  `sent` only when no queued, failed-retryable, or unknown rows remain and no
+  otherwise eligible audience lead remains blocked only by missing or expired
+  valuation evidence.
 - Provider definite rejection: mark `failed`, continue with the already selected batch, and report it.
 - Provider ambiguous timeout: mark `unknown`, continue, and never auto-retry that recipient.
 - CRM finalization after an accepted send is one atomic function that records provider acceptance, conditionally changes `new -> contacted`, updates `last_activity_at`, and inserts the CRM activity. If it fails, write a root-only recovery record and stop the batch so CRM drift cannot compound.

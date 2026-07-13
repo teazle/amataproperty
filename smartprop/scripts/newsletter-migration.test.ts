@@ -73,6 +73,12 @@ describe('newsletter migration contract', () => {
     expect(queuedInsertColumns).not.toContain('attempt_started_at');
   });
 
+  test('parenthesizes the CASE expression used by IS DISTINCT FROM in PL/pgSQL', () => {
+    const queue = functionSql('queue_newsletter_attempt', 'start_newsletter_attempt');
+    expect(queue).toMatch(/IS DISTINCT FROM \(CASE[\s\S]+END\) THEN/i);
+    expect(sql).not.toMatch(/IS DISTINCT FROM CASE/i);
+  });
+
   test('starts only a persisted queued row with the current claim token', () => {
     expect(sql).toContain(
       'DROP FUNCTION IF EXISTS start_newsletter_attempt(UUID, UUID, INTEGER, TEXT);',
@@ -231,6 +237,22 @@ describe('newsletter migration contract', () => {
   )`);
   });
 
+  test('reclassifies unsubmitted legacy real failures before provider backfill', () => {
+    const legacyFailureReclassification = `UPDATE newsletter_sends
+SET
+  status = 'skipped',
+  error_code = COALESCE(error_code, 'legacy_pre_campaign_no_provider_evidence')
+WHERE status = 'failed'
+  AND is_test = FALSE
+  AND sent_at IS NULL
+  AND waha_message_id IS NULL;`;
+
+    expect(sql).toContain(legacyFailureReclassification);
+    expect(sql.indexOf(legacyFailureReclassification)).toBeLessThan(sql.indexOf('WITH backfill AS ('));
+    expect(sql).toContain('ADD CONSTRAINT newsletter_sends_submission_started_check');
+    expect(sql).toContain('ADD CONSTRAINT newsletter_sends_submission_identity_check');
+  });
+
   test('allows only FK-driven lead nulling through append-only guard', () => {
     const trigger = functionSql('enforce_newsletter_attempt_append_only', 'enforce_newsletter_attempt_submission');
     expect(trigger).toMatch(/OLD\.lead_id IS NOT NULL[\s\S]+NEW\.lead_id IS NULL/i);
@@ -275,6 +297,19 @@ describe('newsletter migration contract', () => {
       'FROM newsletter_suppressions',
       'RETURN v_suppression',
     ]);
+  });
+
+  test('normalizes local CRM phones before matching every STOP duplicate', () => {
+    const stop = functionSql('record_newsletter_opt_out', 'resolve_newsletter_unknown');
+    expect(stop).toMatch(
+      /WHEN length\(regexp_replace\(lead\.phone,[\s\S]+\)\) = 8[\s\S]+THEN '\+65' \|\| regexp_replace\(lead\.phone,[\s\S]+END = v_recipient_key/i,
+    );
+    expect(stop).toMatch(
+      /WHEN length\(regexp_replace\(phone,[\s\S]+\)\) = 8[\s\S]+THEN '\+65' \|\| regexp_replace\(phone,[\s\S]+END = v_recipient_key/i,
+    );
+    expect(stop).not.toMatch(
+      /regexp_replace\((?:lead\.)?phone, '[^']+', '', 'g'\) = regexp_replace\(v_recipient_key/i,
+    );
   });
 
   test('keeps suppression event writes owner-only and service-role read-only', () => {

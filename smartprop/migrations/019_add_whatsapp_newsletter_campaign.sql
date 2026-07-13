@@ -127,6 +127,15 @@ ALTER TABLE newsletter_sends
   ADD CONSTRAINT newsletter_sends_unknown_retryable_check
     CHECK (status <> 'unknown' OR retryable = FALSE);
 
+UPDATE newsletter_sends
+SET
+  status = 'skipped',
+  error_code = COALESCE(error_code, 'legacy_pre_campaign_no_provider_evidence')
+WHERE status = 'failed'
+  AND is_test = FALSE
+  AND sent_at IS NULL
+  AND waha_message_id IS NULL;
+
 WITH backfill AS (
   SELECT
     send.id,
@@ -627,14 +636,14 @@ BEGIN
       USING ERRCODE = '55000';
   END IF;
 
-  IF v_recipient_key IS DISTINCT FROM CASE
+  IF v_recipient_key IS DISTINCT FROM (CASE
     WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) = 8
       THEN '+65' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
     WHEN length(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')) = 10
          AND left(regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g'), 2) = '65'
       THEN '+' || regexp_replace(COALESCE(v_lead.phone_e164, v_lead.phone), '[^0-9]', '', 'g')
     ELSE NULL
-  END THEN
+  END) THEN
     RAISE EXCEPTION 'lead recipient changed while queueing; retry'
       USING ERRCODE = '40001';
   END IF;
@@ -835,14 +844,14 @@ BEGIN
 
   IF v_send.run_id IS DISTINCT FROM v_run.id
      OR v_send.issue_id IS DISTINCT FROM v_run.issue_id
-     OR v_send.recipient_key IS DISTINCT FROM CASE
+     OR v_send.recipient_key IS DISTINCT FROM (CASE
        WHEN length(regexp_replace(v_send.phone, '[^0-9]', '', 'g')) = 8
          THEN '+65' || regexp_replace(v_send.phone, '[^0-9]', '', 'g')
        WHEN length(regexp_replace(v_send.phone, '[^0-9]', '', 'g')) = 10
             AND left(regexp_replace(v_send.phone, '[^0-9]', '', 'g'), 2) = '65'
          THEN '+' || regexp_replace(v_send.phone, '[^0-9]', '', 'g')
        ELSE NULL
-     END THEN
+     END) THEN
     RAISE EXCEPTION 'queued attempt identity is invalid' USING ERRCODE = '55000';
   END IF;
 
@@ -1626,7 +1635,13 @@ BEGIN
   WHERE lead.phone_e164 = v_recipient_key
      OR (
        lead.phone_e164 IS NULL
-       AND regexp_replace(lead.phone, '[^0-9]', '', 'g') = regexp_replace(v_recipient_key, '[^0-9]', '', 'g')
+       AND CASE
+         WHEN length(regexp_replace(lead.phone, '[^0-9]', '', 'g')) = 8
+           THEN '+65' || regexp_replace(lead.phone, '[^0-9]', '', 'g')
+         WHEN length(regexp_replace(lead.phone, '[^0-9]', '', 'g')) BETWEEN 8 AND 15
+           THEN '+' || regexp_replace(lead.phone, '[^0-9]', '', 'g')
+         ELSE NULL
+       END = v_recipient_key
      )
   ORDER BY lead.id
   FOR UPDATE;
@@ -1647,7 +1662,13 @@ BEGIN
   WHERE phone_e164 = v_recipient_key
      OR (
        phone_e164 IS NULL
-       AND regexp_replace(phone, '[^0-9]', '', 'g') = regexp_replace(v_recipient_key, '[^0-9]', '', 'g')
+       AND CASE
+         WHEN length(regexp_replace(phone, '[^0-9]', '', 'g')) = 8
+           THEN '+65' || regexp_replace(phone, '[^0-9]', '', 'g')
+         WHEN length(regexp_replace(phone, '[^0-9]', '', 'g')) BETWEEN 8 AND 15
+           THEN '+' || regexp_replace(phone, '[^0-9]', '', 'g')
+         ELSE NULL
+       END = v_recipient_key
      );
 
   WITH cancelled AS (

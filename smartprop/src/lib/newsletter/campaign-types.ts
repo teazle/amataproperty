@@ -22,3 +22,10 @@ export type CampaignTransportResult =
   | { outcome: 'rejected'; retryable: boolean; error: string; statusCode?: number }
   | { outcome: 'unknown'; error: string }
   | { outcome: 'blocked'; error: string };
+
+export function countEffectiveSelections(
+  attempts: Array<{ status: string; slotNo: number | null }>,
+): number {
+  return attempts.filter((attempt) =>
+    !(['opted_out', 'skipped'].includes(attempt.status) && attempt.slotNo === null)).length;
+}

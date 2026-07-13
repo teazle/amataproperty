@@ -51,6 +51,7 @@ describe('newsletter migration contract', () => {
       'record_accepted_newsletter_recovery',
       'create_newsletter_test_send',
       'finalize_newsletter_test_send',
+      'finalize_newsletter_operator_report',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown',
     ]) {
@@ -106,6 +107,29 @@ describe('newsletter migration contract', () => {
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION recover_stale_newsletter_operator_reports');
   });
 
+  test('atomically finalizes operator reports and persists terminal report errors', () => {
+    const finalize = functionSql(
+      'finalize_newsletter_operator_report',
+      'recover_stale_newsletter_operator_reports',
+    );
+    expect(finalize).toContain('SECURITY DEFINER');
+    expect(finalize).toContain('SET search_path = public');
+    expectOrdered(finalize, [
+      "hashtext('newsletter_run:' || v_identity.run_id::TEXT)",
+      'SELECT * INTO v_run\n  FROM newsletter_runs',
+      "hashtext('newsletter_operator_report:' || p_report_id::TEXT)",
+      'SELECT * INTO v_report\n  FROM newsletter_operator_reports',
+    ]);
+    expect(finalize).toMatch(/SELECT \* INTO v_run[\s\S]+FROM newsletter_runs[\s\S]+FOR UPDATE/i);
+    expect(finalize).toMatch(/SELECT \* INTO v_report[\s\S]+FROM newsletter_operator_reports[\s\S]+FOR UPDATE/i);
+    expect(finalize).toMatch(/v_report\.status IN \('sent', 'failed', 'unknown'\)[\s\S]+RETURN v_report[\s\S]+conflicting operator report finalization replay/i);
+    expect(finalize).toMatch(/UPDATE newsletter_operator_reports[\s\S]+RETURNING \* INTO v_report/i);
+    expect(finalize).toMatch(/IF p_provider_outcome <> 'sent'[\s\S]+UPDATE newsletter_runs[\s\S]+report_error = v_report_error/i);
+    expect(finalize).not.toMatch(/report_error\s*=\s*NULL/i);
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION finalize_newsletter_operator_report');
+    expect(sql).toContain('REVOKE ALL ON FUNCTION finalize_newsletter_operator_report');
+  });
+
   test('transfers only stale claims after fifteen minutes', () => {
     const claim = functionSql('claim_newsletter_run', 'queue_newsletter_attempt');
     expect(claim).toMatch(/last_heartbeat_at\s*>=\s*clock_timestamp\(\)\s*-\s*INTERVAL '15 minutes'/i);
@@ -144,7 +168,7 @@ describe('newsletter migration contract', () => {
     const createTest = functionSql('create_newsletter_test_send', 'finalize_newsletter_test_send');
     const finalizeTest = functionSql(
       'finalize_newsletter_test_send',
-      'recover_stale_newsletter_operator_reports',
+      'finalize_newsletter_operator_report',
     );
     for (const section of [createTest, finalizeTest]) {
       expect(section).toContain('SECURITY DEFINER');
@@ -299,6 +323,8 @@ describe('newsletter migration contract', () => {
       'ASSERT: accepted recovery auto-repairs run',
       'ASSERT: queued STOP release and replacement capacity',
       'ASSERT: stale operator report recovery is atomic',
+      'ASSERT: STOP replacement effective selected count',
+      'ASSERT: operator report finalization is atomic',
     ]) {
       expect(assertions).toContain(marker);
     }

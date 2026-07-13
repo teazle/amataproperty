@@ -284,11 +284,14 @@ describe('runNewsletterCampaign', () => {
     const store = new FakeStore();
     store.suppressed.add('lead-2');
     const posts: string[] = [];
-    await runNewsletterCampaign(dependencies(store, {
+    const result = await runNewsletterCampaign(dependencies(store, {
       transport: async (to: string) => { posts.push(to); return { outcome: 'accepted', messageId: to }; },
     }), options);
 
     expect(posts).toHaveLength(5);
+    expect(store.attempts).toHaveLength(6);
+    expect(result.selectedCount).toBe(5);
+    expect(result.attemptedCount).toBe(5);
     expect(store.calls).toContain('start:lead-2:2');
     expect(store.calls).toContain('start:lead-6:5');
     expect(posts).not.toContain(candidate(2).recipientKey);
@@ -454,6 +457,7 @@ class RecordingQuery implements PromiseLike<{ data: unknown[] | null; error: nul
     private readonly table: string,
     private readonly calls: string[],
     private readonly rows: Record<string, unknown>[] = [],
+    private readonly updates: Array<{ table: string; value: Record<string, unknown> }> = [],
   ) {}
   private record(name: string, value?: unknown) { this.calls.push(`${this.table}.${name}${value === undefined ? '' : `:${String(value)}`}`); return this; }
   select() { return this.record('select'); }
@@ -464,7 +468,7 @@ class RecordingQuery implements PromiseLike<{ data: unknown[] | null; error: nul
   order(name: string) { return this.record('order', name); }
   range(from: number, to: number) { return this.record('range', `${from}-${to}`); }
   limit(value: number) { return this.record('limit', value); }
-  update() { return this.record('update'); }
+  update(value: Record<string, unknown>) { this.updates.push({ table: this.table, value }); return this.record('update'); }
   insert() { return this.record('insert'); }
   maybeSingle() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
   single() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
@@ -479,11 +483,13 @@ class RecordingQuery implements PromiseLike<{ data: unknown[] | null; error: nul
 function recordingClient(tableRows: Record<string, Record<string, unknown>[]> = {}) {
   const calls: string[] = [];
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const updates: Array<{ table: string; value: Record<string, unknown> }> = [];
   return {
     calls,
     rpcCalls,
+    updates,
     client: {
-      from(table: string) { return new RecordingQuery(table, calls, tableRows[table] || []); },
+      from(table: string) { return new RecordingQuery(table, calls, tableRows[table] || [], updates); },
       async rpc(name: string, args: Record<string, unknown>) {
         rpcCalls.push({ name, args });
         return { data: tableRows[`rpc:${name}`]?.[0] || null, error: null };
@@ -553,6 +559,13 @@ describe('campaign store RPC adapter', () => {
       'newsletter_sends.order:attempt_started_at',
       'newsletter_sends.order:id',
     ]);
+    expect(recording.calls.filter((call) => call.startsWith('crm_leads.order:'))).toEqual([
+      'crm_leads.order:created_at',
+      'crm_leads.order:id',
+    ]);
+    expect(recording.calls.filter((call) => call.startsWith('newsletter_suppressions.order:'))).toEqual([
+      'newsletter_suppressions.order:recipient_key',
+    ]);
     expect(recording.calls.filter((call) => call.startsWith('propnex_valuations.order:'))).toEqual([
       'propnex_valuations.order:project_name',
       'propnex_valuations.order:expires_at',
@@ -568,11 +581,49 @@ describe('campaign store RPC adapter', () => {
     expect(recording.calls).toContain('newsletter_sends.lt:attempt_started_at=2026-07-13T03:45:00.000Z');
   });
 
-  test('report failure writes newsletter_runs.report_error', async () => {
-    const recording = recordingClient({ newsletter_operator_reports: [{ id: 'report-1' }] });
+  test('finalizes operator reports through the secured atomic RPC', async () => {
+    const recording = recordingClient({
+      'rpc:finalize_newsletter_operator_report': [{ id: 'report-1', status: 'unknown' }],
+    });
     const store = createCampaignStore(recording.client as never);
     await store.finalizeReport('report-1', { outcome: 'unknown', error: 'report timeout' });
-    expect(recording.calls).toContain('newsletter_runs.update');
+    expect(recording.rpcCalls).toContainEqual({
+      name: 'finalize_newsletter_operator_report',
+      args: {
+        p_report_id: 'report-1',
+        p_provider_outcome: 'unknown',
+        p_provider_message_id: null,
+        p_error: 'report timeout',
+      },
+    });
+    expect(recording.calls).not.toContain('newsletter_operator_reports.update');
+    expect(recording.calls).not.toContain('newsletter_runs.update');
+  });
+
+  test('finishRun excludes cancelled unused audit rows from selected_count', async () => {
+    const rows = [1, 2, 3, 4, 5].map((slot) => ({
+      ...queuedRow,
+      id: `send-${slot}`,
+      slot_no: slot,
+      status: 'sent',
+      attempt_no: 1,
+    }));
+    rows.push({ ...queuedRow, id: 'stopped', status: 'opted_out', retryable: false } as typeof queuedRow);
+    const recording = recordingClient({
+      newsletter_sends: rows,
+      newsletter_runs: [{
+        id: 'run-1', run_date: '2026-07-13', issue_id: 'issue-1', status: 'completed',
+        selected_count: 5, attempted_count: 5, sent_count: 5, failed_count: 0,
+        unknown_count: 0, skipped_count: 1, blocker: null, report_error: null,
+      }],
+    });
+    const store = createCampaignStore(recording.client as never);
+    await store.finishRun('run-1', null);
+    expect(recording.updates.find((entry) => entry.table === 'newsletter_runs')?.value).toMatchObject({
+      selected_count: 5,
+      attempted_count: 5,
+      skipped_count: 1,
+    });
   });
 
   test('uses the secured atomic stale-report recovery RPC', async () => {

@@ -1348,6 +1348,116 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION finalize_newsletter_operator_report(
+  p_report_id UUID,
+  p_provider_outcome TEXT,
+  p_provider_message_id TEXT,
+  p_error TEXT
+)
+RETURNS newsletter_operator_reports
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_identity newsletter_operator_reports%ROWTYPE;
+  v_report newsletter_operator_reports%ROWTYPE;
+  v_run newsletter_runs%ROWTYPE;
+  v_status TEXT;
+  v_message_id TEXT := NULLIF(btrim(p_provider_message_id), '');
+  v_error TEXT := NULLIF(btrim(p_error), '');
+  v_report_error TEXT;
+BEGIN
+  IF p_report_id IS NULL THEN
+    RAISE EXCEPTION 'operator report id is required' USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_outcome IS NULL OR p_provider_outcome NOT IN ('sent', 'failed', 'unknown') THEN
+    RAISE EXCEPTION 'operator report outcome must be sent, failed, or unknown'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_outcome = 'sent' AND v_message_id IS NULL THEN
+    RAISE EXCEPTION 'provider message id is required for sent operator reports'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_provider_outcome <> 'sent' AND v_error IS NULL THEN
+    RAISE EXCEPTION 'operator report error is required for failed or unknown outcomes'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_identity
+  FROM newsletter_operator_reports
+  WHERE id = p_report_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'operator report not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Lock order: run -> operator report.
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_run:' || v_identity.run_id::TEXT));
+  SELECT * INTO v_run
+  FROM newsletter_runs
+  WHERE id = v_identity.run_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'newsletter run not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('newsletter_operator_report:' || p_report_id::TEXT));
+  SELECT * INTO v_report
+  FROM newsletter_operator_reports
+  WHERE id = p_report_id
+  FOR UPDATE;
+  IF NOT FOUND OR v_report.run_id IS DISTINCT FROM v_run.id THEN
+    RAISE EXCEPTION 'operator report identity changed while finalizing'
+      USING ERRCODE = '40001';
+  END IF;
+
+  v_status := p_provider_outcome;
+  v_report_error := CASE
+    WHEN p_provider_outcome = 'unknown' THEN 'operator report outcome unknown: ' || v_error
+    WHEN p_provider_outcome = 'failed' THEN 'operator report failed: ' || v_error
+    ELSE NULL
+  END;
+
+  IF v_report.status IN ('sent', 'failed', 'unknown') THEN
+    IF v_report.status = v_status
+       AND v_report.provider_message_id IS NOT DISTINCT FROM v_message_id
+       AND v_report.error IS NOT DISTINCT FROM v_error
+       AND v_report.completed_at IS NOT NULL
+       AND (
+         p_provider_outcome = 'sent'
+         OR NULLIF(btrim(v_run.report_error), '') IS NOT NULL
+       ) THEN
+      RETURN v_report;
+    END IF;
+    RAISE EXCEPTION 'conflicting operator report finalization replay'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF v_report.status <> 'sending' OR v_report.attempt_started_at IS NULL THEN
+    RAISE EXCEPTION 'operator report is not in a started sending state'
+      USING ERRCODE = '55000';
+  END IF;
+
+  UPDATE newsletter_operator_reports
+  SET status = v_status,
+      provider_message_id = v_message_id,
+      error = v_error,
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_report.id
+  RETURNING * INTO v_report;
+
+  IF p_provider_outcome <> 'sent' THEN
+    UPDATE newsletter_runs
+    SET report_error = v_report_error,
+        updated_at = clock_timestamp()
+    WHERE id = v_run.id;
+  END IF;
+
+  RETURN v_report;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION recover_stale_newsletter_operator_reports(
   p_run_id UUID,
   p_before TIMESTAMPTZ
@@ -1737,6 +1847,7 @@ REVOKE ALL ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN)
   FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION finalize_newsletter_operator_report(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
@@ -1748,6 +1859,7 @@ GRANT EXECUTE ON FUNCTION finalize_newsletter_attempt(UUID, TEXT, TEXT, TEXT, BO
 GRANT EXECUTE ON FUNCTION record_accepted_newsletter_recovery(UUID, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION create_newsletter_test_send(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;
 GRANT EXECUTE ON FUNCTION finalize_newsletter_test_send(UUID, TEXT, TEXT, TEXT, BOOLEAN) TO service_role;
+GRANT EXECUTE ON FUNCTION finalize_newsletter_operator_report(UUID, TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION recover_stale_newsletter_operator_reports(UUID, TIMESTAMPTZ) TO service_role;
 GRANT EXECUTE ON FUNCTION record_newsletter_opt_out(TEXT, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION resolve_newsletter_unknown(UUID, TEXT, TEXT, TEXT) TO service_role;

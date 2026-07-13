@@ -14,6 +14,7 @@ import type {
   NewsletterValuationRow,
   NewsletterValuationSnapshot,
 } from './campaign-types';
+import { countEffectiveSelections } from './campaign-types';
 
 export interface FinalizeAttemptInput {
   attemptId: string;
@@ -430,27 +431,16 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
     },
 
     async finalizeReport(id, result) {
-      const status = result.outcome === 'accepted' ? 'sent'
-        : result.outcome === 'unknown' ? 'unknown' : 'failed';
-      const update = await client.from('newsletter_operator_reports').update({
-        status,
-        provider_message_id: result.outcome === 'accepted' ? result.messageId : null,
-        error: result.outcome === 'accepted' ? null : result.error,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', id).eq('status', 'sending').select('id,run_id').single();
-      fail(update.error, 'finalize operator report');
-      if (!update.data) throw new Error('finalize operator report: report is not sending.');
-      if (result.outcome !== 'accepted') {
-        const reportError = result.outcome === 'unknown'
-          ? `operator report outcome unknown: ${result.error}`
-          : `operator report failed: ${result.error}`;
-        const runUpdate = await client.from('newsletter_runs').update({
-          report_error: reportError,
-          updated_at: new Date().toISOString(),
-        }).eq('id', update.data.run_id);
-        fail(runUpdate.error, 'record operator report error');
-      }
+      const finalized = await client.rpc('finalize_newsletter_operator_report', {
+        p_report_id: id,
+        p_provider_outcome: result.outcome === 'accepted' ? 'sent'
+          : result.outcome === 'unknown' ? 'unknown' : 'failed',
+        p_provider_message_id: result.outcome === 'accepted' ? result.messageId : null,
+        p_error: result.outcome === 'accepted' ? null : result.error,
+      });
+      fail(finalized.error, 'finalize operator report');
+      const row = Array.isArray(finalized.data) ? finalized.data[0] : finalized.data;
+      if (!row) throw new Error('finalize operator report returned no report.');
     },
 
     async heartbeat(runId) {
@@ -466,7 +456,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       const update = await client.from('newsletter_runs').update({
         status: blocker ? 'blocked' : 'completed',
         blocker,
-        selected_count: attempts.length,
+        selected_count: countEffectiveSelections(attempts),
         attempted_count: attempts.filter((attempt) => !['queued', 'opted_out', 'skipped'].includes(attempt.status)).length,
         sent_count: attempts.filter((attempt) => attempt.status === 'sent').length,
         failed_count: attempts.filter((attempt) => attempt.status === 'failed').length,

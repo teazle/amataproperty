@@ -10,6 +10,7 @@ import type {
   CampaignTransportResult,
   NewsletterValuationSnapshot,
 } from './campaign-types';
+import { countEffectiveSelections } from './campaign-types';
 
 export interface NewsletterIssue {
   id: string;
@@ -148,7 +149,7 @@ function resultFromRun(run: CampaignRun, status: CampaignRunResult['status'] = '
 function summarizeAttempts(run: CampaignRun, attempts: NewsletterAttempt[]): CampaignRun {
   return {
     ...run,
-    selectedCount: attempts.length,
+    selectedCount: countEffectiveSelections(attempts),
     attemptedCount: attempts.filter((attempt) => attempt.status !== 'queued' && attempt.status !== 'opted_out' && attempt.status !== 'skipped').length,
     sentCount: attempts.filter((attempt) => attempt.status === 'sent').length,
     failedCount: attempts.filter((attempt) => attempt.status === 'failed').length,

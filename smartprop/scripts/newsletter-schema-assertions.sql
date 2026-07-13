@@ -45,6 +45,9 @@ BEGIN
   IF to_regprocedure('public.finalize_newsletter_test_send(uuid,text,text,text,boolean)') IS NULL THEN
     v_missing := array_append(v_missing, 'finalize_newsletter_test_send(uuid,text,text,text,boolean)');
   END IF;
+  IF to_regprocedure('public.finalize_newsletter_operator_report(uuid,text,text,text)') IS NULL THEN
+    v_missing := array_append(v_missing, 'finalize_newsletter_operator_report(uuid,text,text,text)');
+  END IF;
   IF to_regprocedure('public.recover_stale_newsletter_operator_reports(uuid,timestamp with time zone)') IS NULL THEN
     v_missing := array_append(v_missing, 'recover_stale_newsletter_operator_reports(uuid,timestamptz)');
   END IF;
@@ -76,6 +79,7 @@ BEGIN
       'record_accepted_newsletter_recovery',
       'create_newsletter_test_send',
       'finalize_newsletter_test_send',
+      'finalize_newsletter_operator_report',
       'recover_stale_newsletter_operator_reports',
       'record_newsletter_opt_out',
       'resolve_newsletter_unknown'
@@ -92,8 +96,8 @@ BEGIN
         AND acl.privilege_type = 'EXECUTE'
     );
 
-  IF v_function_count <> 10 THEN
-    RAISE EXCEPTION 'RPC security contract matched % of 10 functions', v_function_count;
+  IF v_function_count <> 11 THEN
+    RAISE EXCEPTION 'RPC security contract matched % of 11 functions', v_function_count;
   END IF;
 
   IF NOT EXISTS (
@@ -988,6 +992,56 @@ BEGIN
 END;
 $$;
 
+-- ASSERT: STOP replacement effective selected count
+DO $$
+DECLARE
+  v_run_id UUID;
+  v_effective_selected INTEGER;
+BEGIN
+  SELECT run_id INTO v_run_id FROM newsletter_assertion_fixture;
+
+  SELECT count(*)::INTEGER INTO v_effective_selected
+  FROM newsletter_sends
+  WHERE run_id = v_run_id
+    AND is_test = FALSE
+    AND NOT (
+      status IN ('opted_out', 'skipped')
+      AND slot_no IS NULL
+    );
+
+  UPDATE newsletter_runs
+  SET status = 'completed',
+      selected_count = v_effective_selected,
+      attempted_count = (
+        SELECT count(*) FROM newsletter_sends
+        WHERE run_id = v_run_id AND is_test = FALSE AND attempt_started_at IS NOT NULL
+      ),
+      completed_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE id = v_run_id;
+
+  IF v_effective_selected <> 5
+     OR (
+       SELECT count(*) FROM newsletter_sends
+       WHERE run_id = v_run_id
+         AND is_test = FALSE
+         AND (
+           attempt_started_at IS NOT NULL
+           OR (status = 'opted_out' AND slot_no IS NULL)
+         )
+     ) <> 6
+     OR NOT EXISTS (
+       SELECT 1 FROM newsletter_runs
+       WHERE id = v_run_id
+         AND status = 'completed'
+         AND selected_count = 5
+         AND attempted_count = 5
+     ) THEN
+    RAISE EXCEPTION 'STOP replacement ledger did not complete with five effective selections';
+  END IF;
+END;
+$$;
+
 -- ASSERT: FK lead nulling
 DO $$
 DECLARE
@@ -1153,6 +1207,92 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'suppression event ledger accepted an update';
+  END IF;
+END;
+$$;
+
+-- ASSERT: operator report finalization is atomic
+DO $$
+DECLARE
+  v_run_id UUID;
+  v_accepted_id UUID;
+  v_unknown_id UUID;
+  v_queued_id UUID;
+  v_report newsletter_operator_reports%ROWTYPE;
+  v_rejected BOOLEAN := FALSE;
+BEGIN
+  SELECT run_id INTO v_run_id FROM newsletter_assertion_fixture;
+  UPDATE newsletter_runs SET report_error = NULL WHERE id = v_run_id;
+
+  INSERT INTO newsletter_operator_reports (
+    run_id, operator_key, kind, body, status, attempt_started_at
+  ) VALUES (
+    v_run_id, 'schema-atomic-accepted', 'summary', 'accepted summary',
+    'sending', clock_timestamp()
+  ) RETURNING id INTO v_accepted_id;
+
+  v_report := finalize_newsletter_operator_report(
+    v_accepted_id, 'sent', 'accepted-report-message', NULL
+  );
+  IF v_report.status <> 'sent'
+     OR v_report.provider_message_id <> 'accepted-report-message'
+     OR (SELECT report_error FROM newsletter_runs WHERE id = v_run_id) IS NOT NULL THEN
+    RAISE EXCEPTION 'accepted operator report changed report recovery state';
+  END IF;
+
+  INSERT INTO newsletter_operator_reports (
+    run_id, operator_key, kind, body, status, attempt_started_at
+  ) VALUES (
+    v_run_id, 'schema-atomic-unknown', 'summary', 'unknown summary',
+    'sending', clock_timestamp()
+  ) RETURNING id INTO v_unknown_id;
+
+  v_report := finalize_newsletter_operator_report(
+    v_unknown_id, 'unknown', NULL, 'provider response lost'
+  );
+  IF v_report.status <> 'unknown'
+     OR v_report.error <> 'provider response lost'
+     OR (SELECT report_error FROM newsletter_runs WHERE id = v_run_id)
+       <> 'operator report outcome unknown: provider response lost' THEN
+    RAISE EXCEPTION 'unknown operator report did not atomically persist run recovery';
+  END IF;
+
+  v_report := finalize_newsletter_operator_report(
+    v_unknown_id, 'unknown', NULL, 'provider response lost'
+  );
+  v_report := finalize_newsletter_operator_report(
+    v_accepted_id, 'sent', 'accepted-report-message', NULL
+  );
+  IF (SELECT report_error FROM newsletter_runs WHERE id = v_run_id)
+       <> 'operator report outcome unknown: provider response lost' THEN
+    RAISE EXCEPTION 'accepted replay cleared another report recovery error';
+  END IF;
+
+  BEGIN
+    PERFORM finalize_newsletter_operator_report(
+      v_unknown_id, 'failed', NULL, 'conflicting replay'
+    );
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'conflicting operator report replay was accepted';
+  END IF;
+
+  INSERT INTO newsletter_operator_reports (run_id, operator_key, kind, body, status)
+  VALUES (v_run_id, 'schema-atomic-queued', 'summary', 'queued summary', 'queued')
+  RETURNING id INTO v_queued_id;
+
+  v_rejected := FALSE;
+  BEGIN
+    PERFORM finalize_newsletter_operator_report(
+      v_queued_id, 'failed', NULL, 'not started'
+    );
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_rejected := TRUE;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'unstarted operator report was finalized';
   END IF;
 END;
 $$;

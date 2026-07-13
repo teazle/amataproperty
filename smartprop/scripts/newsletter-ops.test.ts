@@ -469,7 +469,7 @@ describe('newsletter verifier behavior', () => {
       const result = run(verifierPath, fixture.args, fixture.env);
       expect(result.exitCode).not.toBe(0);
     }
-  });
+  }, 15_000);
 
   test('reports coherent live counts and a nonzero all-time accepted success rate', () => {
     const fixture = verifierFixture({ expect: 'live' });

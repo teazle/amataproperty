@@ -122,6 +122,10 @@ function sha256(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(stableValue(value)), 'utf8').digest('hex');
 }
 
+export function hashCanonicalValuationInput(value: unknown): string {
+  return sha256(value);
+}
+
 function assertSame(input: Record<string, unknown>, key: string, expected: string): void {
   if (input[key] !== undefined && (
     typeof input[key] !== 'string' ||

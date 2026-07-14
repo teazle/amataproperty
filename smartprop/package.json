@@ -37,7 +37,8 @@
     "linkedin:reauth": "npx --yes tsx scripts/linkedin-reauth.ts",
     "whatsapp:test-engine": "npx --yes tsx scripts/test-whatsapp-conversation-engine.ts",
     "whatsapp:update-prompt": "bun scripts/update-whatsapp-warm-agent-prompt.ts",
-    "newsletter:campaign": "bun scripts/run-whatsapp-newsletter-campaign.ts run"
+    "newsletter:campaign": "bun scripts/run-whatsapp-newsletter-campaign.ts run",
+    "newsletter:valuation": "bun scripts/run-chloe-valuation-refresh.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agent-runtime": "^3.922.0",

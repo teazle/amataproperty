@@ -48,6 +48,11 @@ function candidate(number: number, attemptCount = 0): CampaignCandidate {
       highSgd: 1_200_000,
       comparablesCount: 3,
       asOf: '2026-07-12',
+      evidenceItemId: '10000000-0000-4000-8000-000000000001',
+      valuationId: '20000000-0000-4000-8000-000000000001',
+      projectSlug: 'cliften',
+      evidenceContractVersion: 'chloe-valuation-v1',
+      confidence: 'high',
     },
   };
 }

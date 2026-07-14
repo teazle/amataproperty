@@ -2,10 +2,7 @@ import type {
   NewsletterValuationRow,
   NewsletterValuationSnapshot,
 } from './campaign-types';
-
-function normalizeProjectName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
+import { VALUATION_EVIDENCE_CONTRACT } from './valuation-evidence';
 
 function finitePositive(value: number | string | null): number | null {
   if (value === null || value === '') return null;
@@ -34,18 +31,14 @@ function newestAsOf(rows: NewsletterValuationRow[]): string | null {
 }
 
 export function aggregateProjectValuation(
-  projectTitle: string,
+  projectSlug: string,
   rows: NewsletterValuationRow[],
   now: Date,
 ): NewsletterValuationSnapshot | null {
-  const normalizedTitle = normalizeProjectName(projectTitle);
-  if (!normalizedTitle || !Number.isFinite(now.getTime())) return null;
+  if (!projectSlug || projectSlug !== projectSlug.toLowerCase() || !Number.isFinite(now.getTime())) return null;
 
   const supported = rows.filter((row) => {
-    const normalizedProject = normalizeProjectName(row.project_name || '');
-    const projectMatches = normalizedProject.length > 0 && (
-      normalizedProject.includes(normalizedTitle) || normalizedTitle.includes(normalizedProject)
-    );
+    const projectMatches = row.project_slug === projectSlug;
     const expiresAt = new Date(row.expires_at).getTime();
     const low = finitePositive(row.low_sgd);
     const high = finitePositive(row.high_sgd);
@@ -54,11 +47,24 @@ export function aggregateProjectValuation(
     const hasInvertedRange = hasCompleteRange && low > high;
     const hasMidpoint = finitePositive(row.mid_sgd) !== null;
 
-    return projectMatches && Number.isFinite(expiresAt) && expiresAt > now.getTime() &&
+    return projectMatches && row.evidence_status === 'accepted' &&
+      row.evidence_contract_version === VALUATION_EVIDENCE_CONTRACT &&
+      (row.validated_confidence === 'medium' || row.validated_confidence === 'high') &&
+      typeof row.id === 'string' && row.id.length > 0 &&
+      typeof row.evidence_item_id === 'string' && row.evidence_item_id.length > 0 &&
+      Number.isFinite(expiresAt) && expiresAt > now.getTime() &&
       !hasInvertedRange && (hasRange || hasMidpoint);
   });
 
   if (supported.length === 0) return null;
+
+  const auditRow = [...supported].sort((left, right) => {
+    const leftTime = new Date(left.fetched_at || '').getTime();
+    const rightTime = new Date(right.fetched_at || '').getTime();
+    const timeOrder = (Number.isFinite(rightTime) ? rightTime : 0) -
+      (Number.isFinite(leftTime) ? leftTime : 0);
+    return timeOrder || String(right.id).localeCompare(String(left.id));
+  })[0];
 
   const ranges = supported.flatMap((row) => {
     const low = finitePositive(row.low_sgd);
@@ -81,5 +87,10 @@ export function aggregateProjectValuation(
     highSgd: ranges.length > 0 ? Math.max(...ranges.map((range) => range.high)) : null,
     comparablesCount,
     asOf: newestAsOf(supported),
+    evidenceItemId: auditRow.evidence_item_id!,
+    valuationId: auditRow.id!,
+    projectSlug,
+    evidenceContractVersion: VALUATION_EVIDENCE_CONTRACT,
+    confidence: auditRow.validated_confidence as 'medium' | 'high',
   };
 }

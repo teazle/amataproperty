@@ -1,4 +1,6 @@
 export interface NewsletterValuationRow {
+  id?: string | null;
+  project_slug?: string | null;
   project_name: string | null;
   low_sgd: number | string | null;
   mid_sgd: number | string | null;
@@ -6,6 +8,11 @@ export interface NewsletterValuationRow {
   comparables_count: number | string | null;
   as_of: string | null;
   expires_at: string;
+  fetched_at?: string | null;
+  evidence_status?: string | null;
+  evidence_contract_version?: string | null;
+  evidence_item_id?: string | null;
+  validated_confidence?: string | null;
 }
 
 export interface NewsletterValuationSnapshot {
@@ -15,6 +22,11 @@ export interface NewsletterValuationSnapshot {
   highSgd: number | null;
   comparablesCount: number;
   asOf: string | null;
+  evidenceItemId: string;
+  valuationId: string;
+  projectSlug: string;
+  evidenceContractVersion: 'chloe-valuation-v1';
+  confidence: 'medium' | 'high';
 }
 
 export type CampaignTransportResult =

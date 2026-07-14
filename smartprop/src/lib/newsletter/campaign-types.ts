@@ -29,6 +29,13 @@ export interface NewsletterValuationSnapshot {
   confidence: 'medium' | 'high';
 }
 
+export class ValuationPreparationBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValuationPreparationBlockedError';
+  }
+}
+
 export type CampaignTransportResult =
   | { outcome: 'accepted'; messageId: string }
   | { outcome: 'rejected'; retryable: boolean; error: string; statusCode?: number }

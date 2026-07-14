@@ -85,6 +85,14 @@ export interface CampaignRunResult {
   runId?: string;
 }
 
+function blockedResult(blocker: string): CampaignRunResult {
+  return {
+    status: 'blocked', recoverable: true, blocker,
+    selectedCount: 0, attemptedCount: 0, acceptedCount: 0,
+    rejectedCount: 0, unknownCount: 0, skippedCount: 0,
+  };
+}
+
 export interface CampaignRunnerDependencies {
   store: CampaignStore;
   preflight: () => Promise<{ ready: boolean; error?: string }>;
@@ -186,9 +194,17 @@ export async function runNewsletterCampaign(
 ): Promise<CampaignRunResult> {
   const operators = validateOptions(options);
   const featuredUrlBase = options.featuredUrlBase || 'https://viewproperty.ai/p';
+  const issue = await dependencies.store.resolveIssue();
+  const valuationGate = await dependencies.store.loadValuationGate(issue.id);
+  if (!valuationGate.healthy) {
+    return blockedResult(valuationGate.reason || 'valuation preparation is not healthy');
+  }
+  const valuationBlockedLeads = await dependencies.store.countValuationBlockedLeads(issue.id);
+  if (valuationBlockedLeads > 0) {
+    return blockedResult(`${valuationBlockedLeads} otherwise eligible leads lack current valuation evidence`);
+  }
 
   if (options.dryRun) {
-    const issue = await dependencies.store.resolveIssue();
     const referenceTime = options.date
       ? new Date(`${options.date}T00:00:00+08:00`)
       : (dependencies.now?.() || new Date());
@@ -204,16 +220,15 @@ export async function runNewsletterCampaign(
 
   const readiness = await dependencies.preflight();
   if (!readiness.ready) {
-    return {
-      status: 'blocked', recoverable: true, blocker: readiness.error || 'WAHA is not ready',
-      selectedCount: 0, attemptedCount: 0, acceptedCount: 0,
-      rejectedCount: 0, unknownCount: 0, skippedCount: 0,
-    };
+    return blockedResult(readiness.error || 'WAHA is not ready');
   }
 
   const now = dependencies.now?.() || new Date();
   const claimToken = options.claimToken || crypto.randomUUID();
-  let run = await dependencies.store.claimToday(claimToken);
+  let run = await dependencies.store.claimToday(claimToken, issue.id);
+  if (run.issueId !== issue.id) {
+    return blockedResult('claimed newsletter run does not match the prepared issue');
+  }
   let attempts = await dependencies.store.listAttempts(run.id);
   const recoveredReports = await dependencies.store.recoverStaleReports(
     run.id,
@@ -243,7 +258,6 @@ export async function runNewsletterCampaign(
     };
   }
 
-  const issue = await dependencies.store.resolveIssue(run.issueId);
   await dependencies.store.recoverAbandoned(run.id, new Date(now.getTime() - 15 * 60_000));
   attempts = await dependencies.store.listAttempts(run.id);
   const queuedAttempts = attempts.filter((attempt) => attempt.status === 'queued');
@@ -362,6 +376,17 @@ export async function runNewsletterTestSend(
     throw new CampaignConfigurationError('test-send destination must equal SMARTPROP_NEWSLETTER_TEST_TO.');
   }
   const issue = await dependencies.store.resolveIssue();
+  const valuationGate = await dependencies.store.loadValuationGate(issue.id);
+  if (!valuationGate.healthy) {
+    return { outcome: 'blocked', error: valuationGate.reason || 'valuation preparation is not healthy' };
+  }
+  if (await dependencies.store.countValuationBlockedLeads(issue.id) > 0) {
+    return { outcome: 'blocked', error: 'eligible leads lack current valuation evidence' };
+  }
+  const readiness = await dependencies.preflight();
+  if (!readiness.ready) {
+    return { outcome: 'blocked', error: readiness.error || 'WAHA is not ready' };
+  }
   const candidate = await dependencies.store.selectCandidate(issue, options.sourceLeadId);
   if (!candidate) throw new CampaignConfigurationError('test-send source lead is not eligible.');
   const body = compose(issue, candidate, options.featuredUrlBase || 'https://viewproperty.ai/p');

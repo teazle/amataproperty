@@ -12,6 +12,7 @@ import {
   type CampaignRunResult,
 } from '../src/lib/newsletter/campaign-runner';
 import { normalizeSingaporeRecipient } from '../src/lib/newsletter/recipient';
+import { ValuationPreparationBlockedError } from '../src/lib/newsletter/campaign-types';
 import { getWAHAReadiness, sendCampaignWhatsApp } from '../src/lib/wa/waha';
 
 export type CampaignCliCommand =
@@ -30,7 +31,9 @@ export function exitCodeForResult(result: CampaignRunResult): number {
 }
 
 export function exitCodeForError(error: unknown): number {
-  return error instanceof CampaignConfigurationError ? 20 : 30;
+  if (error instanceof CampaignConfigurationError) return 20;
+  if (error instanceof ValuationPreparationBlockedError) return 10;
+  return 30;
 }
 
 function optionValue(args: string[], name: string): string | undefined {

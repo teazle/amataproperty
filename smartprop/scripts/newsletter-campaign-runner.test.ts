@@ -16,6 +16,7 @@ import type {
   TestSendInput,
 } from '../src/lib/newsletter/campaign-store';
 import type { CampaignTransportResult } from '../src/lib/newsletter/campaign-types';
+import { ValuationPreparationBlockedError } from '../src/lib/newsletter/campaign-types';
 import { createCampaignStore } from '../src/lib/newsletter/campaign-store';
 import {
   createProcessClaimToken,
@@ -72,9 +73,22 @@ class FakeStore implements CampaignStore {
   testRows: TestSendInput[] = [];
   reports: OperatorReport[] = [];
   referenceTimes: Array<Date | undefined> = [];
+  valuationGate = { healthy: true, issueId: issue.id, status: 'completed' as const };
+  valuationBlockedLeads = 0;
 
   async resolveIssue(_issueId?: string): Promise<NewsletterIssue> { this.calls.push('resolveIssue'); return issue; }
-  async claimToday(_claimToken: string): Promise<CampaignRun> { this.calls.push('claimToday'); return this.run; }
+  async loadValuationGate(issueId: string) {
+    this.calls.push('loadValuationGate');
+    return { ...this.valuationGate, issueId };
+  }
+  async countValuationBlockedLeads(_issueId: string) {
+    this.calls.push('countValuationBlockedLeads');
+    return this.valuationBlockedLeads;
+  }
+  async claimToday(_claimToken: string, issueId: string): Promise<CampaignRun> {
+    this.calls.push(`claimToday:${issueId}`);
+    return this.run;
+  }
   async listAttempts(): Promise<NewsletterAttempt[]> { this.calls.push('listAttempts'); return this.attempts; }
   async recoverAbandoned(_runId: string, olderThan: Date): Promise<number> {
     this.calls.push(`recoverAbandoned:${olderThan.toISOString()}`);
@@ -182,7 +196,7 @@ function dependencies(store: FakeStore, overrides: Record<string, unknown> = {})
 const options = { enabled: true, operatorRecipients: ['+6591051399'] };
 
 describe('runNewsletterCampaign', () => {
-  test('preflight blocker is recoverable and performs no database or provider work', async () => {
+  test('preflight blocker is recoverable after the read-only valuation gate', async () => {
     const store = new FakeStore();
     let posts = 0;
     const result = await runNewsletterCampaign(dependencies(store, {
@@ -192,8 +206,34 @@ describe('runNewsletterCampaign', () => {
 
     expect(result.status).toBe('blocked');
     expect(result.recoverable).toBe(true);
-    expect(store.calls).toEqual([]);
+    expect(store.calls).toEqual(['resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads']);
     expect(posts).toBe(0);
+  });
+
+  test('blocked preparation exits recoverably before WAHA or campaign claim', async () => {
+    for (const status of [null, 'running', 'blocked', 'failed'] as const) {
+      const store = new FakeStore();
+      store.valuationGate = { healthy: false, issueId: issue.id, status } as never;
+      let preflights = 0;
+      const result = await runNewsletterCampaign(dependencies(store, {
+        preflight: async () => { preflights += 1; return { ready: true }; },
+      }), options);
+      expect(result).toMatchObject({ status: 'blocked', recoverable: true });
+      expect(store.calls).toEqual(['resolveIssue', 'loadValuationGate']);
+      expect(preflights).toBe(0);
+    }
+  });
+
+  test('valuation-blocked leads prevent WAHA readiness and send-run claim', async () => {
+    const store = new FakeStore();
+    store.valuationBlockedLeads = 1;
+    let preflights = 0;
+    const result = await runNewsletterCampaign(dependencies(store, {
+      preflight: async () => { preflights += 1; return { ready: true }; },
+    }), options);
+    expect(result).toMatchObject({ status: 'blocked', recoverable: true });
+    expect(store.calls).toEqual(['resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads']);
+    expect(preflights).toBe(0);
   });
 
   test('six eligible leads start exactly five provider submissions in slots 1 through 5', async () => {
@@ -223,7 +263,9 @@ describe('runNewsletterCampaign', () => {
 
     expect(result.status).toBe('completed');
     expect(store.calls).toEqual([
-      'claimToday', 'listAttempts', 'recoverStaleReports:2026-07-13T03:55:00.000Z', 'queueReports',
+      'resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads',
+      'claimToday:issue-1', 'listAttempts',
+      'recoverStaleReports:2026-07-13T03:55:00.000Z', 'queueReports',
     ]);
   });
 
@@ -437,7 +479,9 @@ describe('runNewsletterCampaign', () => {
     expect(result.status).toBe('dry-run');
     expect(result.selectedCount).toBe(5);
     expect(posts).toBe(0);
-    expect(store.calls).toEqual(['resolveIssue', 'selectCandidates:5']);
+    expect(store.calls).toEqual([
+      'resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads', 'selectCandidates:5',
+    ]);
     expect(store.referenceTimes[0]?.toISOString()).toBe('2026-07-11T16:00:00.000Z');
   });
 
@@ -451,7 +495,9 @@ describe('runNewsletterCampaign', () => {
     expect(result.status).toBe('dry-run');
     expect(result.selectedCount).toBe(5);
     expect(posts).toBe(0);
-    expect(store.calls).toEqual(['resolveIssue', 'selectCandidates:5']);
+    expect(store.calls).toEqual([
+      'resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads', 'selectCandidates:5',
+    ]);
   });
 
   test('rejects impossible dry-run calendar dates before store access', async () => {
@@ -483,6 +529,9 @@ class RecordingQuery implements PromiseLike<{ data: unknown[] | null; error: nul
   in(name: string, value: unknown[]) { return this.record('in', `${name}=${value.join(',')}`); }
   gt(name: string, value: unknown) { return this.record('gt', `${name}=${String(value)}`); }
   lt(name: string, value: unknown) { return this.record('lt', `${name}=${String(value)}`); }
+  neq(name: string, value: unknown) { return this.record('neq', `${name}=${String(value)}`); }
+  is(name: string, value: unknown) { return this.record('is', `${name}=${String(value)}`); }
+  not(name: string, operator: string, value: unknown) { return this.record('not', `${name}:${operator}=${String(value)}`); }
   order(name: string) { return this.record('order', name); }
   range(from: number, to: number) { return this.record('range', `${from}-${to}`); }
   limit(value: number) { return this.record('limit', value); }
@@ -528,10 +577,17 @@ describe('campaign store RPC adapter', () => {
       'rpc:queue_newsletter_attempt': [queuedRow],
       'rpc:start_newsletter_attempt': [{ ...queuedRow, status: 'sending', slot_no: 1, attempt_no: 1 }],
       'rpc:create_newsletter_test_send': [{ id: 'test-1' }],
+      'rpc:get_newsletter_valuation_gate': [{ healthy: true, issueId: 'issue-1', status: 'completed' }],
+      'rpc:claim_newsletter_run': [{
+        id: 'run-1', run_date: '2026-07-13', issue_id: 'issue-1', status: 'running',
+      }],
+      newsletter_issues: [{ slug: 'week-28' }],
     });
     const store = createCampaignStore(recording.client as never);
     const run = new FakeStore().run;
     const selected = candidate(1);
+    await store.loadValuationGate('issue-1');
+    await store.claimToday('claim-1', 'issue-1');
     const queued = await store.queueAttempt(run, selected, 'claim-1', 'body');
     await store.startAttempt(queued as NewsletterAttempt, run, 1, 'claim-1');
     await store.recordAcceptedRecovery('send-1', 'provider-1', 'crm failed');
@@ -543,12 +599,33 @@ describe('campaign store RPC adapter', () => {
     await store.finalizeTestSend(testId, { outcome: 'accepted', messageId: 'test-provider' });
 
     expect(recording.rpcCalls).toEqual(expect.arrayContaining([
+      { name: 'get_newsletter_valuation_gate', args: { p_issue_id: 'issue-1' } },
+      { name: 'claim_newsletter_run', args: { p_claim_token: 'claim-1', p_issue_id: 'issue-1' } },
       { name: 'queue_newsletter_attempt', args: { p_run_id: 'run-1', p_lead_id: 'lead-1', p_claim_token: 'claim-1', p_rendered_body: 'body', p_valuation_snapshot: selected.valuation } },
       { name: 'start_newsletter_attempt', args: { p_send_id: 'send-1', p_slot_no: 1, p_claim_token: 'claim-1' } },
       { name: 'record_accepted_newsletter_recovery', args: { p_send_id: 'send-1', p_provider_message_id: 'provider-1', p_error: 'crm failed' } },
       { name: 'create_newsletter_test_send', args: { p_issue_id: 'issue-1', p_lead_id: 'lead-1', p_override_phone: '+6591051399', p_rendered_body: 'body', p_valuation_snapshot: selected.valuation } },
       { name: 'finalize_newsletter_test_send', args: { p_send_id: 'test-1', p_provider_outcome: 'sent', p_provider_message_id: 'test-provider', p_error: null, p_retryable: false } },
     ]));
+  });
+
+  test('fails closed when more than one active cache row violates the project invariant', async () => {
+    const accepted = {
+      id: 'valuation-1', project_slug: 'cliften', project_name: 'Cliften',
+      low_sgd: 1_000_000, mid_sgd: 1_100_000, high_sgd: 1_200_000,
+      comparables_count: 3, as_of: '2026-07-12', expires_at: '2026-08-01T00:00:00Z',
+      fetched_at: '2026-07-12T00:00:00Z', evidence_status: 'accepted',
+      evidence_contract_version: 'chloe-valuation-v1', evidence_item_id: 'item-1',
+      validated_confidence: 'high',
+    };
+    const recording = recordingClient({
+      crm_projects: [{ id: 'project-1', title: 'Cliften' }],
+      propnex_valuations: [accepted, { ...accepted, id: 'valuation-2', evidence_item_id: 'item-2' }],
+    });
+    const store = createCampaignStore(recording.client as never);
+    await expect(store.selectCandidates(
+      { ...issue, audienceProjectSlug: 'cliften' }, 5, new Date('2026-07-13T00:00:00Z'),
+    )).rejects.toBeInstanceOf(ValuationPreparationBlockedError);
   });
 
   test('classifies an explicit opted_out start row as suppressed without message matching', async () => {
@@ -568,7 +645,15 @@ describe('campaign store RPC adapter', () => {
   test('orders every paginated query before range and uses dry-run reference time', async () => {
     const recording = recordingClient({
       crm_projects: [{ id: 'project-1', title: 'Cliften' }],
-      crm_leads: [], newsletter_sends: [], newsletter_suppressions: [], propnex_valuations: [],
+      crm_leads: [], newsletter_sends: [], newsletter_suppressions: [],
+      propnex_valuations: [{
+        id: 'valuation-1', project_slug: 'cliften', project_name: 'Cliften',
+        low_sgd: 1_000_000, mid_sgd: 1_100_000, high_sgd: 1_200_000,
+        comparables_count: 3, as_of: '2026-07-11', expires_at: '2026-08-01T00:00:00Z',
+        fetched_at: '2026-07-11T00:00:00Z', evidence_status: 'accepted',
+        evidence_contract_version: 'chloe-valuation-v1', evidence_item_id: 'item-1',
+        validated_confidence: 'high',
+      }],
     });
     const store = createCampaignStore(recording.client as never);
     await store.selectCandidates({ ...issue, audienceProjectSlug: 'cliften' }, 5, new Date('2026-07-12T00:00:00Z'));
@@ -585,10 +670,14 @@ describe('campaign store RPC adapter', () => {
       'newsletter_suppressions.order:recipient_key',
     ]);
     expect(recording.calls.filter((call) => call.startsWith('propnex_valuations.order:'))).toEqual([
-      'propnex_valuations.order:project_name',
-      'propnex_valuations.order:expires_at',
+      'propnex_valuations.order:fetched_at',
       'propnex_valuations.order:id',
     ]);
+    expect(recording.calls).toContain('propnex_valuations.eq:project_slug=cliften');
+    expect(recording.calls).toContain('propnex_valuations.eq:evidence_status=accepted');
+    expect(recording.calls).toContain('propnex_valuations.eq:evidence_contract_version=chloe-valuation-v1');
+    expect(recording.calls).toContain('propnex_valuations.in:validated_confidence=medium,high');
+    expect(recording.calls).toContain('propnex_valuations.limit:2');
     expect(recording.calls).toContain('propnex_valuations.gt:expires_at=2026-07-12T00:00:00.000Z');
   });
 
@@ -671,7 +760,10 @@ describe('runNewsletterTestSend', () => {
     expect(result.outcome).toBe('accepted');
     expect(destinations).toEqual(['+6591051399']);
     expect(store.testRows[0]).toMatchObject({ sourceLeadId: 'lead-6', overridePhone: '+6591051399', isTest: true });
-    expect(store.calls).not.toContain('claimToday');
+    expect(store.calls.slice(0, 3)).toEqual([
+      'resolveIssue', 'loadValuationGate', 'countValuationBlockedLeads',
+    ]);
+    expect(store.calls.some((call) => call.startsWith('claimToday'))).toBe(false);
     expect(store.calls.some((call) => call.startsWith('start:'))).toBe(false);
   });
 });
@@ -686,6 +778,7 @@ describe('campaign CLI parsing', () => {
 
   test('maps configuration errors to 20 and report recovery to 30', () => {
     expect(exitCodeForError(new CampaignConfigurationError('bad operators'))).toBe(20);
+    expect(exitCodeForError(new ValuationPreparationBlockedError('duplicate valuation'))).toBe(10);
     expect(exitCodeForResult({
       status: 'recovery-required', recoverable: false, blocker: 'report timeout',
       selectedCount: 0, attemptedCount: 0, acceptedCount: 0, rejectedCount: 0,

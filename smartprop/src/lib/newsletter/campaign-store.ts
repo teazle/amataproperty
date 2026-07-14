@@ -15,6 +15,9 @@ import type {
   NewsletterValuationSnapshot,
 } from './campaign-types';
 import { countEffectiveSelections } from './campaign-types';
+import { ValuationPreparationBlockedError } from './campaign-types';
+import { VALUATION_EVIDENCE_CONTRACT } from './valuation-evidence';
+import type { ValuationGate } from './valuation-store';
 
 export interface FinalizeAttemptInput {
   attemptId: string;
@@ -51,7 +54,9 @@ export interface RecoveryRecord {
 
 export interface CampaignStore {
   resolveIssue(issueId?: string): Promise<NewsletterIssue>;
-  claimToday(claimToken: string): Promise<CampaignRun>;
+  loadValuationGate(issueId: string): Promise<ValuationGate>;
+  countValuationBlockedLeads(issueId: string): Promise<number>;
+  claimToday(claimToken: string, issueId: string): Promise<CampaignRun>;
   listAttempts(runId: string): Promise<NewsletterAttempt[]>;
   recoverAbandoned(runId: string, olderThan: Date): Promise<number>;
   recoverStaleReports(runId: string, olderThan: Date): Promise<number>;
@@ -156,6 +161,31 @@ async function paginatedRows(
   }
 }
 
+async function loadProjectValuation(
+  client: SupabaseClient,
+  projectSlug: string,
+  referenceTime: Date,
+): Promise<NewsletterValuationSnapshot | null> {
+  const { data, error } = await client.from('propnex_valuations')
+    .select('id,project_slug,project_name,low_sgd,mid_sgd,high_sgd,comparables_count,as_of,expires_at,evidence_item_id,validated_confidence,evidence_contract_version,evidence_status,fetched_at')
+    .eq('project_slug', projectSlug)
+    .eq('evidence_status', 'accepted')
+    .eq('evidence_contract_version', VALUATION_EVIDENCE_CONTRACT)
+    .in('validated_confidence', ['medium', 'high'])
+    .gt('expires_at', referenceTime.toISOString())
+    .order('fetched_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(2);
+  fail(error, 'load current project valuation');
+  const rows = (data || []) as unknown as NewsletterValuationRow[];
+  if (rows.length > 1) {
+    throw new ValuationPreparationBlockedError(
+      `multiple active valuation rows violate the exact project cache invariant for ${projectSlug}`,
+    );
+  }
+  return aggregateProjectValuation(projectSlug, rows, referenceTime);
+}
+
 export function createCampaignStore(client: SupabaseClient): CampaignStore {
   async function issueSlug(issueId: string): Promise<string> {
     const { data, error } = await client.from('newsletter_issues').select('slug').eq('id', issueId).single();
@@ -181,8 +211,82 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       return issueFromRow(data);
     },
 
-    async claimToday(claimToken) {
-      const { data, error } = await client.rpc('claim_newsletter_run', { p_claim_token: claimToken });
+    async loadValuationGate(issueId) {
+      const { data, error } = await client.rpc('get_newsletter_valuation_gate', {
+        p_issue_id: issueId,
+      });
+      fail(error, 'load newsletter valuation gate');
+      const row = (Array.isArray(data) ? data[0] : data) as ValuationGate | null;
+      if (!row) throw new Error('get_newsletter_valuation_gate returned no gate.');
+      return row;
+    },
+
+    async countValuationBlockedLeads(issueId) {
+      const issueResult = await client.from('newsletter_issues')
+        .select('id,audience_project_slug')
+        .eq('id', issueId)
+        .single();
+      fail(issueResult.error, 'load issue for valuation-blocked lead count');
+      const projectSlug = String(issueResult.data?.audience_project_slug || '');
+      if (!projectSlug) return 0;
+      if (await loadProjectValuation(client, projectSlug, new Date())) return 0;
+
+      const projectResult = await client.from('crm_projects')
+        .select('id')
+        .eq('slug', projectSlug)
+        .eq('is_active', true)
+        .maybeSingle();
+      fail(projectResult.error, 'load project for valuation-blocked lead count');
+      if (!projectResult.data) return 0;
+      const projectId = projectResult.data.id;
+      const [leads, sends, suppressions] = await Promise.all([
+        paginatedRows(async (from, to) => {
+          const result = await client.from('crm_leads')
+            .select('id,phone,phone_e164,lead_code,status,opt_out_at')
+            .eq('project_id', projectId)
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+          return { data: result.data, error: result.error };
+        }, 'paginate valuation-blocked CRM leads'),
+        paginatedRows(async (from, to) => {
+          const result = await client.from('newsletter_sends')
+            .select('recipient_key,status,retryable,attempt_started_at')
+            .eq('issue_id', issueId)
+            .eq('is_test', false)
+            .order('recipient_key', { ascending: true })
+            .order('attempt_started_at', { ascending: true, nullsFirst: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+          return { data: result.data, error: result.error };
+        }, 'paginate valuation-blocked sends'),
+        paginatedRows(async (from, to) => {
+          const result = await client.from('newsletter_suppressions')
+            .select('recipient_key')
+            .order('recipient_key', { ascending: true })
+            .range(from, to);
+          return { data: result.data, error: result.error };
+        }, 'paginate valuation-blocked suppressions'),
+      ]);
+      const suppressed = new Set(suppressions.map((row) => String(row.recipient_key)));
+      return leads.filter((lead) => {
+        const recipientKey = normalizeSingaporeRecipient(String(lead.phone_e164 || lead.phone || ''));
+        if (!recipientKey || suppressed.has(recipientKey) || lead.opt_out_at ||
+            lead.status === 'lost' || !lead.lead_code) return false;
+        const prior = sends.filter((send) => send.recipient_key === recipientKey);
+        const attemptCount = prior.filter((send) => send.attempt_started_at !== null).length;
+        const blocking = prior.some((send) =>
+          ['queued', 'sending', 'sent', 'unknown'].includes(String(send.status)) ||
+          (send.status === 'failed' && send.retryable !== true));
+        return !blocking && attemptCount < 3;
+      }).length;
+    },
+
+    async claimToday(claimToken, issueId) {
+      const { data, error } = await client.rpc('claim_newsletter_run', {
+        p_claim_token: claimToken,
+        p_issue_id: issueId,
+      });
       fail(error, 'claim newsletter run');
       const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
       if (!row) throw new Error('claim_newsletter_run returned no run.');
@@ -235,7 +339,14 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
       if (!projectResult.data) return [];
       const project = projectResult.data;
 
-      const [leads, sends, suppressions, valuations] = await Promise.all([
+      const valuation = await loadProjectValuation(
+        client,
+        issue.audienceProjectSlug,
+        referenceTime,
+      );
+      if (!valuation) return [];
+
+      const [leads, sends, suppressions] = await Promise.all([
         paginatedRows(async (from, to) => {
           const result = await client.from('crm_leads')
             .select('id,name,phone,phone_e164,property_title,lead_code,priority,created_at,status,opt_out_at')
@@ -263,24 +374,7 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
             .range(from, to);
           return { data: result.data, error: result.error };
         }, 'paginate newsletter suppressions'),
-        paginatedRows(async (from, to) => {
-          const result = await client.from('propnex_valuations')
-            .select('id,project_name,low_sgd,mid_sgd,high_sgd,comparables_count,as_of,expires_at')
-            .gt('expires_at', referenceTime.toISOString())
-            .order('project_name', { ascending: true })
-            .order('expires_at', { ascending: true })
-            .order('id', { ascending: true })
-            .range(from, to);
-          return { data: result.data, error: result.error };
-        }, 'paginate newsletter valuations'),
       ]);
-
-      const valuation = aggregateProjectValuation(
-        String(project.title),
-        valuations as unknown as NewsletterValuationRow[],
-        referenceTime,
-      );
-      if (!valuation) return [];
       const suppressed = new Set(suppressions.map((row) => String(row.recipient_key)));
       const attemptsByRecipient = new Map<string, Record<string, unknown>[]>();
       for (const send of sends) {

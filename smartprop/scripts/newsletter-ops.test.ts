@@ -10,12 +10,18 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { deriveNewsletterHealth, type NewsletterHealthInput } from '../src/lib/newsletter/newsletter-health';
+import {
+  deriveNewsletterHealth,
+  deriveValuationPreparationHealth,
+  type NewsletterHealthInput,
+  type ValuationPreparationHealthInput,
+} from '../src/lib/newsletter/newsletter-health';
 
 const root = join(import.meta.dir, '..');
 const wrapperPath = join(root, 'scripts/run-whatsapp-newsletter-campaign.sh');
@@ -23,6 +29,12 @@ const verifierPath = join(root, 'scripts/verify-newsletter-campaign.sh');
 const servicePath = join(root, 'systemd/smartprop-whatsapp-newsletter.service');
 const timerPath = join(root, 'systemd/smartprop-whatsapp-newsletter.timer');
 const runbookPath = join(root, 'docs/WHATSAPP_NEWSLETTER_OPERATIONS.md');
+const valuationRunbookPath = join(root, 'docs/CHLOE_VALUATION_REFRESH.md');
+const monitorPath = join(root, 'scripts/monitor-newsletter-campaign.sh');
+const absenceAlertTestPath = join(root, 'scripts/test-newsletter-absence-alert.sh');
+const monitorServicePath = join(root, 'systemd/smartprop-newsletter-monitor.service');
+const monitorTimerPath = join(root, 'systemd/smartprop-newsletter-monitor.timer');
+const chloeVerifierPath = join(root, '..', 'openclaw-skills', 'smartprop-crm', 'scripts', 'verify-chloe-valuation-job.sh');
 const temporaryDirectories: string[] = [];
 
 function read(path: string): string {
@@ -85,6 +97,39 @@ describe('WhatsApp newsletter operations contract', () => {
     for (const path of [wrapperPath, verifierPath, servicePath, timerPath, runbookPath]) {
       expect(existsSync(path)).toBe(true);
     }
+  });
+
+  test('ships valuation verification, independent monitoring, and the Chloe runbook', () => {
+    for (const path of [
+      valuationRunbookPath, monitorPath, absenceAlertTestPath,
+      monitorServicePath, monitorTimerPath, chloeVerifierPath,
+    ]) expect(existsSync(path)).toBe(true);
+
+    const timer = read(monitorTimerPath);
+    expect(timer).toContain('OnCalendar=*-*-* 01:22,01:37,01:52,02:07,02:22:00 UTC');
+    expect(timer).toContain('Persistent=true');
+    expect(timer).toContain('RandomizedDelaySec=0');
+    const service = read(monitorServicePath);
+    for (const setting of [
+      'Type=oneshot', 'User=root', 'NoNewPrivileges=true', 'PrivateTmp=true',
+      'ProtectSystem=strict', 'ProtectHome=true', 'MemoryMax=128M',
+      'TimeoutStartSec=180', 'BindReadOnlyPaths=/root/.bun/bin/bun:',
+    ]) expect(service).toContain(setting);
+
+    const monitor = read(monitorPath);
+    expect(monitor).toContain('/opt/smartprop/app/smartprop/scripts/verify-newsletter-campaign.sh');
+    expect(monitor).toContain('timeout_bin=/usr/bin/timeout');
+    expect(monitor).toContain('"$timeout_bin" 120');
+    expect(monitor).toContain('smartprop-whatsapp-newsletter-heartbeat');
+    expect(monitor).toContain('SMARTPROP_NEWSLETTER_MONITOR_URL');
+    expect(monitor).toContain('SMARTPROP_NEWSLETTER_ALERT_TOKEN');
+    const chloeVerifier = read(chloeVerifierPath);
+    expect(chloeVerifier).toContain('openclaw cron list --json');
+    expect(chloeVerifier).toContain('openclaw cron runs --id "$job_id" --limit 1');
+    expect(chloeVerifier).toContain(".schedule.expr == \"30 8 * * *\"");
+    expect(chloeVerifier).toContain('.payload.timeoutSeconds == 2700');
+    expect(chloeVerifier).toContain('.failureAlert.after == 1');
+    expect(chloeVerifier).not.toMatch(/openclaw cron (add|edit|run(?:\s|$)|enable|disable)/m);
   });
 
   test('schedules the first run at 01:30 UTC with persistent catch-up and remains installable', () => {
@@ -156,6 +201,7 @@ describe('WhatsApp newsletter operations contract', () => {
     for (const table of [
       'newsletter_runs', 'newsletter_sends', 'newsletter_operator_reports',
       'newsletter_suppressions', 'newsletter_suppression_events',
+      'newsletter_valuation_runs', 'newsletter_valuation_items', 'propnex_valuations',
     ]) expect(verifier).toContain(table);
     for (const rpc of [
       'claim_newsletter_run', 'queue_newsletter_attempt', 'start_newsletter_attempt',
@@ -163,7 +209,17 @@ describe('WhatsApp newsletter operations contract', () => {
       'finalize_newsletter_operator_report', 'recover_stale_newsletter_operator_reports',
       'record_newsletter_opt_out', 'resolve_newsletter_unknown',
       'create_newsletter_test_send', 'finalize_newsletter_test_send',
+      'claim_newsletter_valuation_run', 'heartbeat_newsletter_valuation_run',
+      'record_newsletter_valuation_item', 'complete_newsletter_valuation_run',
+      'get_newsletter_valuation_gate',
     ]) expect(verifier).toContain(rpc);
+    for (const field of [
+      'newsletterValuation', 'rollingAcceptedImportRate', 'newestAcceptedCacheAt',
+      'lastMeaningfulWorkAt', 'currentRunStatus',
+    ]) expect(verifier).toContain(field);
+    expect(verifier).toContain('valuationCacheLinked');
+    expect(verifier).toContain('rollingValuationAccepted');
+    expect(verifier).toContain('rollingValuationCompleted');
     expect(verifier).not.toContain('. "$readonly_db_env"');
     expect(verifier).not.toMatch(/\bsystemctl\s+(enable|disable|start|restart|daemon-reload|preset)\b/);
     expect(verifier).not.toContain('ec2-user');
@@ -217,6 +273,127 @@ describe('WhatsApp newsletter operations contract', () => {
     const stopProof = runbook.match(/## STOP disposable-fixture proof[\s\S]*?(?=\n## )/)?.[0] ?? '';
     expect(stopProof).toContain('psql "$FIXTURE_DB_URL"');
     expect(stopProof).not.toContain('psql "$DB_URL"');
+  });
+});
+
+describe('newsletter absence alert proof', () => {
+  function fixture(confirmed: boolean) {
+    const directory = temporaryDirectory('newsletter-alert-');
+    const curl = join(directory, 'curl');
+    executable(curl, `
+if [[ "$*" == *"--request POST"* ]]; then
+  printf '%s\\n' '{"accepted":true}'
+  exit 0
+fi
+url="\${@: -1}"
+check_id="\${url##*checkId=}"
+if [[ "${confirmed ? '1' : '0'}" == 1 ]]; then
+  printf '{"checkId":"%s","received":true,"alertId":"alert-123","receivedAt":"2026-07-14T00:00:00.000Z"}\\n' "$check_id"
+else
+  printf '{"checkId":"%s","received":false}\\n' "$check_id"
+fi
+`);
+    return {
+      env: {
+        SMARTPROP_NEWSLETTER_ALERT_TEST_MODE: '1',
+        SMARTPROP_NEWSLETTER_ALERT_TEST_URL: 'https://alerts.example/test',
+        SMARTPROP_NEWSLETTER_ALERT_STATUS_URL: 'https://alerts.example/status',
+        SMARTPROP_NEWSLETTER_ALERT_TOKEN: 'test-token',
+        SMARTPROP_NEWSLETTER_ALERT_CURL_BIN: curl,
+        SMARTPROP_NEWSLETTER_ALERT_BUN_BIN: process.execPath,
+        SMARTPROP_NEWSLETTER_ALERT_SLEEP_BIN: '/usr/bin/true',
+        SMARTPROP_NEWSLETTER_ALERT_MAX_POLLS: '1',
+      },
+    };
+  }
+
+  test('requires independent receiver confirmation for the exact check ID', () => {
+    const confirmed = run(absenceAlertTestPath, [], fixture(true).env);
+    expect(confirmed.exitCode).toBe(0);
+    expect(confirmed.stdout).toContain('checkId=');
+    expect(confirmed.stdout).toContain('alertId=alert-123');
+    expect(confirmed.stdout).toContain('receivedAt=2026-07-14T00:00:00.000Z');
+
+    const acceptedOnly = run(absenceAlertTestPath, [], fixture(false).env);
+    expect(acceptedOnly.exitCode).not.toBe(0);
+  });
+});
+
+describe('newsletter external monitor check-ins', () => {
+  function fixture(verifierExit: number, curlExit = 0) {
+    const directory = temporaryDirectory('newsletter-monitor-');
+    const verifier = join(directory, 'verifier');
+    const timeout = join(directory, 'timeout');
+    const curl = join(directory, 'curl');
+    const capture = join(directory, 'curl.log');
+    executable(verifier, `printf '%s\\n' 'redacted verifier result'; exit ${verifierExit}`);
+    executable(timeout, 'shift; exec "$@"');
+    executable(curl, `printf '%s\\n' "$*" >>"$MONITOR_CURL_CAPTURE"; exit ${curlExit}`);
+    return {
+      capture,
+      env: {
+        SMARTPROP_NEWSLETTER_MONITOR_TEST_MODE: '1',
+        SMARTPROP_NEWSLETTER_MONITOR_VERIFIER: verifier,
+        SMARTPROP_NEWSLETTER_MONITOR_TIMEOUT_BIN: timeout,
+        SMARTPROP_NEWSLETTER_MONITOR_CURL_BIN: curl,
+        SMARTPROP_NEWSLETTER_MONITOR_BUN_BIN: process.execPath,
+        SMARTPROP_NEWSLETTER_MONITOR_URL: 'https://alerts.example/check-in',
+        SMARTPROP_NEWSLETTER_ALERT_TOKEN: 'test-token',
+        EXPECTED_REVISION: 'abcdef1',
+        MONITOR_CURL_CAPTURE: capture,
+      },
+    };
+  }
+
+  test('posts signed success and failure states and fails on verifier or receiver error', () => {
+    const success = fixture(0);
+    expect(run(monitorPath, [], success.env).exitCode).toBe(0);
+    expect(read(success.capture)).toContain('"status":"success"');
+
+    const failure = fixture(1);
+    expect(run(monitorPath, [], failure.env).exitCode).not.toBe(0);
+    expect(read(failure.capture)).toContain('"status":"failure"');
+
+    const receiverFailure = fixture(0, 22);
+    expect(run(monitorPath, [], receiverFailure.env).exitCode).not.toBe(0);
+  });
+});
+
+describe('Chloe valuation job verifier', () => {
+  test('accepts one exact disabled job with matching prompt, alerts, and successful history', () => {
+    const directory = temporaryDirectory('chloe-verifier-');
+    const openclaw = join(directory, 'openclaw');
+    const prompt = join(root, '..', 'openclaw-skills', 'smartprop-crm', 'jobs', 'chloe-valuation-refresh.md');
+    executable(openclaw, `
+if [[ "$1 $2" == 'cron list' ]]; then
+  /usr/bin/jq -n --rawfile message "$CHLOE_TEST_PROMPT" '{jobs:[{
+    id:"job-123", name:"smartprop-chloe-valuation-refresh", enabled:false,
+    agentId:"main", sessionTarget:"isolated",
+    schedule:{kind:"cron",expr:"30 8 * * *",tz:"Asia/Singapore",staggerMs:0},
+    payload:{message:($message|rtrimstr("\\n")),timeoutSeconds:2700,toolsAllow:["exec","web_search","web_fetch","browser","read"]},
+    delivery:{mode:"none"}, failureAlert:{after:1,channel:"whatsapp",to:"+6591051399"}
+  }]}'
+elif [[ "$1 $2" == 'cron runs' ]]; then
+  printf '%s\\n' '{"entries":[{"status":"ok"}]}'
+else
+  exit 64
+fi
+`);
+    const expectedHash = createHash('sha256').update(readFileSync(prompt)).digest('hex');
+    const result = run(chloeVerifierPath, [
+      '--expect=staged', `--expected-prompt-sha256=${expectedHash}`,
+    ], {
+      PATH: `${directory}:${process.env.PATH}`,
+      CHLOE_VALUATION_ALERT_TO: '+6591051399',
+      CHLOE_VALUATION_VERIFIER_TEST_MODE: '1',
+      CHLOE_VALUATION_VERIFIER_PROMPT_PATH: prompt,
+      CHLOE_VALUATION_VERIFIER_SHA256_BIN: '/sbin/sha256sum',
+      CHLOE_TEST_PROMPT: prompt,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('jobId=job-123 enabled=false');
+    expect(result.stdout).toContain(`promptSha256=${expectedHash}`);
+    expect(result.stdout).toContain('lastRunStatus=ok');
   });
 });
 
@@ -349,6 +526,9 @@ interface VerifierFixtureOptions {
   envContents?: string;
   envOwner?: string;
   envMode?: string;
+  realSendRows?: number;
+  testSendRows?: number;
+  providerAttemptRows?: number;
 }
 
 function verifierFixture(options: VerifierFixtureOptions = {}) {
@@ -376,6 +556,18 @@ function verifierFixture(options: VerifierFixtureOptions = {}) {
     lastHeartbeatAt: staged ? null : '2026-07-13T01:44:00.000Z',
     lastMeaningfulWorkAt: staged ? null : '2026-07-13T01:44:00.000Z',
     freshnessMinutes: 30, attempted: staged ? 0 : 5, accepted: staged ? 0 : 5, unknown: 0, wahaReady: true,
+  }, newsletterValuation: {
+    state: staged ? 'disabled' : 'healthy', enabled: !staged,
+    sourceRevision: 'openclaw:2026.7.14', currentRunDate: staged ? null : '2026-07-13',
+    currentRunStatus: staged ? null : 'completed',
+    lastHeartbeatAt: staged ? null : '2026-07-13T01:19:00.000Z',
+    lastMeaningfulWorkAt: staged ? null : '2026-07-13T01:19:00.000Z',
+    candidateCount: staged ? 0 : 5, projectCount: staged ? 0 : 1,
+    acceptedCount: staged ? 0 : 1, rejectedCount: 0, blockedCount: 0, failedCount: 0,
+    newestAcceptedCacheAt: staged ? null : '2026-07-13T01:18:00.000Z',
+    latestLocalFailure: null, rollingAcceptedImports: staged ? 0 : 4,
+    rollingCompletedItems: staged ? 0 : 5, rollingAcceptedImportRate: staged ? 0 : 0.8,
+    freshnessMinutes: 15, blocker: null,
   } } }));
   const wahaFile = join(directory, 'waha.json');
   writeFileSync(wahaFile, JSON.stringify({ status: 'WORKING' }));
@@ -391,6 +583,20 @@ function verifierFixture(options: VerifierFixtureOptions = {}) {
     reportTerminal: options.reportTotal ?? (staged ? 0 : 6),
     reportAccepted: options.reportAccepted ?? options.reportTotal ?? (staged ? 0 : 6),
     allTimeAttempted: staged ? 0 : 10, allTimeAccepted: staged ? 0 : 8,
+    valuationRunExists: !staged,
+    valuationRunDate: staged ? null : '2026-07-13',
+    valuationRunStatus: staged ? null : 'completed',
+    valuationCandidates: staged ? 0 : 5,
+    valuationAccepted: staged ? 0 : 1,
+    valuationRejected: 0,
+    valuationBlocked: 0,
+    valuationFailed: 0,
+    valuationCacheLinked: !staged,
+    rollingValuationAccepted: staged ? 0 : 4,
+    rollingValuationCompleted: staged ? 0 : 5,
+    realSendRows: options.realSendRows ?? (staged ? 0 : 10),
+    testSendRows: options.testSendRows ?? 0,
+    providerAttemptRows: options.providerAttemptRows ?? (staged ? 0 : 10),
   }));
   const sqlCapture = join(directory, 'sql.txt');
   const curl = join(binDir, 'curl');
@@ -429,6 +635,9 @@ esac
     STUB_LOG_DIR: logDir,
     STUB_TIMER_ENABLED: staged ? 'disabled' : 'enabled',
     STUB_TIMER_ACTIVE: staged ? 'inactive' : 'active',
+    SMARTPROP_NEWSLETTER_STAGED_BASELINE_REAL_SENDS: '0',
+    SMARTPROP_NEWSLETTER_STAGED_BASELINE_TEST_SENDS: '0',
+    SMARTPROP_NEWSLETTER_STAGED_BASELINE_PROVIDER_ATTEMPTS: '0',
   };
   const args = ['--local-test', `--expect=${options.expect ?? 'staged'}`, '--expected-revision=abcdef1'];
   return { directory, appDir, logDir, dbEnv, sqlCapture, env, args };
@@ -442,6 +651,15 @@ describe('newsletter verifier behavior', () => {
     const sql = read(fixture.sqlCapture);
     expect(sql).toContain('BEGIN READ ONLY');
     expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|TRUNCATE|GRANT|REVOKE)\b/i);
+  });
+
+  test('staged verification fails if dry-run send or provider-attempt counters moved', () => {
+    for (const options of [
+      { realSendRows: 1 }, { testSendRows: 1 }, { providerAttemptRows: 1 },
+    ]) {
+      const fixture = verifierFixture(options);
+      expect(run(verifierPath, fixture.args, fixture.env).exitCode).not.toBe(0);
+    }
   });
 
   test('rejects artifacts at the exact retention boundary but accepts one minute under it', () => {
@@ -622,5 +840,147 @@ describe('deriveNewsletterHealth', () => {
       latestFinalizedReportAt: '2026-07-13T01:35:00.000Z',
     }), new Date('2026-07-13T01:45:00.000Z'));
     expect(result.lastMeaningfulWorkAt).toBe('2026-07-13T01:35:00.000Z');
+  });
+});
+
+function valuationHealthInput(
+  overrides: Partial<ValuationPreparationHealthInput> = {},
+): ValuationPreparationHealthInput {
+  return {
+    enabled: true,
+    sourceRevision: 'openclaw:2026.7.14',
+    currentRun: {
+      runDate: '2026-07-14',
+      status: 'running',
+      candidateCount: 5,
+      projectCount: 1,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      blockedCount: 0,
+      failedCount: 0,
+      lastHeartbeatAt: '2026-07-14T00:39:00.000Z',
+      lastMeaningfulWorkAt: '2026-07-14T00:35:00.000Z',
+      completedAt: null,
+      blocker: null,
+    },
+    newestAcceptedCacheAt: null,
+    latestLocalFailure: null,
+    rollingAcceptedImports: 4,
+    rollingCompletedItems: 5,
+    freshnessMinutes: 15,
+    ...overrides,
+  };
+}
+
+describe('deriveValuationPreparationHealth', () => {
+  test('distinguishes disabled and pre-schedule quiet from an absent current run', () => {
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput({ enabled: false, currentRun: null }),
+      new Date('2026-07-14T01:00:00.000Z'),
+    ).state).toBe('disabled');
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput({ currentRun: null }),
+      new Date('2026-07-14T00:29:59.000Z'),
+    ).state).toBe('quiet');
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput({ currentRun: null }),
+      new Date('2026-07-14T00:30:00.000Z'),
+    ).state).toBe('dead');
+  });
+
+  test('requires both a fresh heartbeat and fresh meaningful work while running', () => {
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput(), new Date('2026-07-14T00:40:00.000Z'),
+    ).state).toBe('healthy');
+    expect(deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!,
+        lastHeartbeatAt: '2026-07-14T00:49:00.000Z',
+        lastMeaningfulWorkAt: '2026-07-14T00:30:00.000Z',
+      },
+    }), new Date('2026-07-14T00:50:00.000Z')).state).toBe('dead');
+    for (const lastHeartbeatAt of [null, '2026-07-14T00:34:59.000Z']) {
+      expect(deriveValuationPreparationHealth(valuationHealthInput({
+        currentRun: { ...valuationHealthInput().currentRun!, lastHeartbeatAt },
+      }), new Date('2026-07-14T00:50:00.000Z')).state).toBe('dead');
+    }
+  });
+
+  test('never treats an incomplete run after the 09:20 SGT deadline as healthy', () => {
+    const result = deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!,
+        lastHeartbeatAt: '2026-07-14T01:19:30.000Z',
+        lastMeaningfulWorkAt: '2026-07-14T01:19:00.000Z',
+      },
+    }), new Date('2026-07-14T01:20:00.000Z'));
+    expect(result.state).toBe('dead');
+  });
+
+  test('requires a terminal zero-candidate run for quiet', () => {
+    const result = deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!, status: 'quiet', candidateCount: 0,
+        projectCount: 0, completedAt: '2026-07-14T00:31:00.000Z',
+      },
+    }), new Date('2026-07-14T00:45:00.000Z'));
+    expect(result.state).toBe('quiet');
+    expect(result.candidateCount).toBe(0);
+  });
+
+  test('reports terminal zero-accepted and cache-linkage failures as blocked', () => {
+    expect(deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!, status: 'blocked', blockedCount: 1,
+        completedAt: '2026-07-14T00:45:00.000Z', blocker: 'no accepted valuation evidence',
+      },
+    }), new Date('2026-07-14T00:50:00.000Z')).state).toBe('blocked');
+    expect(deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!, status: 'completed', acceptedCount: 1,
+        rejectedCount: 1, completedAt: '2026-07-14T00:45:00.000Z',
+        lastMeaningfulWorkAt: '2026-07-14T00:45:00.000Z',
+      },
+      newestAcceptedCacheAt: null,
+    }), new Date('2026-07-14T00:50:00.000Z')).state).toBe('blocked');
+  });
+
+  test('reports completed partial success and rolling accepted-import rate', () => {
+    const result = deriveValuationPreparationHealth(valuationHealthInput({
+      currentRun: {
+        ...valuationHealthInput().currentRun!, status: 'completed', acceptedCount: 1,
+        rejectedCount: 1, completedAt: '2026-07-14T00:45:00.000Z',
+        lastMeaningfulWorkAt: '2026-07-14T00:45:00.000Z',
+      },
+      newestAcceptedCacheAt: '2026-07-14T00:44:00.000Z',
+    }), new Date('2026-07-14T00:50:00.000Z'));
+    expect(result.state).toBe('healthy');
+    expect(result.rollingAcceptedImportRate).toBe(0.8);
+    expect(result.rejectedCount).toBe(1);
+  });
+
+  test('a newer redacted local RPC failure overrides database heartbeat', () => {
+    expect(deriveValuationPreparationHealth(valuationHealthInput({
+      latestLocalFailure: {
+        status: 'failed', command: 'heartbeat', recordedAt: '2026-07-14T00:39:30.000Z',
+        errorCode: 'database_error', message: 'database operation failed',
+      },
+    }), new Date('2026-07-14T00:40:00.000Z')).state).toBe('dead');
+    expect(deriveValuationPreparationHealth(valuationHealthInput({
+      latestLocalFailure: {
+        status: 'failed', command: 'queue', recordedAt: '2026-07-14T00:34:00.000Z',
+        errorCode: 'database_error', message: 'database operation failed',
+      },
+    }), new Date('2026-07-14T00:40:00.000Z')).state).toBe('healthy');
+  });
+
+  test('does not carry yesterday current after the next schedule boundary', () => {
+    const oldRun = { ...valuationHealthInput().currentRun!, runDate: '2026-07-13' };
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput({ currentRun: oldRun }), new Date('2026-07-14T00:29:00.000Z'),
+    ).state).toBe('quiet');
+    expect(deriveValuationPreparationHealth(
+      valuationHealthInput({ currentRun: oldRun }), new Date('2026-07-14T00:31:00.000Z'),
+    ).state).toBe('dead');
   });
 });

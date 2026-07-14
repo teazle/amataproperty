@@ -1,0 +1,11 @@
+[Unit]
+Description=Check SmartProp newsletter workflow at fixed SGT checkpoints
+
+[Timer]
+OnCalendar=*-*-* 01:22,01:37,01:52,02:07,02:22:00 UTC
+Persistent=true
+RandomizedDelaySec=0
+Unit=smartprop-newsletter-monitor.service
+
+[Install]
+WantedBy=timers.target

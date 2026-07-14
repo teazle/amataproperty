@@ -1,5 +1,11 @@
 # WhatsApp Newsletter Operations
 
+The valuation-preparation stage, Chloe's restricted SSH boundary, disabled job
+staging, no-send proof, alert ownership, enable order, reboot proof, and rollback
+are documented in `docs/CHLOE_VALUATION_REFRESH.md`. The send timer must remain
+disabled until every controlled gate in that runbook passes, including the
+separately approved ledgered test send to `+6591051399`.
+
 This runbook controls a five-recipient daily WhatsApp campaign. Deployment alone does not make it live. None of the backup, migration, relink, alert, or controlled-send prerequisites below are claimed as currently satisfied.
 
 ## Link the production WAHA session

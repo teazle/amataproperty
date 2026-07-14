@@ -1,4 +1,5 @@
 export type NewsletterHealthStatus = 'healthy' | 'quiet' | 'blocked' | 'stale' | 'unknown';
+export type ValuationPreparationState = 'quiet' | 'healthy' | 'blocked' | 'dead' | 'disabled';
 
 export interface NewsletterRunHealthSnapshot {
   runDate: string;
@@ -37,13 +38,79 @@ export interface NewsletterHealthCheck {
   freshnessMinutes: number;
 }
 
+export interface ValuationPreparationRunSnapshot {
+  runDate: string;
+  status: string;
+  candidateCount: number;
+  projectCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  blockedCount: number;
+  failedCount: number;
+  lastHeartbeatAt: string | null;
+  lastMeaningfulWorkAt: string | null;
+  completedAt: string | null;
+  blocker: string | null;
+}
+
+export interface RedactedValuationLocalFailure {
+  status: 'failed';
+  command: 'queue' | 'heartbeat' | 'import' | 'complete' | 'set-project-profile';
+  recordedAt: string;
+  errorCode: 'database_error';
+  message: 'database operation failed';
+}
+
+export interface ValuationPreparationHealthInput {
+  enabled: boolean;
+  sourceRevision: string | null;
+  currentRun: ValuationPreparationRunSnapshot | null;
+  newestAcceptedCacheAt: string | null;
+  latestLocalFailure: RedactedValuationLocalFailure | null;
+  rollingAcceptedImports: number;
+  rollingCompletedItems: number;
+  freshnessMinutes: number;
+  dataError?: boolean;
+}
+
+export interface ValuationPreparationHealthCheck {
+  state: ValuationPreparationState;
+  enabled: boolean;
+  sourceRevision: string | null;
+  currentRunDate: string | null;
+  currentRunStatus: string | null;
+  lastHeartbeatAt: string | null;
+  lastMeaningfulWorkAt: string | null;
+  candidateCount: number;
+  projectCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  blockedCount: number;
+  failedCount: number;
+  newestAcceptedCacheAt: string | null;
+  latestLocalFailure: RedactedValuationLocalFailure | null;
+  rollingAcceptedImports: number;
+  rollingCompletedItems: number;
+  rollingAcceptedImportRate: number;
+  freshnessMinutes: number;
+  blocker: string | null;
+}
+
 export const DEFAULT_NEWSLETTER_FRESHNESS_MINUTES = 30;
+export const DEFAULT_VALUATION_FRESHNESS_MINUTES = 15;
 
 export function parseNewsletterFreshnessMinutes(value: string | undefined): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 24 * 60
     ? parsed
     : DEFAULT_NEWSLETTER_FRESHNESS_MINUTES;
+}
+
+export function parseValuationFreshnessMinutes(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 120
+    ? parsed
+    : DEFAULT_VALUATION_FRESHNESS_MINUTES;
 }
 
 export function normalizeSourceRevision(value: string | null): string | null {
@@ -63,6 +130,11 @@ function singaporeDate(value: Date): string {
 function beforeSendWindow(now: Date): boolean {
   const singapore = new Date(now.getTime() + (8 * 60 * 60 * 1000));
   return singapore.getUTCHours() < 9 || (singapore.getUTCHours() === 9 && singapore.getUTCMinutes() < 30);
+}
+
+function singaporeMinutes(now: Date): number {
+  const singapore = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+  return singapore.getUTCHours() * 60 + singapore.getUTCMinutes();
 }
 
 function latestTimestamp(...values: Array<string | null>): string | null {
@@ -111,4 +183,74 @@ export function deriveNewsletterHealth(input: NewsletterHealthInput, now = new D
   }
   if (!heartbeatFresh) return { status: 'stale', ...statusBase };
   return { status: 'healthy', ...statusBase };
+}
+
+export function deriveValuationPreparationHealth(
+  input: ValuationPreparationHealthInput,
+  now = new Date(),
+): ValuationPreparationHealthCheck {
+  const run = input.currentRun;
+  const freshnessMinutes = Number.isInteger(input.freshnessMinutes) && input.freshnessMinutes > 0
+    ? input.freshnessMinutes
+    : DEFAULT_VALUATION_FRESHNESS_MINUTES;
+  const rollingAcceptedImports = Math.max(0, Number(input.rollingAcceptedImports) || 0);
+  const rollingCompletedItems = Math.max(0, Number(input.rollingCompletedItems) || 0);
+  const base: Omit<ValuationPreparationHealthCheck, 'state'> = {
+    enabled: input.enabled,
+    sourceRevision: input.sourceRevision?.trim() || null,
+    currentRunDate: run?.runDate || null,
+    currentRunStatus: run?.status || null,
+    lastHeartbeatAt: run?.lastHeartbeatAt || null,
+    lastMeaningfulWorkAt: run?.lastMeaningfulWorkAt || null,
+    candidateCount: run?.candidateCount || 0,
+    projectCount: run?.projectCount || 0,
+    acceptedCount: run?.acceptedCount || 0,
+    rejectedCount: run?.rejectedCount || 0,
+    blockedCount: run?.blockedCount || 0,
+    failedCount: run?.failedCount || 0,
+    newestAcceptedCacheAt: input.newestAcceptedCacheAt,
+    latestLocalFailure: input.latestLocalFailure,
+    rollingAcceptedImports,
+    rollingCompletedItems,
+    rollingAcceptedImportRate: rollingCompletedItems > 0
+      ? rollingAcceptedImports / rollingCompletedItems
+      : 0,
+    freshnessMinutes,
+    blocker: run?.blocker || null,
+  };
+  const result = (state: ValuationPreparationState): ValuationPreparationHealthCheck => ({ state, ...base });
+
+  if (!input.enabled) return result('disabled');
+  const currentDate = singaporeDate(now);
+  const minutes = singaporeMinutes(now);
+  const beforeSchedule = minutes < (8 * 60 + 30);
+  if (input.dataError || !base.sourceRevision) return result('dead');
+  if (!run || run.runDate !== currentDate) return result(beforeSchedule ? 'quiet' : 'dead');
+
+  const latestDatabaseAction = latestTimestamp(
+    run.lastHeartbeatAt,
+    run.lastMeaningfulWorkAt,
+    run.completedAt,
+  );
+  if (input.latestLocalFailure && (
+    !latestDatabaseAction ||
+    Date.parse(input.latestLocalFailure.recordedAt) > Date.parse(latestDatabaseAction)
+  )) return result('dead');
+
+  if (run.status === 'quiet' && run.candidateCount === 0 && Boolean(run.completedAt)) {
+    return result('quiet');
+  }
+  if (run.status === 'failed') return result('dead');
+  if (run.status === 'blocked' || run.blocker) return result('blocked');
+  if (run.status === 'completed') {
+    if (run.candidateCount === 0) return result('quiet');
+    if (run.acceptedCount <= 0 || !input.newestAcceptedCacheAt) return result('blocked');
+    return result('healthy');
+  }
+  if (minutes >= (9 * 60 + 20)) return result('dead');
+  if (!timestampIsFresh(run.lastHeartbeatAt, now, freshnessMinutes) ||
+      !timestampIsFresh(run.lastMeaningfulWorkAt, now, freshnessMinutes)) {
+    return result('dead');
+  }
+  return result('healthy');
 }

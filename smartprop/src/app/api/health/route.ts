@@ -4,13 +4,19 @@ import { NextRequest,NextResponse } from 'next/server';
 
 import {
   deriveNewsletterHealth,
+  deriveValuationPreparationHealth,
   normalizeSourceRevision,
   parseNewsletterFreshnessMinutes,
+  parseValuationFreshnessMinutes,
   type NewsletterRunHealthSnapshot,
+  type RedactedValuationLocalFailure,
+  type ValuationPreparationRunSnapshot,
 } from '@/lib/newsletter/newsletter-health';
 import { getWAHAHeaders, getWAHAReadiness } from '@/lib/wa/waha';
 
 const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
+const VALUATION_LOCAL_STATUS_PATH = process.env.SMARTPROP_VALUATION_LOCAL_STATUS_PATH ||
+  '/var/lib/smartprop/newsletter-valuation-status.json';
 
 async function readSourceRevision(): Promise<string | null> {
   try {
@@ -18,6 +24,33 @@ async function readSourceRevision(): Promise<string | null> {
     return normalizeSourceRevision(revision);
   } catch {
     return null;
+  }
+}
+
+async function readValuationLocalFailure(): Promise<{
+  failure: RedactedValuationLocalFailure | null;
+  dataError: boolean;
+}> {
+  try {
+    const value = JSON.parse(await readFile(VALUATION_LOCAL_STATUS_PATH, 'utf8')) as Record<string, unknown>;
+    const commands = new Set(['queue', 'heartbeat', 'import', 'complete', 'set-project-profile']);
+    if (value.status !== 'failed' || !commands.has(String(value.command)) ||
+        value.errorCode !== 'database_error' || value.message !== 'database operation failed' ||
+        typeof value.recordedAt !== 'string' || Number.isNaN(Date.parse(value.recordedAt))) {
+      return { failure: null, dataError: true };
+    }
+    return { failure: {
+        status: 'failed',
+        command: value.command as RedactedValuationLocalFailure['command'],
+        recordedAt: value.recordedAt,
+        errorCode: 'database_error',
+        message: 'database operation failed',
+      }, dataError: false };
+  } catch (error) {
+    return {
+      failure: null,
+      dataError: (error as NodeJS.ErrnoException).code !== 'ENOENT',
+    };
   }
 }
 
@@ -141,6 +174,101 @@ export async function GET(_request: NextRequest) {
         latestFinalizedSendAt: null,
         latestFinalizedReportAt: null,
         freshnessMinutes: parseNewsletterFreshnessMinutes(process.env.SMARTPROP_NEWSLETTER_FRESHNESS_MINUTES),
+        dataError: true,
+      });
+    }
+
+    // Valuation preparation is separate from provider-send health and contains no lead PII.
+    try {
+      const valuationClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const rollingCutoff = new Date(Date.now() - (30 * 86_400_000)).toISOString();
+      const [valuationRunResult, rollingItemsResult, localStatus] = await Promise.all([
+        valuationClient
+          .from('newsletter_valuation_runs')
+          .select('id,run_date,status,source_revision,candidate_count,project_count,accepted_count,rejected_count,blocked_count,failed_count,last_heartbeat_at,last_meaningful_work_at,completed_at,blocker')
+          .order('run_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        valuationClient
+          .from('newsletter_valuation_items')
+          .select('status,recorded_at')
+          .in('status', ['accepted', 'rejected', 'blocked', 'failed'])
+          .gte('recorded_at', rollingCutoff),
+        readValuationLocalFailure(),
+      ]);
+      const runRow = valuationRunResult.data as Record<string, unknown> | null;
+      const currentItemsResult = runRow
+        ? await valuationClient
+          .from('newsletter_valuation_items')
+          .select('status,cache_valuation_id')
+          .eq('run_id', String(runRow.id))
+        : { data: [], error: null };
+      const currentItems = (currentItemsResult.data || []) as Array<Record<string, unknown>>;
+      const cacheIds = currentItems
+        .filter((item) => item.status === 'accepted' && typeof item.cache_valuation_id === 'string')
+        .map((item) => String(item.cache_valuation_id));
+      const cacheResult = cacheIds.length
+        ? await valuationClient
+          .from('propnex_valuations')
+          .select('id,fetched_at,evidence_status,evidence_contract_version,validated_confidence,expires_at')
+          .in('id', cacheIds)
+          .eq('evidence_status', 'accepted')
+          .eq('evidence_contract_version', 'chloe-valuation-v1')
+          .in('validated_confidence', ['medium', 'high'])
+          .gt('expires_at', new Date().toISOString())
+          .order('fetched_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        : { data: null, error: null };
+      const run: ValuationPreparationRunSnapshot | null = runRow ? {
+        runDate: String(runRow.run_date),
+        status: String(runRow.status),
+        candidateCount: Number(runRow.candidate_count || 0),
+        projectCount: Number(runRow.project_count || 0),
+        acceptedCount: Number(runRow.accepted_count || 0),
+        rejectedCount: Number(runRow.rejected_count || 0),
+        blockedCount: Number(runRow.blocked_count || 0),
+        failedCount: Number(runRow.failed_count || 0),
+        lastHeartbeatAt: typeof runRow.last_heartbeat_at === 'string' ? runRow.last_heartbeat_at : null,
+        lastMeaningfulWorkAt: typeof runRow.last_meaningful_work_at === 'string'
+          ? runRow.last_meaningful_work_at
+          : null,
+        completedAt: typeof runRow.completed_at === 'string' ? runRow.completed_at : null,
+        blocker: typeof runRow.blocker === 'string' ? runRow.blocker : null,
+      } : null;
+      const rollingItems = (rollingItemsResult.data || []) as Array<Record<string, unknown>>;
+      checks.newsletterValuation = deriveValuationPreparationHealth({
+        enabled: process.env.SMARTPROP_VALUATION_ENABLED === '1',
+        sourceRevision: typeof runRow?.source_revision === 'string' ? runRow.source_revision :
+          (process.env.VALUATION_SOURCE_REVISION?.trim() || null),
+        currentRun: run,
+        newestAcceptedCacheAt: typeof cacheResult.data?.fetched_at === 'string'
+          ? cacheResult.data.fetched_at
+          : null,
+        latestLocalFailure: localStatus.failure,
+        rollingAcceptedImports: rollingItems.filter((item) => item.status === 'accepted').length,
+        rollingCompletedItems: rollingItems.length,
+        freshnessMinutes: parseValuationFreshnessMinutes(process.env.SMARTPROP_VALUATION_FRESHNESS_MINUTES),
+        dataError: Boolean(
+          valuationRunResult.error || rollingItemsResult.error ||
+          currentItemsResult.error || cacheResult.error || localStatus.dataError
+        ),
+      });
+    } catch {
+      checks.newsletterValuation = deriveValuationPreparationHealth({
+        enabled: process.env.SMARTPROP_VALUATION_ENABLED === '1',
+        sourceRevision: process.env.VALUATION_SOURCE_REVISION?.trim() || null,
+        currentRun: null,
+        newestAcceptedCacheAt: null,
+        latestLocalFailure: (await readValuationLocalFailure()).failure,
+        rollingAcceptedImports: 0,
+        rollingCompletedItems: 0,
+        freshnessMinutes: parseValuationFreshnessMinutes(process.env.SMARTPROP_VALUATION_FRESHNESS_MINUTES),
         dataError: true,
       });
     }

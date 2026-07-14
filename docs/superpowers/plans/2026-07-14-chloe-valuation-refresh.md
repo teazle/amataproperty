@@ -528,7 +528,7 @@ git commit -m "feat: gate newsletter sends on valuation preparation"
 
 - [ ] **Step 1: Write failing wrapper, job, and skill tests**
 
-Test every allowed command plus missing/wrong lease, blank command, shell separators, substitutions, redirections, extra flags, malformed UUIDs, newline injection, 256 KiB+ stdin, `set-project-profile`, environment override, and arbitrary command rejection. Assert installer text creates `smartprop-valuation` as non-login, installs root-owned mode-0755 wrappers, writes `/etc/sudoers.d/smartprop-valuation` as root mode 0440 with only `smartprop-valuation ALL=(root) NOPASSWD: /usr/local/libexec/smartprop-valuation-launcher *`, validates it with `visudo -cf`, pins source IP `194.233.94.3`, uses `restrict,no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc`, and never prints keys/secrets. Assert job installation refuses an empty alert destination and configures one-failure alerts.
+Test every allowed command plus missing/wrong lease, blank command, shell separators, substitutions, redirections, extra flags, malformed UUIDs, newline injection, 256 KiB+ stdin, `set-project-profile`, environment override, and arbitrary command rejection. Assert installer text creates `smartprop-valuation` with a locked password and only a root-owned forced-command key, installs root-owned mode-0755 wrappers, writes `/etc/sudoers.d/smartprop-valuation` as root mode 0440 with only `smartprop-valuation ALL=(root) NOPASSWD: /usr/local/libexec/smartprop-valuation-launcher *`, validates it with `visudo -cf`, pins source IP `194.233.94.3`, uses `restrict,no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc`, and never prints keys/secrets. Assert job installation refuses an empty alert destination and configures one-failure alerts.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -654,7 +654,8 @@ event, then polls `GET $SMARTPROP_NEWSLETTER_ALERT_STATUS_URL?checkId=...` for
 up to 120 seconds. Success requires JSON `received=true`, non-empty `alertId`,
 and parseable `receivedAt` for that exact check. This proves both alert delivery
 and monitor observability. `verify-chloe-valuation-job.sh` reads
-`openclaw cron list --json` and `openclaw cron runs --id "$job_id" --json`; it
+`openclaw cron list --json` and `openclaw cron runs --id "$job_id" --limit 1`
+(the latter already emits JSON and rejects `--json` on OpenClaw 2026.6.11); it
 never edits or runs the job.
 
 `monitor-newsletter-campaign.sh` executes the absolute

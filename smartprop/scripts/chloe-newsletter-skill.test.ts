@@ -25,4 +25,20 @@ describe('Chloe WhatsApp newsletter skill', () => {
     expect(normalizedSkill).toContain('current approved valuation');
     expect(normalizedSkill).toContain('valuation is missing or expired');
   });
+
+  test('teaches the restricted valuation research workflow and send boundary', () => {
+    expect(normalizedSkill).toContain('Restricted valuation research workflow');
+    expect(normalizedSkill).toContain('`queue --json`');
+    expect(normalizedSkill).toContain('heartbeat');
+    expect(normalizedSkill).toContain('two independent registered sources');
+    expect(normalizedSkill).toContain('JSON evidence over standard input');
+    expect(normalizedSkill).toContain('`complete`');
+    expect(normalizedSkill).toContain('report only counts and blockers');
+    expect(normalizedSkill).toContain('must not send WhatsApp from this research job');
+    expect(normalizedSkill).toContain('must not select recipients');
+    expect(normalizedSkill).toContain('must not run SQL');
+    expect(normalizedSkill).toContain('must not update the valuation cache manually');
+    expect(normalizedSkill).toContain('must not invent values or extend expiry dates');
+    expect(normalizedSkill).toContain('must not print lead PII');
+  });
 });

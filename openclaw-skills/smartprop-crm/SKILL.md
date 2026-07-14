@@ -256,6 +256,27 @@ Before every dry-run, Chloe must review the audience project's CRM leads:
   has a current approved valuation. Run the dry-run, review its selected count and
   blocker, and only then treat the list as ready.
 
+### Restricted valuation research workflow
+
+The 08:30 SGT `smartprop-chloe-valuation-refresh` job prepares current project-level
+evidence before the 09:30 campaign. Chloe starts with the restricted `queue --json`
+command, keeps the returned lease private, and sends a `heartbeat` at least every
+five minutes while researching. Each valuation must use two independent registered
+sources from different ownership groups, including a recent transaction or official
+valuation source. Search snippets are discovery aids, not evidence.
+
+Chloe submits JSON evidence over standard input with the lease-bearing `import`
+command, persists a bounded blocked or failed outcome when evidence cannot be
+obtained, and invokes `complete` only after every queued item has an outcome. Chloe
+must report only counts and blockers from this research job.
+
+Chloe must not send WhatsApp from this research job, must not select recipients,
+must not run SQL, and must not update the valuation cache manually. Chloe also must
+not invent values or extend expiry dates, and must not print lead PII, lease tokens,
+credentials, or full evidence payloads. The production campaign runner remains the
+only component allowed to select up to five recipients, call WAHA, update CRM send
+state, process STOP, and generate the operator report.
+
 The runner automatically selects up to five eligible recipients. Do not manually
 choose the five recipients. Chloe must not manually send newsletter messages. Do not
 send a parallel batch or retry a failed or unknown provider submission outside the

@@ -554,7 +554,7 @@ It invokes:
 exec /usr/bin/sudo -n /usr/local/libexec/smartprop-valuation-launcher "$command" "${validated_args[@]}"
 ```
 
-It must never use `eval`, `bash -c`, `sh -c`, word-split the original string, or accept environment assignments. The launcher independently revalidates arguments, sets `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME=/var/lib/smartprop-valuation`, and working directory `/opt/smartprop/app/smartprop`, loads `/etc/smartprop/smartprop.env` as root, and executes `/root/.bun/bin/bun scripts/run-chloe-valuation-refresh.ts`. The installer creates the home without a login shell, installs both root-owned wrappers mode 0755, installs the exact sudoers rule above, and writes the source-IP-restricted forced-command `authorized_keys` entry without echoing key material.
+It must never use `eval`, `bash -c`, `sh -c`, word-split the original string, or accept environment assignments. The launcher independently revalidates arguments, sets `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME=/var/lib/smartprop-valuation`, and working directory `/opt/smartprop/app/smartprop`, loads `/etc/smartprop/smartprop.env` as root, and executes `/root/.bun/bin/bun scripts/run-chloe-valuation-refresh.ts`. Because OpenSSH invokes forced commands through the account shell, the installer creates a locked-password account with `/bin/bash`, a root-owned forced-command-only `authorized_keys`, and no unrestricted key. It installs both root-owned wrappers mode 0755, installs the exact sudoers rule above, pins source IP `194.233.94.3`, and never prints key material.
 
 - [ ] **Step 4: Implement Chloe's immutable prompt, disabled installer, and skill workflow**
 
@@ -569,16 +569,26 @@ openclaw cron add \
   --agent main --session isolated --no-deliver \
   --timeout-seconds 2700 --tools 'exec web_search web_fetch browser read' \
   --message "$(cat "$prompt_path")" \
+  --disabled --json
+
+openclaw cron edit "$job_id" \
+  --name smartprop-chloe-valuation-refresh \
+  --cron '30 8 * * *' --tz Asia/Singapore --exact \
+  --agent main --session isolated --no-deliver \
+  --timeout-seconds 2700 --tools 'exec web_search web_fetch browser read' \
+  --message "$(cat "$prompt_path")" \
   --failure-alert --failure-alert-after 1 \
   --failure-alert-channel whatsapp --failure-alert-to "$CHLOE_VALUATION_ALERT_TO" \
-  --disabled --json
+  --disable
 ```
 
-If the job exists, obtain its exact ID from `openclaw cron list --json` and run
-`openclaw cron edit "$job_id"` with the same schedule, prompt, tools, disabled,
-and failure-alert flags instead of creating a duplicate. The installer fails if
-zero or multiple exact-name jobs are returned after reconciliation. Alerts are
-configured during staging but no scheduled execution occurs while disabled.
+OpenClaw 2026.6.11 exposes `--disabled --json` on `cron add`, while failure-alert
+flags and `--disable` are available on `cron edit`. The installer therefore
+creates a missing job disabled, obtains its exact ID from `openclaw cron list
+--json`, and then edits that same job with the schedule, prompt, tools, disabled
+state, and failure alerts. Existing jobs go directly through the edit path. The
+installer fails if zero or multiple exact-name jobs are returned after
+reconciliation. No scheduled execution occurs while disabled.
 
 - [ ] **Step 5: Run focused tests, shell syntax, and commit**
 

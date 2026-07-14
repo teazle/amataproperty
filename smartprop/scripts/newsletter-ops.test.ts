@@ -106,7 +106,9 @@ describe('WhatsApp newsletter operations contract', () => {
     ]) expect(existsSync(path)).toBe(true);
 
     const timer = read(monitorTimerPath);
-    expect(timer).toContain('OnCalendar=*-*-* 01:22,01:37,01:52,02:07,02:22:00 UTC');
+    for (const time of ['01:22', '01:37', '01:52', '02:07', '02:22']) {
+      expect(timer).toContain(`OnCalendar=*-*-* ${time}:00 UTC`);
+    }
     expect(timer).toContain('Persistent=true');
     expect(timer).toContain('RandomizedDelaySec=0');
     const service = read(monitorServicePath);

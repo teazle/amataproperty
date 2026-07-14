@@ -670,8 +670,10 @@ check-in fails. The receiver is configured for expected check name
 of this host. Unit hardening includes `Type=oneshot`, `User=root`,
 `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`,
 `ProtectHome=true`, `MemoryMax=128M`, and `TimeoutStartSec=180`. The timer uses
-`OnCalendar=*-*-* 01:22,01:37,01:52,02:07,02:22:00 UTC`, `Persistent=true`, and
-`RandomizedDelaySec=0`; it remains disabled in staging.
+five explicit `OnCalendar` entries at `01:22`, `01:37`, `01:52`, `02:07`, and
+`02:22` UTC, plus `Persistent=true` and `RandomizedDelaySec=0`; it remains
+disabled in staging. A single comma-separated multi-hour calendar expression is
+invalid systemd syntax and must not be used.
 
 - [ ] **Step 4: Write the operator runbook and rollback sequence**
 

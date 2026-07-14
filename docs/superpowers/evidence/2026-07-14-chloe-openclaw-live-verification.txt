@@ -1,0 +1,39 @@
+Chloe OpenClaw live verification evidence
+Captured from the controller on 2026-07-14 (UTC)
+Target: root@194.233.94.3
+
+Command:
+  ./smartprop/scripts/verify-chloe-openclaw.sh --preflight-update=2026.7.1
+
+Output:
+  verifiedAt=2026-07-14T14:54:56Z
+  target=root@194.233.94.3 hostname=vmi3136623 publicIp=194.233.94.3
+  openclaw=2026.7.1 commit=2d2ddc4 node=22.23.1 nodeEngine=>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0 nodeCompatible=true
+  serviceActive=active serviceEnabled=enabled nRestarts=0 health=true/live gatewayRpc=true gatewayVersion=2026.7.1
+  configValid=true model=openai/gpt-5.6-sol thinking=high mainDefault=true authUsable=true
+  runId=b8c35794-e6b7-4b25-ba33-a61420cb2966 runStatus=success response=CHLOE_SOL_HIGH_OK provider=openai model=gpt-5.6-sol thinking=high fallbackUsed=false stopReason=stop deliverySafe=true
+  updatePreflight=pass targetVersion=2026.7.1 targetNodeEngine=>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0 currentNode=22.23.1
+  verification=pass
+  exitCode=0
+
+Focused local test:
+  bun test smartprop/scripts/chloe-openclaw-verifier.test.ts
+
+Result:
+  9 pass
+  0 fail
+  36 assertions
+
+Backup evidence:
+  archive=/root/openclaw-backups/chloe-openclaw-pre-2026.7.1-20260714T131319Z/rollback-critical.tar.gz
+  sha256=89da323528c42ce9ded4113d47eb8eabe42596cee16ee18dafdc650cb8db0e10
+  extraction=pass
+  protectedFileByteComparison=pass
+
+Source-boundary explorer verdict at 2026-07-14T14:16:39Z:
+  /opt/openclaw-assistant does not exist. Core OpenClaw/config/model state is not Git-managed on the VPS.
+  The unrelated /root/.openclaw/workspace checkout is dirty, contains secret-like files, and has no remote; no commit belongs there.
+
+Independent final evidence gate:
+  verdict=PASS
+  gaps=[]

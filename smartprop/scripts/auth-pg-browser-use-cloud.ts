@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { classifyBrowserUseFailure } from '../src/lib/scraper/auth-provider-policy.ts';
 
 const BROWSER_USE_API = 'https://api.browser-use.com/api/v3';
 const PROPERTYGURU_ORIGIN = 'https://www.propertyguru.com.sg';
@@ -15,6 +16,13 @@ type CdpResponse = {
   result?: unknown;
   error?: { message?: string; code?: number };
 };
+
+class BrowserUseApiError extends Error {
+  constructor(message: string, readonly exitCode: number) {
+    super(message);
+    this.name = 'BrowserUseApiError';
+  }
+}
 
 class CdpClient {
   private id = 0;
@@ -114,7 +122,11 @@ async function browserUseFetch<T>(pathName: string, method: string, body?: unkno
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Browser Use API ${method} ${pathName} failed: ${response.status} ${text.slice(0, 500)}`);
+    const classification = classifyBrowserUseFailure(response.status);
+    throw new BrowserUseApiError(
+      `Browser Use API ${method} ${pathName} failed: ${response.status} ${text.slice(0, 500)}`,
+      classification.exitCode
+    );
   }
 
   return (text ? JSON.parse(text) : {}) as T;
@@ -346,7 +358,7 @@ async function authenticate() {
   const password = requireEnv('PG_PASSWORD');
   requireEnv('BROWSER_USE_API_KEY');
 
-  const statePath = path.join(process.cwd(), 'storage', 'pg.state.json');
+  const statePath = process.env.PG_AUTH_STATE_OUTPUT || path.join(process.cwd(), 'storage', 'pg.state.json');
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
 
   let cloudBrowser: BrowserUseBrowser | undefined;
@@ -400,7 +412,7 @@ async function authenticate() {
   }
 }
 
-authenticate().catch((error) => {
+authenticate().catch((error: unknown) => {
   console.error('❌ Browser Use Cloud PropertyGuru auth failed:', error);
-  process.exit(1);
+  process.exit(error instanceof BrowserUseApiError ? error.exitCode : 1);
 });

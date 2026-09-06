@@ -35,24 +35,20 @@ import {
   createFlaresolverrSession
 } from './flaresolverr.js';
 import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health.js';
+import { runPGAuthProvider, type PGAuthRunResult } from '../lib/scraper/auth-provider-policy.js';
 
 const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
 
 // Helper function to re-authenticate if needed
-async function reAuthenticate(): Promise<boolean> {
+async function reAuthenticate(): Promise<PGAuthRunResult> {
   console.log('\n🔄 Re-authenticating to PropertyGuru...');
 
   // Check if credentials are available
   if (!process.env.PG_EMAIL || !process.env.PG_PASSWORD) {
     console.error('❌ PG_EMAIL and PG_PASSWORD environment variables are not set!');
-    return false;
+    return { ok: false, exitCode: 78, provider: null };
   }
 
-  const browserUseAuthScriptPath = path.join(process.cwd(), 'scripts', 'auth-pg-browser-use-cloud.ts');
-  const defaultAuthScriptPath = path.join(process.cwd(), 'src', 'workers', 'auth.pg.ts');
-  const shouldUseBrowserUseCloud = Boolean(process.env.BROWSER_USE_API_KEY) && fs.existsSync(browserUseAuthScriptPath);
-  const authScriptPath = shouldUseBrowserUseCloud ? browserUseAuthScriptPath : defaultAuthScriptPath;
-  const stateFilePath = path.join(process.cwd(), 'storage', 'pg.state.json');
   const isLinux = process.platform === 'linux';
   const bunCandidates = [
     process.env.BUN_PATH,
@@ -63,121 +59,24 @@ async function reAuthenticate(): Promise<boolean> {
   ].filter((value): value is string => Boolean(value));
   const bunPath =
     bunCandidates.find((candidate) => candidate === 'bun' || fs.existsSync(candidate)) ?? 'bun';
-
-  // Ensure storage directory exists
-  const storageDir = path.dirname(stateFilePath);
-  if (!fs.existsSync(storageDir)) {
-    fs.mkdirSync(storageDir, { recursive: true });
-  }
-
-  const env = {
-    ...process.env,
-    PATH: isLinux ? `${bunPath}:${process.env.PATH}` : process.env.PATH, // Ensure Bun is in PATH
-    HOME: process.env.HOME || '/home/ec2-user',
-  };
-
-  // Get initial modification time of the state file
-  let initialMtimeMs = 0;
-  if (fs.existsSync(stateFilePath)) {
-    initialMtimeMs = fs.statSync(stateFilePath).mtimeMs;
-    try {
-      fs.unlinkSync(stateFilePath);
-      console.log('   🗑️  Removed old auth state file');
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
-  return new Promise<boolean>((resolve) => {
-    const command = isLinux ? 'xvfb-run' : bunPath;
-    const args = isLinux ? ['-a', bunPath, authScriptPath] : [authScriptPath];
-
-    if (shouldUseBrowserUseCloud) {
-      console.log('   ☁️  Using Browser Use Cloud auth fallback for PropertyGuru');
-    }
-    console.log(`   🚀 Spawning auth process: ${command} ${args.join(' ')}`);
-    const child = spawn(command, args, {
-      cwd: process.cwd(),
-      stdio: 'inherit',
-      env,
-    });
-
-    let authSuccess = false;
-
-    // Set timeout for 15 minutes (allows for 5 Flaresolverr attempts at 300s each)
-    const timeout = setTimeout(() => {
-      console.log('   ⏱️  Re-authentication timeout (15 minutes) - killing process...');
-      child.kill('SIGKILL');
-      // Check state file one more time before resolving
-      if (fs.existsSync(stateFilePath)) {
-        const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
-        if (newMtimeMs > initialMtimeMs) {
-          console.log('✅ Authentication state file updated despite timeout.');
-          authSuccess = true;
-        }
-      }
-      if (authSuccess) {
-        console.log('✅ Re-authentication complete!\n');
-        resolve(true);
-      } else {
-        console.error('❌ Re-authentication failed (timeout).');
-        resolve(false);
-      }
-    }, 900000); // 15 minutes
-
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      console.error('❌ Failed to spawn auth process:', error);
-      resolve(false);
-    });
-
-      child.on('exit', (code, signal) => {
-        clearTimeout(timeout);
-        console.log(`   Auth process exited with code ${code ?? 'null'}, signal ${signal ?? 'none'}`);
-
-        // Wait a moment for file writes to complete
-        setTimeout(() => {
-          // Check if the state file was updated after the process started
-          if (fs.existsSync(stateFilePath)) {
-            const newMtimeMs = fs.statSync(stateFilePath).mtimeMs;
-            if (newMtimeMs > initialMtimeMs) {
-              try {
-                const content = fs.readFileSync(stateFilePath, 'utf-8');
-                const data = JSON.parse(content);
-                if (Array.isArray(data.cookies) && data.cookies.length > 0) {
-                  console.log(`✅ Authentication state file updated with ${data.cookies.length} cookies.`);
-                  authSuccess = true;
-                } else {
-                  console.log('⚠️  Authentication state file updated but has no cookies.');
-                  console.log(`   State file keys: ${Object.keys(data).join(', ')}`);
-                }
-              } catch (parseError) {
-                console.error('⚠️  Could not parse state file:', parseError);
-              }
-            } else {
-              console.log(`⚠️  Authentication state file not updated (mtime unchanged: ${initialMtimeMs} -> ${newMtimeMs}).`);
-            }
-          } else {
-            console.log('⚠️  Authentication state file does not exist after re-authentication attempt.');
-            console.log(`   Expected path: ${stateFilePath}`);
-          }
-
-          if (authSuccess) {
-            console.log('✅ Re-authentication complete!\n');
-            resolve(true);
-          } else if (code === 0 || code === null) {
-            // Exit code 0 or null but no state file - might still be OK if file check passed
-            console.log('⚠️  Process exited with code 0/null but state file check failed - treating as failure');
-            console.log(`   Possible causes: Authentication script failed silently, Flaresolverr unavailable, or login flow changed`);
-            resolve(false);
-          } else {
-            console.error(`❌ Re-authentication failed (process exited with code ${code}).`);
-            console.error(`   Common causes: Invalid credentials, Cloudflare blocking, Flaresolverr unavailable, or website changes`);
-            resolve(false);
-          }
-        }, 1000); // Wait 1 second for file writes to complete
-      });
+  const result = await runPGAuthProvider({
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PATH: isLinux ? `${bunPath}:${process.env.PATH}` : process.env.PATH,
+      HOME: process.env.HOME || '/home/ec2-user',
+    },
+    spawn,
+    bunPath,
+    isLinux,
   });
+
+  if (result.ok) {
+    console.log(`✅ Re-authentication complete with ${result.provider} provider.\n`);
+  } else {
+    console.error(`❌ Re-authentication failed (exit ${result.exitCode}, provider ${result.provider ?? 'unresolved'}).`);
+  }
+  return result;
 }
 
 // Import the existing scraper functions
@@ -684,9 +583,9 @@ async function scrapePropertyGuruByDistrict() {
   // Re-authenticate only if needed
   if (shouldReAuth) {
     console.log('🔄 Re-authenticating before scraping to ensure fresh session...');
-    const authSuccess = await reAuthenticate();
+    const authResult = await reAuthenticate();
 
-    if (!authSuccess) {
+    if (!authResult.ok) {
       console.error('❌ Re-authentication failed! Cannot proceed without authentication.');
       // Update lock file and database, then remove lock file
       if (fs.existsSync(lockFile)) {
@@ -727,7 +626,7 @@ async function scrapePropertyGuruByDistrict() {
         }
       }
 
-      process.exit(1);
+      process.exit(authResult.exitCode);
     }
 
     // Verify auth state exists after re-auth
@@ -1411,14 +1310,14 @@ async function scrapePropertyGuruByDistrict() {
                 }
 
                 // Re-authenticate
-                const reAuthSuccess = await reAuthenticate();
-                if (!reAuthSuccess) {
+                const reAuthResult = await reAuthenticate();
+                if (!reAuthResult.ok) {
                   console.log('❌ Re-authentication failed. Stopping scraper.');
                   // Clean up lock file
                   if (fs.existsSync(lockFile)) {
                     fs.unlinkSync(lockFile);
                   }
-                  process.exit(1);
+                  process.exit(reAuthResult.exitCode);
                 }
 
                 // Update status message before removing lock

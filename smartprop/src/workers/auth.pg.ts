@@ -1161,23 +1161,23 @@ async function authenticatePropertyGuru() {
   console.log('✅ Proceeding to save authentication state...');
 
   // Ensure storage directory exists
-  const storagePath = path.join(process.cwd(), 'storage');
+  const stateFilePath = process.env.PG_AUTH_STATE_OUTPUT || path.join(process.cwd(), 'storage', 'pg.state.json');
+  const storagePath = path.dirname(stateFilePath);
   if (!fs.existsSync(storagePath)) {
     fs.mkdirSync(storagePath, { recursive: true });
     console.log('📁 Created storage directory');
   }
 
   // Save the storage state
-  const stateFilePath = path.join(storagePath, 'pg.state.json');
   await context.storageState({ path: stateFilePath });
 
-  const stateStatus = inspectAuthState('propertyguru');
-  if (!stateStatus.isAuthenticated) {
-    throw new Error(stateStatus.failureReason || 'Authentication state was saved but is not valid');
+  const candidateState = JSON.parse(fs.readFileSync(stateFilePath, 'utf8')) as { cookies?: unknown };
+  if (!Array.isArray(candidateState.cookies) || candidateState.cookies.length === 0) {
+    throw new Error('Authentication state was saved but is not valid');
   }
 
   console.log(`💾 Authentication state saved to: ${stateFilePath}`);
-  console.log(`🍪 Saved ${stateStatus.cookieCount} cookies`);
+  console.log(`🍪 Saved ${candidateState.cookies.length} cookies`);
   console.log('✨ You can now use this state for automated browsing sessions');
 
   await browser.close();

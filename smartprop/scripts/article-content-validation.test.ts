@@ -15,12 +15,24 @@ const fakeSupabase = {
             }),
             maybeSingle: async () => ({ data: { id: 'article-1' }, error: null }),
           }),
+          order: () => ({
+            range: async () => ({
+              data: [
+                { id: 'article-good', nid: 'good-1', title: 'Good article', path: '/property-news/good' },
+                { id: 'article-blocked', nid: 'blocked-1', title: 'Blocked article', path: '/property-news/blocked' },
+              ],
+              error: null,
+            }),
+          }),
         }),
       };
     }
 
     if (table === 'article_full_content') {
       return {
+        select: () => ({
+          in: async () => ({ data: [], error: null }),
+        }),
         upsert: async (row: unknown) => {
           persistedRows.push(row);
           return { error: null };
@@ -63,6 +75,7 @@ process.env.SUPABASE_SERVICE_ROLE = 'test-service-role';
 const { upsertArticleContent } = await import('../src/lib/db/article-content');
 const { validateArticleContent } = await import('../src/lib/scraper/article-content-validation');
 const { scrapeMultipleArticles } = await import('../src/lib/scraper/edgeprop-content-scraper');
+const { backfillMissingArticleContent } = await import('../src/lib/scraper/article-content-backfill');
 
 const challengeContent = {
   nid: 'challenge-1',
@@ -111,6 +124,24 @@ describe('article content persistence', () => {
     await expect(upsertArticleContent(challengeContent)).rejects.toThrow('challenge');
     expect(persistedRows).toHaveLength(0);
   });
+
+  test('persists a valid article body', async () => {
+    const validContent = {
+      ...challengeContent,
+      nid: 'valid-1',
+      path: '/property-news/valid',
+      title: 'Market update',
+      text_content: 'Buyers returned to the market after new listings gave them more choice.',
+      html_content: '<p>Buyers returned to the market after new listings gave them more choice.</p>',
+      paragraphs: ['Buyers returned to the market after new listings gave them more choice.'],
+      word_count: 12,
+    };
+
+    await upsertArticleContent(validContent);
+
+    expect(persistedRows).toHaveLength(1);
+    expect(persistedRows[0]).toMatchObject({ text_content: validContent.text_content });
+  });
 });
 
 describe('article content validation', () => {
@@ -119,6 +150,14 @@ describe('article content validation', () => {
       title: challengeContent.title,
       text: challengeContent.text_content,
       html: challengeContent.html_content,
+    })).toEqual({ valid: false, reason: 'challenge' });
+  });
+
+  test('identifies the EdgeProp challenge error markup with its title-shell context', () => {
+    expect(validateArticleContent({
+      title: 'www.edgeprop.sg',
+      text: 'Enable JavaScript and cookies to continue',
+      html: '<div class="h2"><span id="challenge-error-text">Enable JavaScript and cookies to continue</span></div>',
     })).toEqual({ valid: false, reason: 'challenge' });
   });
 
@@ -132,6 +171,14 @@ describe('article content validation', () => {
       title: 'Building security upgrade',
       text: 'The security team completed the lift upgrade today.',
       html: '<p>The security team completed the lift upgrade today.</p>',
+    })).toEqual({ valid: true });
+  });
+
+  test('keeps an editorial article discussing Cloudflare verification', () => {
+    expect(validateArticleContent({
+      title: 'Why Cloudflare security verification appears before some property searches',
+      text: 'Cloudflare security verification can appear when a visitor changes networks. The publisher said the verification step protects readers without changing the article itself.',
+      html: '<article><p>Cloudflare security verification can appear when a visitor changes networks.</p><p>The publisher said the verification step protects readers without changing the article itself.</p></article>',
     })).toEqual({ valid: true });
   });
 
@@ -152,5 +199,29 @@ describe('article content validation', () => {
 
     expect(result.map((article) => article.nid)).toEqual(['good-1']);
     expect(browserCloseCount).toBe(3);
+  });
+
+  test('backfill saves the valid body and counts the rejected challenge as failed', async () => {
+    browserResponses.push(
+      browserArticle(
+        'Home sales improve',
+        'Home sales improved this month after buyers returned to the market.',
+        '<p>Home sales improved this month after buyers returned to the market.</p>',
+      ),
+      browserArticle(challengeContent.title, challengeContent.text_content, challengeContent.html_content),
+    );
+
+    const result = await backfillMissingArticleContent({
+      limit: 2,
+      supabase: fakeSupabase as never,
+      onLog: () => undefined,
+      articleTimeoutMs: 100,
+    });
+
+    expect(result).toEqual({ attempted: 2, saved: 1, failed: 1 });
+    expect(persistedRows).toHaveLength(1);
+    expect(persistedRows[0]).toMatchObject({
+      text_content: 'Home sales improved this month after buyers returned to the market.',
+    });
   });
 });

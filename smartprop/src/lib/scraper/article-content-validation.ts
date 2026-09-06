@@ -30,8 +30,13 @@ export function validateArticleContent({
     page.includes('enable javascript and cookies to continue') ||
     page.includes('waiting for www.edgeprop.sg to respond') ||
     page.includes('verifies you are not a bot');
+  const hasChallengeErrorMarkup = /id\s*=\s*["']challenge-error-text["']/.test(html.toLowerCase());
+  const hasEdgePropTitleShell = normalized(title) === 'www.edgeprop.sg';
 
-  if (hasVerificationHeading && hasVerificationInstruction) {
+  if (
+    (hasVerificationHeading && hasVerificationInstruction) ||
+    (hasEdgePropTitleShell && hasChallengeErrorMarkup && hasVerificationInstruction)
+  ) {
     return { valid: false, reason: 'challenge' };
   }
 

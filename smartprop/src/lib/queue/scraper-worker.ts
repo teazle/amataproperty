@@ -11,7 +11,10 @@ import {
   SCRAPER_DLQ_NAME,
 } from './queue-types';
 import {
+  appendOperatorActionDiagnostic,
+  assertScraperJobUpdate,
   buildScraperChildEnvironment,
+  decideScraperJobLaunch,
   ScraperProcessExitError,
   settleScraperJobOutcome,
 } from './scraper-outcome';
@@ -89,17 +92,45 @@ async function readPersistedJobOutcome(jobId: string) {
 }
 
 async function markJobFailedForOutcome(jobId: string, errorMessage: string) {
-  const { error } = await supabase
+  const persisted = await readPersistedJobOutcome(jobId);
+  if (persisted.status === 'cancelled') return 'cancelled' as const;
+
+  const finalMessage =
+    persisted.status === 'failed' && errorMessage.startsWith('Operator action required:')
+      ? appendOperatorActionDiagnostic(persisted.errorMessage, errorMessage)
+      : persisted.errorMessage || errorMessage;
+
+  const { data, error } = await supabase
     .from('scraper_jobs')
     .update({
       status: 'failed',
       completed_at: new Date().toISOString(),
-      error_message: errorMessage,
+      error_message: finalMessage,
     })
     .eq('id', jobId)
-    .in('status', ['queued', 'running', 'paused', 'completed']);
+    .in('status', ['queued', 'running', 'paused', 'completed', 'failed'])
+    .select('id');
 
   if (error) throw error;
+  assertScraperJobUpdate(data?.length ?? 0);
+  return 'failed' as const;
+}
+
+async function markJobRunningForLaunch(jobId: string) {
+  const { data, error } = await supabase
+    .from('scraper_jobs')
+    .update({
+      status: 'running',
+      error_message: null,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+    })
+    .eq('id', jobId)
+    .in('status', ['queued', 'failed'])
+    .select('id');
+
+  if (error) throw error;
+  assertScraperJobUpdate(data?.length ?? 0);
 }
 
 function closeIfOpen(fd: number | undefined) {
@@ -244,7 +275,14 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
   console.log(`[ScraperWorker] Processing job ${payload.jobId} for ${payload.platform}`);
 
   try {
-  await updateJobStatus(payload.jobId, 'running');
+    const existing = await readPersistedJobOutcome(payload.jobId);
+    const launchDecision = decideScraperJobLaunch(existing.status);
+    if (!('launch' in launchDecision)) {
+      console.log(`[ScraperWorker] Acknowledged existing ${launchDecision.status} job ${payload.jobId}; not launching duplicate work`);
+      return;
+    }
+
+    await markJobRunningForLaunch(payload.jobId);
     console.log(`[ScraperWorker] Updated job ${payload.jobId} to running status`);
   } catch (error) {
     console.error(`[ScraperWorker] Failed to update job status to running:`, error);

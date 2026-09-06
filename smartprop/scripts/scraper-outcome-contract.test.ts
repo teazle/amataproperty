@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   ScraperProcessExitError,
+  appendOperatorActionDiagnostic,
+  assertScraperJobUpdate,
   buildScraperChildEnvironment,
   buildScheduledEnqueueTelemetry,
   cleanEdgePropPropertyTitle,
+  decideScraperJobLaunch,
   settleScraperJobOutcome,
 } from '../src/lib/queue/scraper-outcome';
 
@@ -17,6 +20,7 @@ function fakeDependencies(options: {
     errorMessage?: string | null;
   }>;
   fail?: (message: string) => Promise<void>;
+  failureStatus?: 'failed' | 'cancelled';
 } = {}) {
   const failed: string[] = [];
   return {
@@ -27,6 +31,7 @@ function fakeDependencies(options: {
       markFailed: async (message: string) => {
         failed.push(message);
         await options.fail?.(message);
+        return options.failureStatus ?? 'failed';
       },
     },
   };
@@ -58,6 +63,53 @@ describe('scraper job outcome contract', () => {
 
     await expect(settleScraperJobOutcome(fake.dependencies)).resolves.toEqual({ acknowledged: true, status: 'completed' });
     expect(fake.failed).toEqual([]);
+  });
+
+  test('rejects attempted EdgeProp work with zero saved rows when totalSuccess is available', async () => {
+    const fake = fakeDependencies({
+      read: async () => ({ status: 'completed', listingsProcessed: 9, stats: { totalSuccess: 0 } }),
+    });
+
+    await expect(settleScraperJobOutcome(fake.dependencies)).rejects.toThrow('no confirmed output');
+    expect(fake.failed).toHaveLength(1);
+  });
+
+  test('accepts explicit confirmed-empty evidence without a saved row', async () => {
+    const fake = fakeDependencies({
+      read: async () => ({
+        status: 'completed',
+        listingsProcessed: 0,
+        stats: { confirmedEmpty: true, emptyReason: 'No listings matched configured filters' },
+      }),
+    });
+
+    await expect(settleScraperJobOutcome(fake.dependencies)).resolves.toEqual({ acknowledged: true, status: 'completed' });
+  });
+
+  test('acknowledges cancelled jobs and suppresses duplicate running launches', () => {
+    expect(decideScraperJobLaunch('cancelled')).toEqual({ acknowledged: true, status: 'cancelled' });
+    expect(decideScraperJobLaunch('running')).toEqual({ acknowledged: true, status: 'running' });
+    expect(decideScraperJobLaunch('failed')).toEqual({ launch: true });
+  });
+
+  test('acknowledges a cancelled child without marking it failed or retrying it', async () => {
+    const fake = fakeDependencies({ read: async () => ({ status: 'cancelled', listingsProcessed: 0 }) });
+
+    await expect(settleScraperJobOutcome(fake.dependencies)).resolves.toEqual({ acknowledged: true, status: 'cancelled' });
+    expect(fake.failed).toEqual([]);
+  });
+
+  test('fails closed when an outcome update did not touch exactly one job row', () => {
+    expect(() => assertScraperJobUpdate(0)).toThrow('did not update exactly one scraper job');
+    expect(() => assertScraperJobUpdate(1)).not.toThrow();
+  });
+
+  test('preserves the earliest failure while adding a non-duplicated operator-action diagnostic', () => {
+    const diagnostic = 'Operator action required: PropertyGuru authentication requires operator action';
+    const combined = appendOperatorActionDiagnostic('authentication rejected', diagnostic);
+
+    expect(combined).toBe(`authentication rejected\n${diagnostic}`);
+    expect(appendOperatorActionDiagnostic(combined, diagnostic)).toBe(combined);
   });
 
   test('acknowledges exit 78 only after recording the operator-action failure', async () => {
@@ -110,9 +162,14 @@ describe('scraper job outcome contract', () => {
     });
   });
 
-  test('removes EdgeProp rental-volume widgets without stripping a legitimate title', () => {
+  test('removes observed EdgeProp trailing widgets without stripping legitimate digits', () => {
     expect(cleanEdgePropPropertyTitle('PARK COLONIAL Rental Volume 41%')).toBe('PARK COLONIAL');
     expect(cleanEdgePropPropertyTitle('THE SAIL @ MARINA BAY Rental Volume: 1,159 transactions')).toBe('THE SAIL @ MARINA BAY');
+    expect(cleanEdgePropPropertyTitle('SKY EDEN @ BEDOKRental Volume')).toBe('SKY EDEN @ BEDOK');
+    expect(cleanEdgePropPropertyTitle('JOOL SUITES19.2%')).toBe('JOOL SUITES');
     expect(cleanEdgePropPropertyTitle('THE RENTAL VOLUME')).toBe('THE RENTAL VOLUME');
+    expect(cleanEdgePropPropertyTitle('THE LINE @ TANJONG RHU')).toBe('THE LINE @ TANJONG RHU');
+    expect(cleanEdgePropPropertyTitle('6 DERBYSHIRE')).toBe('6 DERBYSHIRE');
+    expect(cleanEdgePropPropertyTitle('1919')).toBe('1919');
   });
 });

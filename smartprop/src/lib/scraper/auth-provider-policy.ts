@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { validatePropertyGuruSavedState } from './runtime-health.js';
 
 export const AUTH_OPERATOR_ACTION_EXIT_CODE = 78;
 
@@ -78,6 +79,7 @@ export type PGAuthRunResult = {
   ok: boolean;
   exitCode: number;
   provider: PGAuthProvider | null;
+  diagnostic: string | null;
 };
 
 function createCandidateStatePath(cwd: string): string {
@@ -88,9 +90,9 @@ function createCandidateStatePath(cwd: string): string {
 
 function replaceWithValidatedCandidate(candidatePath: string, statePath: string): void {
   const content = fs.readFileSync(candidatePath, 'utf8');
-  const parsed = JSON.parse(content) as { cookies?: unknown };
-  if (!Array.isArray(parsed.cookies) || parsed.cookies.length === 0) {
-    throw new Error('Authentication candidate state has no cookies');
+  const validation = validatePropertyGuruSavedState(JSON.parse(content));
+  if (!validation.ok) {
+    throw new Error(validation.failureReason ?? 'Authentication candidate state is not valid');
   }
 
   fs.renameSync(candidatePath, statePath);
@@ -133,7 +135,7 @@ export async function runPGAuthProvider(options: {
     }, browserUseAuthScriptPath);
   } catch (error) {
     if (error instanceof AuthProviderConfigurationError) {
-      return { ok: false, exitCode: error.exitCode, provider: null };
+      return { ok: false, exitCode: error.exitCode, provider: null, diagnostic: error.message };
     }
     throw error;
   }
@@ -158,13 +160,13 @@ export async function runPGAuthProvider(options: {
       },
     }), options.timeoutMs ?? 900_000);
     if (exitCode !== 0) {
-      return { ok: false, exitCode, provider: resolution.provider };
+      return { ok: false, exitCode, provider: resolution.provider, diagnostic: null };
     }
 
     replaceWithValidatedCandidate(candidatePath, statePath);
-    return { ok: true, exitCode: 0, provider: resolution.provider };
+    return { ok: true, exitCode: 0, provider: resolution.provider, diagnostic: null };
   } catch {
-    return { ok: false, exitCode: 1, provider: resolution.provider };
+    return { ok: false, exitCode: 1, provider: resolution.provider, diagnostic: null };
   } finally {
     fs.rmSync(candidatePath, { force: true });
   }

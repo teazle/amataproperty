@@ -6,7 +6,7 @@ import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVE
 import { humanPause } from './stealth.js';
 import { waitForCloudflareAutoResolve } from './cloudflare-bypass-alternative.js';
 import { getProxyFromEnv } from '../utils/free-proxy-rotator.js';
-import { checkFlaresolverr, getBrowserRuntimeStatus, inspectAuthState } from '../lib/scraper/runtime-health.js';
+import { checkFlaresolverr, getBrowserRuntimeStatus, validatePropertyGuruSavedState } from '../lib/scraper/runtime-health.js';
 
 function isPropertyGuruCloudflareBlocked(text: string): boolean {
   const normalized = text.toLowerCase();
@@ -1171,13 +1171,15 @@ async function authenticatePropertyGuru() {
   // Save the storage state
   await context.storageState({ path: stateFilePath });
 
-  const candidateState = JSON.parse(fs.readFileSync(stateFilePath, 'utf8')) as { cookies?: unknown };
-  if (!Array.isArray(candidateState.cookies) || candidateState.cookies.length === 0) {
-    throw new Error('Authentication state was saved but is not valid');
+  const candidateState = JSON.parse(fs.readFileSync(stateFilePath, 'utf8')) as { cookies?: unknown[] };
+  const stateValidation = validatePropertyGuruSavedState(candidateState);
+  if (!stateValidation.ok) {
+    throw new Error(stateValidation.failureReason ?? 'Authentication state was saved but is not valid');
   }
 
   console.log(`💾 Authentication state saved to: ${stateFilePath}`);
-  console.log(`🍪 Saved ${candidateState.cookies.length} cookies`);
+  console.log(`🍪 Saved ${candidateState.cookies?.length ?? 0} cookies`);
+  console.log('ℹ️  Saved-state validation passed; this is not live login proof.');
   console.log('✨ You can now use this state for automated browsing sessions');
 
   await browser.close();

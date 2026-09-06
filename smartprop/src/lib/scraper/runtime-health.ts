@@ -41,7 +41,44 @@ export interface RuntimeHealthReport {
   auth: Record<ScraperPlatform, AuthStateStatus>;
 }
 
+export interface PropertyGuruSavedStateValidation {
+  ok: boolean;
+  failureReason: string | null;
+}
+
 const DEFAULT_AUTH_MAX_AGE_HOURS = 24;
+const PROPERTYGURU_DOMAIN = 'propertyguru.com.sg';
+
+function isPropertyGuruDomain(domain: unknown): boolean {
+  if (typeof domain !== 'string') return false;
+  const normalized = domain.trim().toLowerCase().replace(/^\./, '');
+  return normalized === PROPERTYGURU_DOMAIN || normalized.endsWith(`.${PROPERTYGURU_DOMAIN}`);
+}
+
+/**
+ * This validates saved browser state only; it is not proof that a live login still works.
+ */
+export function validatePropertyGuruSavedState(state: unknown, nowSeconds = Date.now() / 1000): PropertyGuruSavedStateValidation {
+  const cookies = state && typeof state === 'object' && Array.isArray((state as { cookies?: unknown }).cookies)
+    ? (state as { cookies: unknown[] }).cookies
+    : [];
+  const hasSessionCookie = cookies.some((cookie) => {
+    if (!cookie || typeof cookie !== 'object') return false;
+    const candidate = cookie as { name?: unknown; value?: unknown; domain?: unknown; expires?: unknown };
+    const expires = candidate.expires;
+    return candidate.name === 'PG_U' &&
+      typeof candidate.value === 'string' && candidate.value.length > 0 &&
+      isPropertyGuruDomain(candidate.domain) &&
+      typeof expires === 'number' && Number.isFinite(expires) && (expires === -1 || expires > nowSeconds);
+  });
+
+  return hasSessionCookie
+    ? { ok: true, failureReason: null }
+    : {
+      ok: false,
+      failureReason: 'Saved PropertyGuru state has no non-empty unexpired PG_U cookie for propertyguru.com.sg (saved-state check only; not live login proof)',
+    };
+}
 
 export function getAuthStatePath(platform: ScraperPlatform, cwd: string = process.cwd()): string {
   return path.join(cwd, 'storage', platform === 'propertyguru' ? 'pg.state.json' : 'ep.state.json');
@@ -86,7 +123,10 @@ export function inspectAuthState(
     const isFresh = stateAgeHours <= maxAgeHours;
 
     let failureReason: string | null = null;
-    if (cookieCount === 0) {
+    const propertyGuruValidation = platform === 'propertyguru' ? validatePropertyGuruSavedState(parsed) : null;
+    if (propertyGuruValidation && !propertyGuruValidation.ok) {
+      failureReason = propertyGuruValidation.failureReason;
+    } else if (cookieCount === 0) {
       failureReason = 'State file has no cookies';
     } else if (!isFresh) {
       failureReason = `State file is stale (${stateAgeHours.toFixed(1)}h old)`;
@@ -101,7 +141,7 @@ export function inspectAuthState(
       lastModified: new Date(stats.mtimeMs).toISOString(),
       stateAgeHours,
       isFresh,
-      isAuthenticated: cookieCount > 0 && isFresh,
+      isAuthenticated: (propertyGuruValidation?.ok ?? cookieCount > 0) && isFresh,
       failureReason,
     };
   } catch (error) {

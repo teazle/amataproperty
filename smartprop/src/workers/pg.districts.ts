@@ -46,7 +46,7 @@ async function reAuthenticate(): Promise<PGAuthRunResult> {
   // Check if credentials are available
   if (!process.env.PG_EMAIL || !process.env.PG_PASSWORD) {
     console.error('❌ PG_EMAIL and PG_PASSWORD environment variables are not set!');
-    return { ok: false, exitCode: 78, provider: null };
+    return { ok: false, exitCode: 78, provider: null, diagnostic: 'PG_EMAIL and PG_PASSWORD environment variables are required' };
   }
 
   const isLinux = process.platform === 'linux';
@@ -74,7 +74,7 @@ async function reAuthenticate(): Promise<PGAuthRunResult> {
   if (result.ok) {
     console.log(`✅ Re-authentication complete with ${result.provider} provider.\n`);
   } else {
-    console.error(`❌ Re-authentication failed (exit ${result.exitCode}, provider ${result.provider ?? 'unresolved'}).`);
+    console.error(`❌ Re-authentication failed (exit ${result.exitCode}, provider ${result.provider ?? 'unresolved'}): ${result.diagnostic ?? 'auth process failed'}`);
   }
   return result;
 }

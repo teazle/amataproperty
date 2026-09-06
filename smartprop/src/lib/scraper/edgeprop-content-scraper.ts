@@ -5,6 +5,7 @@
 
 import { type Page as _Page, chromium, type Browser } from 'playwright';
 import { sanitizeHtmlContent } from '../utils/content-parser';
+import { validateArticleContent } from './article-content-validation';
 
 export interface ArticleContent {
   nid: string;
@@ -440,7 +441,7 @@ export async function scrapeArticleContent(
     
     await browser.close();
     
-    return {
+    const content: ArticleContent = {
       nid,
       path: articlePath,
       title: articleData.title,
@@ -458,6 +459,18 @@ export async function scrapeArticleContent(
       reading_time_minutes: articleData.readingTime,
       scraped_at: new Date()
     };
+
+    const validation = validateArticleContent({
+      title: content.title,
+      text: content.text_content,
+      html: content.html_content,
+    });
+    if (!validation.valid) {
+      console.warn(`Rejected article ${articlePath}: ${validation.reason}`);
+      return null;
+    }
+
+    return content;
     
   } catch (_error) {
     console.error(`Failed to scrape article ${articlePath}:`, _error instanceof Error ? _error.message : String(_error));

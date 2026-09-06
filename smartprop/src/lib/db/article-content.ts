@@ -4,6 +4,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import type { ArticleContent } from '../scraper/edgeprop-content-scraper';
+import { validateArticleContent } from '../scraper/article-content-validation';
 
 // Validate environment variables before creating client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -26,6 +27,15 @@ const supabase = createClient(
  * Upsert full article content
  */
 export async function upsertArticleContent(content: ArticleContent): Promise<void> {
+  const validation = validateArticleContent({
+    title: content.title,
+    text: content.text_content,
+    html: content.html_content,
+  });
+  if (!validation.valid) {
+    throw new Error(`Article content rejected: ${validation.reason}`);
+  }
+
   let articleId: string | null = null;
 
   // Prefer stable article path because MCP-generated nids are not stable.

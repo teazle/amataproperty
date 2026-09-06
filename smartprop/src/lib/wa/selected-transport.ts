@@ -110,7 +110,7 @@ export function createSelectedWhatsAppCampaignTransport(
           withOpenClawAccount(args, account),
         ),
       });
-      const messageId = result.messageId?.trim();
+      const messageId = typeof result.messageId === 'string' ? result.messageId.trim() : '';
       if (result.success && messageId) {
         return { outcome: 'accepted', messageId };
       }

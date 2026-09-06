@@ -165,6 +165,8 @@ describe('provider-selected newsletter transport', () => {
   test.each([
     ['missing message id', '{"success":true}'],
     ['blank message id', '{"messageId":"   "}'],
+    ['numeric message id', '{"messageId":42}'],
+    ['object message id', '{"messageId":{"id":"invalid"}}'],
     ['malformed success output', '{'],
   ])('classifies an OpenClaw %s as unknown after message send begins', async (_name, stdout) => {
     const adapter = openClawAdapter(async (_command, args) => args[0] === 'channels'

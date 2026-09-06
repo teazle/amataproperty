@@ -86,6 +86,7 @@ const FORBIDDEN_DIRECTORIES = new Set([
   'credentials',
   'secrets',
   'sessions',
+  'storage',
 ]);
 
 function fail(message: string): never {
@@ -227,6 +228,7 @@ function inspectBuildArtifact(buildArtifactPath: string): {
   if (!stat.isFile() || stat.isSymbolicLink()) {
     fail('build artifact must be a regular file, not a symlink');
   }
+  if (buildBytes.byteLength === 0) fail('build artifact must not be empty');
   return {
     sha256: sha256(buildBytes),
     size: buildBytes.byteLength,

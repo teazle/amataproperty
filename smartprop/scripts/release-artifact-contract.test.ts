@@ -171,6 +171,18 @@ describe('SmartProp release artifact contract', () => {
     })).toThrow('separate file');
   });
 
+  test('rejects live browser state', () => {
+    expect(() => validManifest(makeArchive({
+      ...validEntries(),
+      'storage/ep.state.json': '{"cookies":[{"value":"fixture"}]}',
+    }))).toThrow('environment or authentication artifact');
+  });
+
+  test('rejects an empty compiled artifact', () => {
+    expect(() => validManifest(makeArchive(validEntries()), makeBuildArtifact('')))
+      .toThrow('build artifact must not be empty');
+  });
+
   test('binds and revalidates the observed host identity', () => {
     const archivePath = makeArchive(validEntries());
     const buildArtifactPath = makeBuildArtifact();

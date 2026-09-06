@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { GET as applicationHealth } from '../src/app/api/health/route';
-import { getServiceStatus } from '../src/app/api/services/status/route';
+import { getServiceStatus } from '../src/lib/services/status';
 import {
   getMessagingProviderHealth,
   getOpenClawWhatsAppReadiness,
@@ -9,14 +9,24 @@ import {
 } from '../src/lib/wa/provider-health';
 
 const runningWhatsApp = JSON.stringify({
+  channelDefaultAccountId: { whatsapp: 'primary' },
+  channelAccounts: {
+    whatsapp: [{
+      accountId: 'primary',
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      linked: true,
+      healthState: 'healthy',
+      terminalDisconnect: false,
+    }],
+  },
   channels: {
     whatsapp: {
-      accounts: {
-        primary: {
-          running: true,
-          connected: true,
-        },
-      },
+      running: true,
+      connected: true,
+      healthState: 'healthy',
     },
   },
 });
@@ -30,11 +40,21 @@ describe('provider-aware WhatsApp readiness', () => {
     const readiness = await getOpenClawWhatsAppReadiness({
       account: 'primary',
       run: runnerReturning(JSON.stringify({
+        channelAccounts: {
+          whatsapp: [{
+            accountId: 'primary',
+            enabled: true,
+            configured: true,
+            running: true,
+            linked: true,
+            connected: false,
+            healthState: 'disconnected',
+          }],
+        },
         channels: {
           whatsapp: {
-            accounts: {
-              primary: { running: true, linked: true, connected: false },
-            },
+            running: true,
+            connected: false,
           },
         },
       })),
@@ -47,6 +67,59 @@ describe('provider-aware WhatsApp readiness', () => {
       account: 'primary',
     });
     expect(readiness.error).toContain('not running and connected');
+  });
+
+  test('terminal disconnect vetoes stale running and connected account flags', async () => {
+    const readiness = await getOpenClawWhatsAppReadiness({
+      account: 'primary',
+      run: runnerReturning(JSON.stringify({
+        channelAccounts: {
+          whatsapp: [{
+            accountId: 'primary',
+            enabled: true,
+            configured: true,
+            running: true,
+            connected: true,
+            linked: true,
+            healthState: 'terminal-disconnect',
+            terminalDisconnect: true,
+          }],
+        },
+        channels: {
+          whatsapp: {
+            running: true,
+            connected: true,
+            healthState: 'terminal-disconnect',
+            terminalDisconnect: true,
+          },
+        },
+      })),
+    });
+
+    expect(readiness).toMatchObject({ online: true, ready: false, account: 'primary' });
+    expect(readiness.error).toContain('terminal');
+  });
+
+  test('an explicitly disabled or unconfigured selected account is not ready', async () => {
+    const readiness = await getOpenClawWhatsAppReadiness({
+      account: 'primary',
+      run: runnerReturning(JSON.stringify({
+        channelAccounts: {
+          whatsapp: [{
+            accountId: 'primary',
+            enabled: false,
+            configured: true,
+            running: true,
+            connected: true,
+            healthState: 'healthy',
+            terminalDisconnect: false,
+          }],
+        },
+      })),
+    });
+
+    expect(readiness).toMatchObject({ online: true, ready: false, account: 'primary' });
+    expect(readiness.error).toContain('disabled or unconfigured');
   });
 
   test('reports a selected running and connected OpenClaw account as ready', async () => {
@@ -67,18 +140,17 @@ describe('provider-aware WhatsApp readiness', () => {
   test('fails closed when the selected OpenClaw account is missing or ambiguous', async () => {
     const missing = await getOpenClawWhatsAppReadiness({
       account: 'primary',
-      run: runnerReturning(JSON.stringify({ channels: { whatsapp: { accounts: {} } } })),
+      run: runnerReturning(JSON.stringify({ channelAccounts: { whatsapp: [] } })),
     });
     const ambiguous = await getOpenClawWhatsAppReadiness({
       account: 'primary',
       run: runnerReturning(JSON.stringify({
-        channels: [{
-          name: 'whatsapp',
-          accounts: [
-            { running: true, connected: true },
-            { running: true, connected: true },
+        channelAccounts: {
+          whatsapp: [
+            { accountId: 'primary', enabled: true, configured: true, running: true, connected: true },
+            { accountId: 'primary', enabled: true, configured: true, running: true, connected: true },
           ],
-        }],
+        },
       })),
     });
 
@@ -216,5 +288,50 @@ describe('messaging health consumers', () => {
       account: 'primary',
       error: 'OpenClaw WhatsApp account "primary" is not running and connected',
     });
+  });
+
+  test('the application health route preserves an unhealthy database failure over messaging degradation', async () => {
+    const previous = {
+      supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      supabaseRole: process.env.SUPABASE_SERVICE_ROLE,
+      groq: process.env.GROQ_API_KEY,
+      provider: process.env.SMARTPROP_WHATSAPP_PROVIDER,
+      wahaUrl: process.env.WAHA_URL,
+    };
+    const originalFetch = globalThis.fetch;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://supabase.test';
+    process.env.SUPABASE_SERVICE_ROLE = 'test-service-role';
+    process.env.GROQ_API_KEY = 'test-groq-key';
+    process.env.SMARTPROP_WHATSAPP_PROVIDER = 'waha';
+    process.env.WAHA_URL = 'http://waha.test';
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      if (url.startsWith('http://waha.test')) {
+        return new Response(JSON.stringify({ status: 'STOPPED' }), { status: 200 });
+      }
+      if (url.includes('/rest/v1/listings')) {
+        return new Response(JSON.stringify({ message: 'database unavailable' }), { status: 500 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    };
+
+    try {
+      const response = await applicationHealth(undefined as never);
+      const body = await response.json() as { status: string; checks: Record<string, unknown> };
+      expect(body.status).toBe('unhealthy');
+      expect(body.checks.database).toMatchObject({ status: 'unhealthy' });
+      expect(body.checks.messaging).toMatchObject({ status: 'degraded', ready: false });
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(previous)) {
+        const envKey = key === 'supabaseUrl' ? 'NEXT_PUBLIC_SUPABASE_URL'
+          : key === 'supabaseRole' ? 'SUPABASE_SERVICE_ROLE'
+          : key === 'groq' ? 'GROQ_API_KEY'
+          : key === 'provider' ? 'SMARTPROP_WHATSAPP_PROVIDER'
+          : 'WAHA_URL';
+        if (value === undefined) delete process.env[envKey];
+        else process.env[envKey] = value;
+      }
+    }
   });
 });

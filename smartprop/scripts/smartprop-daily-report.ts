@@ -12,7 +12,7 @@ const DEFAULT_APP_URL = 'http://127.0.0.1:3000';
 const OPENCLAW_CHANNEL = 'whatsapp';
 const OPENCLAW_ACCOUNT = 'default';
 
-type AnyRow = Record<string, any>;
+type AnyRow = Record<string, unknown>;
 
 type CliOptions = {
   date?: string;
@@ -101,7 +101,7 @@ function sum(rows: AnyRow[], key: string): number {
   return rows.reduce((total, row) => total + Number(row[key] ?? 0), 0);
 }
 
-function safeJson<T = any>(text: string): T | null {
+function safeJson<T = unknown>(text: string): T | null {
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -109,13 +109,13 @@ function safeJson<T = any>(text: string): T | null {
   }
 }
 
-async function fetchJson(url: string, timeoutMs = 5000): Promise<any | null> {
+async function fetchJson(url: string, timeoutMs = 5000): Promise<Record<string, unknown> | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) return { error: `HTTP ${response.status}` };
-    return await response.json();
+    return record(await response.json());
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   } finally {
@@ -138,12 +138,15 @@ function runCommand(command: string, args: string[], timeoutMs = 5000): string |
 
 function parsePm2(): Array<{ name: string; status: string }> {
   const output = runCommand('pm2', ['jlist']);
-  const rows = output ? safeJson<any[]>(output) : null;
+  const rows = output ? safeJson<unknown[]>(output) : null;
   if (!Array.isArray(rows)) return [];
-  return rows.map((row) => ({
-    name: row.name,
-    status: row.pm2_env?.status ?? 'unknown',
-  }));
+  return rows
+    .map(record)
+    .filter((row): row is Record<string, unknown> => Boolean(row))
+    .map((row) => ({
+      name: String(row.name ?? 'unknown'),
+      status: String(record(row.pm2_env)?.status ?? 'unknown'),
+    }));
 }
 
 function parseDocker(): Array<{ name: string; status: string }> {
@@ -151,11 +154,11 @@ function parseDocker(): Array<{ name: string; status: string }> {
   if (!output) return [];
   return output
     .split('\n')
-    .map((line) => safeJson<any>(line))
-    .filter(Boolean)
+    .map((line) => record(safeJson(line)))
+    .filter((row): row is Record<string, unknown> => Boolean(row))
     .map((row) => ({
-      name: row.Names ?? row.names ?? 'unknown',
-      status: row.Status ?? row.status ?? 'unknown',
+      name: String(row.Names ?? row.names ?? 'unknown'),
+      status: String(row.Status ?? row.status ?? 'unknown'),
     }));
 }
 
@@ -172,14 +175,14 @@ function parseLinkedInLikeArtifacts(range: { startUtc: string; endUtc: string })
     .filter((name) => name.startsWith('like-feed-') && name.endsWith('.json'))
     .map((name) => {
       const fullPath = join(dir, name);
-      const json = safeJson<any>(readFileSync(fullPath, 'utf8')) ?? {};
+      const json = record(safeJson(readFileSync(fullPath, 'utf8'))) ?? {};
       const startedAt = json.startedAt ? new Date(json.startedAt).getTime() : NaN;
       return {
         path: fullPath,
         startedAt: json.startedAt,
         finishedAt: json.finishedAt,
         targetLikes: Number(json.targetLikes ?? 0),
-        counts: json.counts ?? {},
+        counts: record(json.counts) ?? {},
         errors: Array.isArray(json.errors) ? json.errors : [],
         inRange: Number.isFinite(startedAt) && startedAt >= start && startedAt < end,
       };
@@ -444,7 +447,7 @@ function findPlatformSummary(
   };
 }
 
-function formatLikeRun(run: { targetLikes: number; counts: CountMap; errors: any[] }) {
+function formatLikeRun(run: { targetLikes: number; counts: Record<string, unknown>; errors: unknown[] }) {
   const counts = run.counts ?? {};
   const confirmed = counts.confirmed ?? counts.liked ?? 0;
   const attempted = counts.attempted ?? 0;

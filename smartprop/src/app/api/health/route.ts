@@ -12,6 +12,12 @@ import { getWAHAReadiness } from '@/lib/wa/waha';
 import { getMessagingProviderHealth } from '@/lib/wa/provider-health';
 
 const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
+type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
+
+function worsenHealth(current: HealthStatus, candidate: HealthStatus): HealthStatus {
+  const severity: Record<HealthStatus, number> = { healthy: 0, degraded: 1, unhealthy: 2 };
+  return severity[candidate] > severity[current] ? candidate : current;
+}
 
 async function readSourceRevision(): Promise<string | null> {
   try {
@@ -26,7 +32,7 @@ async function readSourceRevision(): Promise<string | null> {
 export async function GET(_request: NextRequest) {
   const startTime = Date.now();
   const checks: Record<string, unknown> = {};
-  let overallStatus = 'healthy';
+  let overallStatus: HealthStatus = 'healthy';
 
   try {
     // Check database connectivity
@@ -47,13 +53,13 @@ export async function GET(_request: NextRequest) {
         error: error?.message
       };
       
-      if (error) overallStatus = 'degraded';
+      if (error) overallStatus = worsenHealth(overallStatus, 'unhealthy');
     } catch (error) {
       checks.database = {
         status: 'unhealthy',
         error: error instanceof Error ? error.message : 'Unknown error'
       };
-      overallStatus = 'unhealthy';
+      overallStatus = worsenHealth(overallStatus, 'unhealthy');
     }
 
     // Messaging readiness is provider-aware; generic liveness remains separate.
@@ -67,13 +73,13 @@ export async function GET(_request: NextRequest) {
       };
       // Preserve the legacy WAHA key only when WAHA is the selected provider.
       if (messaging.provider === 'waha') checks.waha = checks.messaging;
-      if (!messaging.ready) overallStatus = 'degraded';
+      if (!messaging.ready) overallStatus = worsenHealth(overallStatus, 'degraded');
     } catch (error) {
       checks.messaging = {
         status: 'degraded',
         error: error instanceof Error ? error.message : 'Connection failed'
       };
-      overallStatus = 'degraded';
+      overallStatus = worsenHealth(overallStatus, 'degraded');
     }
 
     // Campaign status is intentionally no-PII and does not alter generic health semantics.
@@ -155,7 +161,7 @@ export async function GET(_request: NextRequest) {
       missingVariables: missingEnvVars
     };
     
-    if (missingEnvVars.length > 0) overallStatus = 'unhealthy';
+    if (missingEnvVars.length > 0) overallStatus = worsenHealth(overallStatus, 'unhealthy');
 
     // Check memory usage
     if (typeof process !== 'undefined' && process.memoryUsage) {

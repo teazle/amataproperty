@@ -58,29 +58,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function namedEntry(entries: unknown, name: string): Record<string, unknown> | null {
-  const record = asRecord(entries);
-  if (record) return asRecord(record[name]);
-  if (!Array.isArray(entries)) return null;
-
-  const matches = entries
-    .map(asRecord)
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    .filter((entry) => [entry.account, entry.accountId, entry.id, entry.name].includes(name));
-  return matches.length === 1 ? matches[0] : null;
-}
-
 function selectedWhatsAppAccount(payload: unknown, account: string): Record<string, unknown> | null {
   const root = asRecord(payload);
   if (!root) return null;
-  const channels = root.channels;
-  const channel = asRecord(channels)?.whatsapp || namedEntry(channels, 'whatsapp');
-  const channelRecord = asRecord(channel);
-  return channelRecord ? namedEntry(channelRecord.accounts, account) : null;
+  const channelAccounts = asRecord(root.channelAccounts);
+  const whatsappAccounts = channelAccounts?.whatsapp;
+  if (!Array.isArray(whatsappAccounts)) return null;
+  const matches = whatsappAccounts
+    .map(asRecord)
+    .filter((entry): entry is Record<string, unknown> => entry?.accountId === account);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function isOpenClawAccountReady(account: Record<string, unknown>): boolean {
-  return account.running === true && account.connected === true;
+  const healthState = typeof account.healthState === 'string' ? account.healthState.toLowerCase() : '';
+  return account.enabled !== false &&
+    account.configured !== false &&
+    account.running === true &&
+    account.connected === true &&
+    account.terminalDisconnect !== true &&
+    healthState !== 'terminal' &&
+    healthState !== 'terminal-disconnect';
 }
 
 export async function getOpenClawWhatsAppReadiness(
@@ -116,6 +114,27 @@ export async function getOpenClawWhatsAppReadiness(
       };
     }
 
+    const healthState = typeof selectedAccount.healthState === 'string'
+      ? selectedAccount.healthState.toLowerCase()
+      : '';
+    if (selectedAccount.terminalDisconnect === true || healthState === 'terminal' || healthState === 'terminal-disconnect') {
+      return {
+        provider: 'openclaw',
+        online: true,
+        ready: false,
+        account,
+        error: `OpenClaw WhatsApp account "${account}" has a terminal disconnect`,
+      };
+    }
+    if (selectedAccount.enabled === false || selectedAccount.configured === false) {
+      return {
+        provider: 'openclaw',
+        online: true,
+        ready: false,
+        account,
+        error: `OpenClaw WhatsApp account "${account}" is disabled or unconfigured`,
+      };
+    }
     if (!isOpenClawAccountReady(selectedAccount)) {
       return {
         provider: 'openclaw',

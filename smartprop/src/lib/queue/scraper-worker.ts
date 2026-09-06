@@ -17,6 +17,7 @@ import {
   decideScraperJobLaunch,
   ScraperProcessExitError,
   settleScraperJobOutcome,
+  shouldRecordDlqFailure,
 } from './scraper-outcome';
 import { ensureScraperQueues, getBoss, stopBoss } from './scraper-queue';
 import { cleanupOrphanedBrowsers, startPeriodicCleanup } from '../utils/browser-cleanup';
@@ -46,33 +47,6 @@ const supabase = createClient(supabaseUrl, supabaseServiceRole, {
   },
 });
 
-async function updateJobStatus(
-  jobId: string,
-  status: 'running' | 'completed' | 'failed',
-  error?: string
-) {
-  const updates: Record<string, unknown> = {
-    status,
-    error_message: error ?? null,
-  };
-
-  if (status === 'running') {
-    updates.started_at = new Date().toISOString();
-    updates.completed_at = null;
-  }
-
-  if (status === 'completed') {
-    updates.completed_at = new Date().toISOString();
-  }
-
-  if (status === 'failed') {
-    updates.completed_at = new Date().toISOString();
-  }
-
-  const { error: queryError } = await supabase.from('scraper_jobs').update(updates).eq('id', jobId);
-  if (queryError) throw queryError;
-}
-
 async function readPersistedJobOutcome(jobId: string) {
   const { data, error } = await supabase
     .from('scraper_jobs')
@@ -91,9 +65,17 @@ async function readPersistedJobOutcome(jobId: string) {
   };
 }
 
-async function markJobFailedForOutcome(jobId: string, errorMessage: string) {
+async function markJobFailedForOutcome(
+  jobId: string,
+  errorMessage: string,
+  allowedStatuses = ['queued', 'running', 'paused', 'completed', 'failed']
+) {
   const persisted = await readPersistedJobOutcome(jobId);
   if (persisted.status === 'cancelled') return 'cancelled' as const;
+  if (!allowedStatuses.includes(persisted.status)) {
+    if (persisted.status === 'completed' || persisted.status === 'failed') return persisted.status;
+    throw new Error(`Cannot record scraper failure from persisted status ${persisted.status || 'unknown'}`);
+  }
 
   const finalMessage =
     persisted.status === 'failed' && errorMessage.startsWith('Operator action required:')
@@ -108,11 +90,17 @@ async function markJobFailedForOutcome(jobId: string, errorMessage: string) {
       error_message: finalMessage,
     })
     .eq('id', jobId)
-    .in('status', ['queued', 'running', 'paused', 'completed', 'failed'])
+    .in('status', allowedStatuses)
     .select('id');
 
   if (error) throw error;
-  assertScraperJobUpdate(data?.length ?? 0);
+  if ((data?.length ?? 0) !== 1) {
+    const latest = await readPersistedJobOutcome(jobId);
+    if (latest.status === 'cancelled' || latest.status === 'completed' || latest.status === 'failed') {
+      return latest.status;
+    }
+    assertScraperJobUpdate(data?.length ?? 0);
+  }
   return 'failed' as const;
 }
 
@@ -276,7 +264,7 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
 
   try {
     const existing = await readPersistedJobOutcome(payload.jobId);
-    const launchDecision = decideScraperJobLaunch(existing.status);
+    const launchDecision = decideScraperJobLaunch(existing);
     if (!('launch' in launchDecision)) {
       console.log(`[ScraperWorker] Acknowledged existing ${launchDecision.status} job ${payload.jobId}; not launching duplicate work`);
       return;
@@ -362,7 +350,12 @@ export async function startScraperWorker(): Promise<void> {
       const failedJob = Array.isArray(job) ? job[0] : job;
       if (!failedJob) return;
       const payload = failedJob.data;
-      await updateJobStatus(payload.jobId, 'failed', 'Moved to DLQ after retries');
+      const persisted = await readPersistedJobOutcome(payload.jobId);
+      if (!shouldRecordDlqFailure(persisted.status)) {
+        console.log(`[ScraperWorker] Preserving ${persisted.status} outcome for DLQ job ${payload.jobId}`);
+        return;
+      }
+      await markJobFailedForOutcome(payload.jobId, 'Moved to DLQ after retries', ['queued', 'running', 'paused']);
     }
   );
 

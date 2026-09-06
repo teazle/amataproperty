@@ -36,18 +36,31 @@ export function appendOperatorActionDiagnostic(existingError: string | null | un
   return `${existing}\n${diagnostic}`;
 }
 
-export function decideScraperJobLaunch(status: string):
+export function shouldRecordDlqFailure(status: string): boolean {
+  return status === 'queued' || status === 'running' || status === 'paused';
+}
+
+export function decideScraperJobLaunch(job: PersistedScraperJob):
   | { launch: true }
-  | { acknowledged: true; status: 'cancelled' | 'completed' | 'running' } {
-  if (status === 'cancelled' || status === 'completed' || status === 'running') {
-    return { acknowledged: true, status };
+  | { acknowledged: true; status: 'cancelled' | 'completed' } {
+  if (job.status === 'cancelled') {
+    return { acknowledged: true, status: 'cancelled' };
   }
 
-  if (status === 'queued' || status === 'failed') {
+  if (job.status === 'completed') {
+    if (hasConfirmedOutput(job)) return { acknowledged: true, status: 'completed' };
+    throw new Error('Scraper job completed without confirmed output');
+  }
+
+  if (job.status === 'running') {
+    throw new Error('Scraper job is still running; ownership must be reconciled');
+  }
+
+  if (job.status === 'queued' || job.status === 'failed') {
     return { launch: true };
   }
 
-  throw new Error(`Scraper job cannot launch from persisted status ${status || 'unknown'}`);
+  throw new Error(`Scraper job cannot launch from persisted status ${job.status || 'unknown'}`);
 }
 
 export function buildScraperChildEnvironment(
@@ -103,9 +116,10 @@ export function cleanEdgePropPropertyTitle(title: string): string {
 
 function hasConfirmedOutput(job: PersistedScraperJob): boolean {
   const stats = job.stats;
-  if (typeof stats?.totalSuccess === 'number') return stats.totalSuccess > 0;
+  const confirmedEmpty = stats?.confirmedEmpty === true && typeof stats.emptyReason === 'string' && stats.emptyReason.trim().length > 0;
+  if (typeof stats?.totalSuccess === 'number') return stats.totalSuccess > 0 || confirmedEmpty;
   if ((job.listingsProcessed ?? 0) > 0) return true;
-  return stats?.confirmedEmpty === true && typeof stats.emptyReason === 'string' && stats.emptyReason.trim().length > 0;
+  return confirmedEmpty;
 }
 
 function describeInvalidCompletion(job: PersistedScraperJob): string {
@@ -120,6 +134,18 @@ function describeInvalidCompletion(job: PersistedScraperJob): string {
   return 'Scraper child exited with no confirmed output';
 }
 
+async function recordFailure(
+  dependencies: ScraperOutcomeDependencies,
+  message: string
+): Promise<'failed' | 'cancelled'> {
+  const status = await dependencies.markFailed(message) as string;
+  if (status === 'completed') {
+    throw new Error('Scraper job changed to completed before failure was recorded; output must be revalidated');
+  }
+  if (status === 'failed' || status === 'cancelled') return status;
+  throw new Error(`Failure recording returned unexpected scraper status ${status || 'unknown'}`);
+}
+
 export async function settleScraperJobOutcome(
   dependencies: ScraperOutcomeDependencies
 ): Promise<{ acknowledged: true; status: 'completed' | 'failed' | 'cancelled' }> {
@@ -128,11 +154,11 @@ export async function settleScraperJobOutcome(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof ScraperProcessExitError && error.exitCode === 78) {
-      const status = await dependencies.markFailed(`Operator action required: ${message}`);
+      const status = await recordFailure(dependencies, `Operator action required: ${message}`);
       return { acknowledged: true, status };
     }
 
-    const status = await dependencies.markFailed(message);
+    const status = await recordFailure(dependencies, message);
     if (status === 'cancelled') return { acknowledged: true, status };
     throw error;
   }
@@ -148,7 +174,7 @@ export async function settleScraperJobOutcome(
 
   const reason = describeInvalidCompletion(persisted);
   if (persisted.status !== 'failed') {
-    const status = await dependencies.markFailed(reason);
+    const status = await recordFailure(dependencies, reason);
     if (status === 'cancelled') return { acknowledged: true, status };
   }
   throw new Error(reason);

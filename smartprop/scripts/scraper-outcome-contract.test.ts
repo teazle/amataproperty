@@ -8,6 +8,7 @@ import {
   buildScheduledEnqueueTelemetry,
   cleanEdgePropPropertyTitle,
   decideScraperJobLaunch,
+  shouldRecordDlqFailure,
   settleScraperJobOutcome,
 } from '../src/lib/queue/scraper-outcome';
 
@@ -79,17 +80,27 @@ describe('scraper job outcome contract', () => {
       read: async () => ({
         status: 'completed',
         listingsProcessed: 0,
-        stats: { confirmedEmpty: true, emptyReason: 'No listings matched configured filters' },
+        stats: { totalSuccess: 0, confirmedEmpty: true, emptyReason: 'No listings matched configured filters' },
       }),
     });
 
     await expect(settleScraperJobOutcome(fake.dependencies)).resolves.toEqual({ acknowledged: true, status: 'completed' });
   });
 
-  test('acknowledges cancelled jobs and suppresses duplicate running launches', () => {
-    expect(decideScraperJobLaunch('cancelled')).toEqual({ acknowledged: true, status: 'cancelled' });
-    expect(decideScraperJobLaunch('running')).toEqual({ acknowledged: true, status: 'running' });
-    expect(decideScraperJobLaunch('failed')).toEqual({ launch: true });
+  test('only acknowledges validated terminal jobs before launch', () => {
+    expect(decideScraperJobLaunch({ status: 'cancelled' })).toEqual({ acknowledged: true, status: 'cancelled' });
+    expect(decideScraperJobLaunch({ status: 'completed', listingsProcessed: 2 })).toEqual({ acknowledged: true, status: 'completed' });
+    expect(decideScraperJobLaunch({ status: 'failed' })).toEqual({ launch: true });
+    expect(() => decideScraperJobLaunch({ status: 'running' })).toThrow('still running; ownership must be reconciled');
+    expect(() => decideScraperJobLaunch({ status: 'completed', listingsProcessed: 0 })).toThrow('completed without confirmed output');
+  });
+
+  test('does not let DLQ overwrite cancelled, completed, or earliest failed outcomes', () => {
+    expect(shouldRecordDlqFailure('queued')).toBe(true);
+    expect(shouldRecordDlqFailure('running')).toBe(true);
+    expect(shouldRecordDlqFailure('cancelled')).toBe(false);
+    expect(shouldRecordDlqFailure('completed')).toBe(false);
+    expect(shouldRecordDlqFailure('failed')).toBe(false);
   });
 
   test('acknowledges a cancelled child without marking it failed or retrying it', async () => {
@@ -121,6 +132,16 @@ describe('scraper job outcome contract', () => {
 
     await expect(settleScraperJobOutcome(fake.dependencies)).resolves.toEqual({ acknowledged: true, status: 'failed' });
     expect(fake.failed).toEqual(['Operator action required: PropertyGuru authentication requires operator action']);
+  });
+
+  test('does not acknowledge an exit-78 race as completed without revalidating output', async () => {
+    const dependencies = {
+      run: async () => { throw new ScraperProcessExitError(78, 'operator action required'); },
+      read: async () => ({ status: 'running' }),
+      markFailed: async () => 'completed' as never,
+    };
+
+    await expect(settleScraperJobOutcome(dependencies)).rejects.toThrow('changed to completed before failure was recorded');
   });
 
   test('throws transient child errors so pg-boss can retry them', async () => {

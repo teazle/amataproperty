@@ -122,6 +122,10 @@ function emptyResult(
   };
 }
 
+function blockedExternalRequestMessage(urls: Set<string>) {
+  return `Blocked external request from local fixture: ${[...urls].sort().join(', ')}`;
+}
+
 async function extractRenderedArticle(page: Page): Promise<RenderedArticleEvidence> {
   return page.evaluate(() => {
     const articleTitle = document.querySelector('h1')?.textContent?.trim() || '';
@@ -307,6 +311,11 @@ function classifyRenderedFixture(
   };
 }
 
+/**
+ * Provider-free benchmark that copies the production scraper's extraction
+ * conventions and calls its validator. It does not invoke or prove the
+ * production scraper navigation, authentication, persistence, or save path.
+ */
 export async function runBrowserAcceptance(
   fixtures: BrowserAcceptanceFixture[],
   options: BrowserAcceptanceOptions = {},
@@ -321,6 +330,7 @@ export async function runBrowserAcceptance(
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
   let page: Page | undefined;
+  let activeBlockedRequests: Set<string> | undefined;
 
   try {
     browser = await browserType.launch({
@@ -328,9 +338,24 @@ export async function runBrowserAcceptance(
       ...options.launchOptions,
       timeout: launchTimeoutMs,
     });
-    context = await browser.newContext();
+    context = await browser.newContext({ offline: true });
     context.setDefaultTimeout(actionTimeoutMs);
     context.setDefaultNavigationTimeout(navigationTimeoutMs);
+    await context.route('**/*', async (route) => {
+      const requestUrl = route.request().url();
+      const protocol = new URL(requestUrl).protocol;
+      if (protocol === 'file:' ||
+          protocol === 'data:' ||
+          protocol === 'about:' ||
+          protocol === 'blob:' ||
+          protocol === 'chrome-error:') {
+        await route.continue();
+        return;
+      }
+
+      activeBlockedRequests?.add(requestUrl);
+      await route.abort('blockedbyclient');
+    });
     page = await context.newPage();
 
     const results: BrowserAcceptanceResult[] = [];
@@ -339,6 +364,8 @@ export async function runBrowserAcceptance(
       const fixtureUrl = pathToFileURL(sourcePath).href;
       const startedAt = new Date().toISOString();
       const startedMs = performance.now();
+      const blockedRequests = new Set<string>();
+      activeBlockedRequests = blockedRequests;
 
       try {
         await page.goto(fixtureUrl, {
@@ -346,16 +373,28 @@ export async function runBrowserAcceptance(
           timeout: navigationTimeoutMs,
         });
         const evidence = await extractRenderedArticle(page);
-        results.push(classifyRenderedFixture(
+        const result = classifyRenderedFixture(
           fixture,
           sourcePath,
           page.url(),
           evidence,
           startedAt,
           startedMs,
-        ));
+        );
+        if (blockedRequests.size > 0) {
+          result.status = 'error';
+          result.validationReason = 'error';
+          result.error = blockedExternalRequestMessage(blockedRequests);
+        }
+        results.push(result);
       } catch (error) {
-        results.push(emptyResult(fixture, sourcePath, startedAt, startedMs, error));
+        const result = emptyResult(fixture, sourcePath, startedAt, startedMs, error);
+        if (blockedRequests.size > 0) {
+          result.error = blockedExternalRequestMessage(blockedRequests);
+        }
+        results.push(result);
+      } finally {
+        activeBlockedRequests = undefined;
       }
     }
 

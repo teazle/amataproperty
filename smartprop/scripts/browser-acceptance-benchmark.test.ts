@@ -91,6 +91,71 @@ describe('provider-free browser acceptance benchmark', () => {
     ])).rejects.toThrow('Local fixture paths only');
   });
 
+  test('blocks external subresources and redirects from a saved local fixture', async () => {
+    const receivedPaths: string[] = [];
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname;
+        receivedPaths.push(path);
+        if (path === '/probe.js') {
+          return new Response('document.documentElement.dataset.remoteScript = "loaded";', {
+            headers: { 'content-type': 'text/javascript' },
+          });
+        }
+        if (path === '/probe.png') {
+          return new Response(new Uint8Array([137, 80, 78, 71]), {
+            headers: { 'content-type': 'image/png' },
+          });
+        }
+        return new Response('<!doctype html><html><body>remote redirect target</body></html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      },
+    });
+    const origin = `http://127.0.0.1:${server.port}`;
+    const unsafeFixturePath = fixturePath('external-attempts.html');
+    let results: Awaited<ReturnType<typeof runBrowserAcceptance>> = [];
+    let serverStopped = false;
+
+    try {
+      await writeFile(unsafeFixturePath, `<!doctype html>
+        <html><head><title>External attempt fixture</title></head><body>
+          <article><h1>Saved fixture with remote dependencies</h1>
+            <div class="detail-content">
+              <p>This local article has enough substantive text to pass normal article extraction before its unsafe external dependencies are considered.</p>
+              <p>The browser acceptance boundary must block every network attempt rather than treating the rendered local body as sufficient evidence.</p>
+            </div>
+          </article>
+          <script src="${origin}/probe.js"></script>
+          <img src="${origin}/probe.png" alt="remote probe">
+          <iframe src="${origin}/frame"></iframe>
+          <script>window.location.replace(${JSON.stringify(`${origin}/redirect-target`)});</script>
+        </body></html>`);
+
+      results = await runBrowserAcceptance([
+        { id: 'external-attempts', path: unsafeFixturePath },
+      ], { launchOptions: { channel: 'chrome' } });
+    } finally {
+      server.stop(true);
+      serverStopped = true;
+    }
+
+    expect(receivedPaths).toEqual([]);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      id: 'external-attempts',
+      status: 'error',
+      validationReason: 'error',
+    });
+    expect(results[0].error).toContain('Blocked external request from local fixture');
+    expect(serverStopped).toBe(true);
+    await expect(fetch(`${origin}/after-close`, {
+      signal: AbortSignal.timeout(500),
+    })).rejects.toThrow();
+  }, 20_000);
+
   test('closes the real browser and context after a per-sample navigation error', async () => {
     let launchedBrowser: Browser | undefined;
     let browserDisconnected = false;

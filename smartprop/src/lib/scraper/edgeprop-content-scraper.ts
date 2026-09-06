@@ -59,10 +59,17 @@ export async function scrapeArticleContent(
   let browser: Browser | null = null;
   
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      timeout: 15000,
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    });
     const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
+    page.setDefaultNavigationTimeout(30000);
     
-    const fullUrl = `https://www.edgeprop.sg/${articlePath}`;
+    const normalizedPath = articlePath.replace(/^\/+/, '');
+    const fullUrl = `https://www.edgeprop.sg/${normalizedPath}`;
     await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(2000); // Allow dynamic content to load
     
@@ -194,15 +201,19 @@ export async function scrapeArticleContent(
       
       // Get article content - look for content containers with substantial text
       const contentSelectors = [
+        '.detail-content',
+        '[class*="detail-content"]',
+        '.article-detail.left-section',
+        '[class*="article-detail"][class*="left-section"]',
         '.article-content', 
         '.post-content', 
-        '.content', 
-        '[class*="content"]',
         '.article-body',
         '.post-body',
         'article',
         '.story-content',
-        '.news-content'
+        '.news-content',
+        '.content',
+        '[class*="content"]'
       ];
       
       let contentElements: Element[] = [];
@@ -250,33 +261,39 @@ export async function scrapeArticleContent(
       
       // Extract paragraphs from content elements
       const rawParagraphs: string[] = [];
+
+      const splitTextIntoParagraphs = (text: string) => {
+        const normalized = text
+          .replace(/\s+/g, ' ')
+          .replace(/([.!?])([A-Z])/g, '$1 $2')
+          .trim();
+
+        const sentences = normalized.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 20);
+        if (sentences.length > 1) {
+          return sentences.map(sentence => sentence.trim());
+        }
+
+        return normalized.length > 50 ? [normalized] : [];
+      };
       
       for (const contentEl of contentElements) {
         // If it's a container with multiple paragraphs, extract them
         const paragraphElements = contentEl.querySelectorAll('p');
-        if (paragraphElements.length > 0) {
-          paragraphElements.forEach(p => {
-            const text = p.textContent?.trim();
-            if (text && text.length > 20) {
-              rawParagraphs.push(text);
-            }
-          });
-        } else {
-          // If it's a single content block, split by line breaks or use as is
-          const text = contentEl.textContent?.trim();
-          if (text && text.length > 50) {
-            // Try to split into logical paragraphs
-            const sentences = text.split(/\.\s+/).filter(s => s.trim().length > 20);
-            if (sentences.length > 1) {
-              sentences.forEach(sentence => {
-                if (sentence.trim().length > 20) {
-                  rawParagraphs.push(sentence.trim() + (sentence.endsWith('.') ? '' : '.'));
-                }
-              });
-            } else {
-              rawParagraphs.push(text);
-            }
+        const paragraphTexts: string[] = [];
+        paragraphElements.forEach(p => {
+          const text = p.textContent?.trim();
+          if (text && text.length > 20) {
+            paragraphTexts.push(text);
           }
+        });
+
+        const containerText = contentEl.textContent?.trim() || '';
+        const paragraphTextLength = paragraphTexts.join(' ').length;
+
+        if (paragraphTexts.length > 1 && paragraphTextLength > containerText.length * 0.5) {
+          rawParagraphs.push(...paragraphTexts);
+        } else {
+          rawParagraphs.push(...splitTextIntoParagraphs(containerText));
         }
       }
       
@@ -397,7 +414,7 @@ export async function scrapeArticleContent(
       });
       
       // Clean up HTML content by removing scripts and tracking elements
-      const htmlContent = contentContainer?.innerHTML || '';
+      const htmlContent = contentElements[0]?.innerHTML || contentContainer?.innerHTML || '';
       
       // Calculate text content
       const textContent = paragraphs.join('\n\n');
@@ -544,4 +561,3 @@ export async function stopContentScraper() {
     currentBrowser = null;
   }
 }
-

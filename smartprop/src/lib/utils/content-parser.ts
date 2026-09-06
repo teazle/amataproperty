@@ -99,6 +99,94 @@ export function sanitizeHtmlContent(html: string): string {
   return sanitized;
 }
 
+function stripHtmlTags(html: string): string {
+  return html.replace(/<[^>]*>/g, '');
+}
+
+/**
+ * Prepare scraped EdgeProp article HTML for display inside the admin article page.
+ * Keeps editorial structure while removing EdgeProp runtime chrome/classes.
+ */
+export function prepareArticleHtmlForDisplay(html: string): string {
+  if (!html) return '';
+
+  let prepared = decodeHtmlEntities(html);
+
+  prepared = prepared
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, '')
+    .replace(/<object\b[^>]*>[\s\S]*?<\/object>/gi, '')
+    .replace(/<embed\b[^>]*>/gi, '')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+  prepared = prepared
+    .replace(/<[^>]*class="[^"]*(?:related|article-contact|top-article|tags-content|property_news|common-header|footerv2|newsletter|subscribe|social|share)[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi, '')
+    .replace(/<[^>]*id="[^"]*(?:header|footer|in_article_inread_ad|Banner_Article)[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi, '')
+    .replace(/RELATED NEWS[\s\S]*$/i, '');
+
+  prepared = prepared
+    .replace(/\sclass="[^"]*"/gi, '')
+    .replace(/\sstyle="[^"]*"/gi, '')
+    .replace(/\sid="[^"]*"/gi, '')
+    .replace(/\son[a-z]+="[^"]*"/gi, '')
+    .replace(/\shref="javascript:[^"]*"/gi, '')
+    .replace(/\ssrc="javascript:[^"]*"/gi, '')
+    .replace(/<a\b(?![^>]*\btarget=)([^>]*)>/gi, '<a$1 target="_blank">')
+    .replace(/<a\b(?![^>]*\brel=)([^>]*)>/gi, '<a$1 rel="noopener noreferrer">')
+    .replace(/<img\b([^>]*)>/gi, (_match, rawAttrs) => {
+      const attrs = String(rawAttrs);
+      const selfClosing = attrs.trimEnd().endsWith('/');
+      let cleanAttrs = selfClosing ? attrs.trimEnd().slice(0, -1) : attrs;
+
+      if (!/\sloading=/i.test(cleanAttrs)) {
+        cleanAttrs += ' loading="lazy"';
+      }
+
+      if (!/\sdecoding=/i.test(cleanAttrs)) {
+        cleanAttrs += ' decoding="async"';
+      }
+
+      return `<img${cleanAttrs}${selfClosing ? ' /' : ''}>`;
+    });
+
+  const leafDivPattern = /<div\b[^>]*>((?:(?!<\/?div\b)[\s\S])*?)<\/div>/gi;
+
+  for (let index = 0; index < 8; index += 1) {
+    const nextPrepared = prepared.replace(leafDivPattern, (match, content) => {
+      const text = stripHtmlTags(content).trim();
+      const containsBlockContent = /<(?:p|h[1-6]|ul|ol|li|table|figure|img|video|blockquote)\b/i.test(content);
+
+      if (!text || containsBlockContent) {
+        return match;
+      }
+
+      return `<p>${String(content).trim()}</p>`;
+    });
+
+    if (nextPrepared === prepared) {
+      break;
+    }
+
+    prepared = nextPrepared;
+  }
+
+  prepared = prepared
+    .replace(/<p>([^<]*(?:homes|condos|flats|rents|prices|launches|resales|transactions|market|sales)[^<]*)<\/p>/gi, (match, heading) => {
+      const trimmed = String(heading).trim();
+      const looksLikeSectionHeading = trimmed.length <= 120 && (
+        trimmed.includes('—') ||
+        /^HDB flats\b/i.test(trimmed) ||
+        /^Want more insights\??$/i.test(trimmed)
+      );
+      return looksLikeSectionHeading ? `<h2>${trimmed}</h2>` : match;
+    })
+    .replace(/<div>\s*<\/div>/gi, '')
+    .replace(/<span>\s*<\/span>/gi, '');
+
+  return prepared.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * Extract clean text content from mixed HTML/text
  */

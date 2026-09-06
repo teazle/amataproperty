@@ -12,6 +12,7 @@ const maxArticlesArg = process.env.ARTICLE_SCRAPE_MAX_ARTICLES || process.argv[3
 const maxArticles = maxArticlesArg === 'all' ? undefined : Number.parseInt(maxArticlesArg, 10);
 const staleSessionHours = Number.parseInt(process.env.ARTICLE_STALE_SESSION_HOURS || '2', 10);
 const scrapeMethod = process.env.ARTICLE_SCRAPE_METHOD || 'metadata';
+const contentBackfillLimitArg = process.env.ARTICLE_CONTENT_BACKFILL_LIMIT || process.argv[4] || '20';
 
 function ensureEnv(name: string): string {
   const value = process.env[name];
@@ -108,10 +109,15 @@ async function main() {
   await cleanupStaleSessions();
 
   const db = await import('../src/lib/db/articles');
+  const {
+    backfillMissingArticleContent,
+    parseArticleContentBackfillLimit,
+  } = await import('../src/lib/scraper/article-content-backfill');
+  const contentBackfillLimit = parseArticleContentBackfillLimit(contentBackfillLimitArg);
 
   const sessionId = await db.createScrapeSession();
   console.log(
-    `[articles] started session ${sessionId}; method=${scrapeMethod}; pages=${maxPages}; maxArticles=${maxArticles ?? 'all'}`,
+    `[articles] started session ${sessionId}; method=${scrapeMethod}; pages=${maxPages}; maxArticles=${maxArticles ?? 'all'}; contentBackfillLimit=${contentBackfillLimit ?? 'all'}`,
   );
 
   try {
@@ -139,8 +145,13 @@ async function main() {
       );
     }
 
-    await db.completeScrapeSession(sessionId, 'completed');
-    console.log(`[articles] completed session ${sessionId}; scraped=${articles.length}`);
+    const backfill = await backfillMissingArticleContent({
+      limit: contentBackfillLimit,
+      onLog: (message) => console.log(message),
+    });
+
+    await db.completeScrapeSession(sessionId, backfill.failed > 0 ? 'error' : 'completed', backfill.failed > 0 ? `full content backfill failed for ${backfill.failed} article(s)` : undefined);
+    console.log(`[articles] completed session ${sessionId}; scraped=${articles.length}; contentAttempted=${backfill.attempted}; contentSaved=${backfill.saved}; contentFailed=${backfill.failed}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await db.completeScrapeSession(sessionId, 'error', message).catch((dbError) => {

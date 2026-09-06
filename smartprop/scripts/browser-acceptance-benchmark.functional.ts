@@ -1,3 +1,4 @@
+// Explicit real-browser check: run with loopback/Unix socket access, not the network-denied unit suite.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

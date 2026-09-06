@@ -10,6 +10,11 @@ import {
   type ScraperJobPayload,
   SCRAPER_DLQ_NAME,
 } from './queue-types';
+import {
+  buildScraperChildEnvironment,
+  ScraperProcessExitError,
+  settleScraperJobOutcome,
+} from './scraper-outcome';
 import { ensureScraperQueues, getBoss, stopBoss } from './scraper-queue';
 import { cleanupOrphanedBrowsers, startPeriodicCleanup } from '../utils/browser-cleanup';
 
@@ -61,7 +66,40 @@ async function updateJobStatus(
     updates.completed_at = new Date().toISOString();
   }
 
-  await supabase.from('scraper_jobs').update(updates).eq('id', jobId);
+  const { error: queryError } = await supabase.from('scraper_jobs').update(updates).eq('id', jobId);
+  if (queryError) throw queryError;
+}
+
+async function readPersistedJobOutcome(jobId: string) {
+  const { data, error } = await supabase
+    .from('scraper_jobs')
+    .select('status, listings_processed, stats, error_message')
+    .eq('id', jobId)
+    .single();
+
+  if (error) throw error;
+  if (!data) throw new Error(`Scraper job ${jobId} was not found after child exit`);
+
+  return {
+    status: data.status,
+    listingsProcessed: data.listings_processed,
+    stats: data.stats as Record<string, unknown> | null,
+    errorMessage: data.error_message,
+  };
+}
+
+async function markJobFailedForOutcome(jobId: string, errorMessage: string) {
+  const { error } = await supabase
+    .from('scraper_jobs')
+    .update({
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+    })
+    .eq('id', jobId)
+    .in('status', ['queued', 'running', 'paused', 'completed']);
+
+  if (error) throw error;
 }
 
 function closeIfOpen(fd: number | undefined) {
@@ -96,7 +134,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
       return reject(error);
     }
 
-    const env: NodeJS.ProcessEnv = {
+    const env = buildScraperChildEnvironment(platform, config, jobId, {
       ...process.env,
       PATH: `${homeDir}/.bun/bin:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
       HOME: homeDir,
@@ -105,19 +143,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
       // Force Bun to transpile fresh for every job to avoid stale cache issues
       BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeCacheDir,
       BUN_INSTALL_CACHE_DIR: '/dev/null',
-    };
-
-    if (platform === 'propertyguru') {
-      const district = config.district?.replace('D', '') || '';
-      env.PG_DISTRICTS = district;
-      env.PG_MAX_PAGES = config.pages.toString();
-      if (config.maxListings) env.PG_MAX_LISTINGS = config.maxListings.toString();
-      env.PG_JOB_ID = jobId;
-    } else {
-      env.EP_MAX_PAGES = config.pages.toString();
-      if (config.maxListings) env.EP_MAX_LISTINGS = config.maxListings.toString();
-      env.EP_JOB_ID = jobId;
-    }
+    });
 
     const command = isLinux ? 'xvfb-run' : bunPath;
     const args =
@@ -180,7 +206,7 @@ function runScraperProcess(payload: ScraperJobPayload): Promise<void> {
         } catch (logError) {
           console.error(`[ScraperWorker] Could not read log file:`, logError);
         }
-        reject(new Error(errorMsg));
+        reject(new ScraperProcessExitError(code, errorMsg));
       }
     });
   });
@@ -229,20 +255,17 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
 
   try {
     console.log(`[ScraperWorker] Starting scraper process for job ${payload.jobId}...`);
-    await runScraperProcess(payload);
-    console.log(`[ScraperWorker] Scraper process completed for job ${payload.jobId}`);
-    await updateJobStatus(payload.jobId, 'completed');
-    console.log(`[ScraperWorker] Updated job ${payload.jobId} to completed status`);
+    const outcome = await settleScraperJobOutcome({
+      run: () => runScraperProcess(payload),
+      read: () => readPersistedJobOutcome(payload.jobId),
+      markFailed: (message) => markJobFailedForOutcome(payload.jobId, message),
+    });
+    console.log(`[ScraperWorker] Acknowledged ${outcome.status} outcome for job ${payload.jobId}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[ScraperWorker] Job ${payload.jobId} failed:`, message);
     if (error instanceof Error && error.stack) {
       console.error(`[ScraperWorker] Stack trace:`, error.stack);
-    }
-    try {
-    await updateJobStatus(payload.jobId, 'failed', message);
-    } catch (updateError) {
-      console.error(`[ScraperWorker] Failed to update job status to failed:`, updateError);
     }
     throw error;
   } finally {

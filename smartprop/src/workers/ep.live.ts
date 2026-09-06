@@ -18,6 +18,7 @@ import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA as _FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
 import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health';
+import { cleanEdgePropPropertyTitle } from '../lib/queue/scraper-outcome';
 
 const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
 
@@ -162,26 +163,6 @@ async function reAuthenticate(): Promise<boolean> {
     console.error('❌ Re-authentication failed:', error);
     return false;
   }
-}
-
-/**
- * Clean property title by removing portal suffixes and extra text
- * @param title - Raw title from page
- * @returns Cleaned title
- */
-function cleanPropertyTitle(title: string): string {
-  let cleaned = title;
-
-  // Remove EdgeProp suffix
-  cleaned = cleaned.replace(/\s*\|\s*EdgeProp.*$/i, '');
-
-  // Remove "For Sale at S$..." suffix
-  cleaned = cleaned.replace(/\s+(For Sale|For Rent)\s+at\s+S\$.*$/i, '');
-
-  // Remove property type at the end if redundant
-  cleaned = cleaned.replace(/\s+(Condominium|Apartment|HDB|Landed|Terrace)$/i, '');
-
-  return cleaned.trim();
 }
 
 /**
@@ -2010,7 +1991,7 @@ async function scrapeEdgePropFinal() {
                 listing: {
                   portal: 'edgeprop',
                   url: popup.url(),
-                  title: cleanPropertyTitle(propertyName),
+                  title: cleanEdgePropPropertyTitle(propertyName),
                   price: price,
                   district: extractedDistrict || undefined,
                   address: extractedAddress || undefined,

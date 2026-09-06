@@ -6,6 +6,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { ScheduledTask } from 'node-cron';
 import cron from 'node-cron';
+import { buildScheduledEnqueueTelemetry } from '../queue/scraper-outcome';
 // Import startScrapeJob dynamically to avoid circular dependencies
 // We'll import it when needed in the executeJob method
 
@@ -290,6 +291,7 @@ class ScraperScheduler {
       } as const;
 
       // Add platform-specific config
+      let enqueuedCount = 0;
       if (schedule.platform === 'propertyguru' && schedule.config.districts) {
         // For PG, enqueue one job per district
         for (const district of schedule.config.districts) {
@@ -304,6 +306,7 @@ class ScraperScheduler {
           if (!result.success) {
             throw new Error(result.error || 'Failed to start scraper job');
           }
+          enqueuedCount++;
         }
       } else {
         // For EP, just call once
@@ -312,29 +315,32 @@ class ScraperScheduler {
         if (!result.success) {
           throw new Error(result.error || 'Failed to start scraper job');
         }
+        enqueuedCount++;
       }
 
-      // Update status to success (with rate limit handling)
+      // Scheduling only proves enqueue. The scraper job record owns its terminal outcome.
       const nextRun = this.calculateNextRun(schedule.cron_expression, schedule.timezone);
+      const enqueueTelemetry = buildScheduledEnqueueTelemetry(enqueuedCount);
       try {
-        await supabase
+        const { error: updateError } = await supabase
           .from('scheduled_jobs')
           .update({
-            last_run_status: 'success',
-            last_error: null,
+            last_run_status: enqueueTelemetry.lastRunStatus,
+            last_error: enqueueTelemetry.lastError,
             next_run_at: nextRun.toISOString(),
           })
           .eq('id', schedule.id);
+        if (updateError) throw updateError;
       } catch (dbError) {
         // If rate limited, log but don't fail the job
         if (errorMessageIncludes(dbError, ['rate limit', 'quota'])) {
-          console.warn(`[Scheduler] Rate limit hit updating success status for ${schedule.id}. Job completed successfully.`);
+          console.warn(`[Scheduler] Rate limit hit recording enqueue telemetry for ${schedule.id}.`);
         } else {
           throw dbError;
         }
       }
 
-      console.log(`[Scheduler] Job completed successfully: ${schedule.name} (${schedule.id})`);
+      console.log(`[Scheduler] Enqueued ${enqueuedCount} scraper job(s): ${schedule.name} (${schedule.id}); scraper outcome pending.`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Scheduler] Job failed: ${schedule.name} (${schedule.id}):`, errorMessage);

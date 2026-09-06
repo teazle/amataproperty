@@ -3,6 +3,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { normalizeArticleCategories } from '../scraper/article-categories';
 
 // Validate environment variables before creating client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -56,7 +57,6 @@ const FIELD_LIMITS = {
   created_on: 100,
   source: 100,
   discovery_method: 10,
-  category: 200,
 };
 
 function truncateField(value: string | undefined, maxLength: number): string | undefined {
@@ -67,30 +67,13 @@ function truncateField(value: string | undefined, maxLength: number): string | u
   return value.length > maxLength ? value.slice(0, maxLength) : value;
 }
 
-function normalizeCategory(category: Article['category']): string {
-  const rawCategories = Array.isArray(category) ? category : [category];
-  const cleaned = rawCategories
-    .map((item) => String(item || '').trim())
-    .filter(Boolean)
-    .filter((item) => {
-      const lower = item.toLowerCase();
-      return lower !== 'tags' && lower !== 'property news' && !lower.startsWith('tags:');
-    });
-
-  const preferred = cleaned.find((item) => !item.toLowerCase().startsWith('tags')) ||
-    cleaned[0] ||
-    'News';
-
-  return truncateField(preferred, FIELD_LIMITS.category) || 'News';
-}
-
 function normalizeArticleForStorage(article: Article): Article {
   return {
     ...article,
     nid: truncateField(article.nid, FIELD_LIMITS.nid) || article.nid,
     author: truncateField(article.author, FIELD_LIMITS.author) || 'Unknown',
     created: truncateField(article.created, FIELD_LIMITS.created) || article.created,
-    category: normalizeCategory(article.category),
+    category: normalizeArticleCategories(article.category),
     created_on: truncateField(article.created_on, FIELD_LIMITS.created_on) || article.created_on,
     discovery_method: truncateField(article.discovery_method || 'unknown', FIELD_LIMITS.discovery_method),
   };
@@ -382,7 +365,8 @@ export async function getArticles(
   }
 
   if (category && category !== 'all') {
-    query = query.contains('category', [category]);
+    // A JSONB scalar also matches array members, retaining legacy scalar rows.
+    query = query.contains('category', JSON.stringify(category));
   }
 
   const { data, error, count } = await query;

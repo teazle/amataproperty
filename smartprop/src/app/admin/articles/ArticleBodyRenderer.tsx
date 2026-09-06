@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element -- Article bodies contain scraped remote media. */
 
-import { prepareArticleHtmlForDisplay, cleanArticleParagraphs, containsHtmlLinks, extractCleanTextContent } from '@/lib/utils/content-parser';
+import { prepareArticleHtmlForDisplay, cleanArticleParagraphs, extractCleanTextContent } from '@/lib/utils/content-parser';
 
 type ArticleImage = string | {
   url?: string;
@@ -24,18 +24,14 @@ type ArticleBodyRendererProps = {
 };
 
 export function ArticleBodyRenderer({ content }: ArticleBodyRendererProps) {
-  const articleHtml = prepareArticleHtmlForDisplay(content.html_content || '');
-
-  if (articleHtml) {
-    return (
-      <article
-        className="edgeprop-article-body"
-        dangerouslySetInnerHTML={{ __html: articleHtml }}
-      />
-    );
-  }
-
-  const cleanedParagraphs = cleanArticleParagraphs(content.paragraphs || []);
+  const savedParagraphs = cleanArticleParagraphs(content.paragraphs || []);
+  // The legacy formatter is not a sanitizer. Never insert scraped markup as HTML.
+  const htmlParagraphs = prepareArticleHtmlForDisplay(content.html_content || '')
+    .replace(/<\/(?:p|div|h[1-6]|li|blockquote)>/gi, '\n')
+    .split('\n')
+    .map(extractCleanTextContent)
+    .filter(Boolean);
+  const cleanedParagraphs = savedParagraphs.length ? savedParagraphs : htmlParagraphs;
   const images = Array.isArray(content.images) ? content.images : [];
   const imagesByParaIndex: Record<number, ArticleImage[]> = {};
 
@@ -51,15 +47,9 @@ export function ArticleBodyRenderer({ content }: ArticleBodyRendererProps) {
     return (
       <article className="edgeprop-article-body">
         {cleanedParagraphs.map((paragraph, idx) => {
-          const hasLinks = containsHtmlLinks(paragraph);
-
           return (
             <div key={idx}>
-              {hasLinks ? (
-                <div dangerouslySetInnerHTML={{ __html: paragraph }} />
-              ) : (
-                <p>{paragraph}</p>
-              )}
+              <p>{extractCleanTextContent(paragraph)}</p>
 
               {(imagesByParaIndex[idx] || []).map((img, imgIdx) => {
                 const imgUrl = typeof img === 'string' ? img : img.url || img.src;
@@ -67,6 +57,12 @@ export function ArticleBodyRenderer({ content }: ArticleBodyRendererProps) {
                 const imgCaption = typeof img === 'string' ? '' : img.caption || '';
 
                 if (!imgUrl) return null;
+                try {
+                  const protocol = new URL(imgUrl, 'https://article.invalid').protocol;
+                  if (protocol !== 'https:' && protocol !== 'http:') return null;
+                } catch {
+                  return null;
+                }
 
                 return (
                   <figure key={`${idx}-${imgIdx}`}>

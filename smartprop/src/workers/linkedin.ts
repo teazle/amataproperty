@@ -8,6 +8,7 @@
  */
 
 import path from 'path';
+import { composeLinkMatchesContact } from '../lib/linkedin/recipient-match';
 import { config } from 'dotenv';
 import Groq from 'groq-sdk';
 import { humanPause } from './stealth.js';
@@ -1973,51 +1974,6 @@ function normalizeProfileUrl(profileUrl: string): string {
   }
 
   return normalized.split('?')[0].replace(/\/+$/, '');
-}
-
-function normalizeLinkedInComposeHref(href: string | null | undefined): string {
-  if (!href) {
-    return '';
-  }
-
-  try {
-    const url = new URL(href, 'https://www.linkedin.com');
-    url.hash = '';
-    return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
-  } catch {
-    return href.split('?')[0].replace(/\/+$/, '');
-  }
-}
-
-function normalizeContactNameForMatch(name: string | null | undefined): string {
-  return (name || '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function composeLinkMatchesContact(
-  linkInfo: { href?: string | null; ariaLabel?: string | null; textContent?: string | null },
-  contact: Pick<Contact, 'name' | 'messageHref'>,
-  linkedinId?: string | null
-): boolean {
-  const href = normalizeLinkedInComposeHref(linkInfo.href);
-  const capturedHref = normalizeLinkedInComposeHref(contact.messageHref);
-  if (capturedHref && href && capturedHref === href) {
-    return true;
-  }
-
-  if (linkedinId && href && href.includes(linkedinId)) {
-    return true;
-  }
-
-  const contactName = normalizeContactNameForMatch(contact.name);
-  if (!contactName || contactName === 'unknown') {
-    return false;
-  }
-
-  const labelText = normalizeContactNameForMatch(`${linkInfo.ariaLabel || ''} ${linkInfo.textContent || ''}`);
-  return Boolean(labelText && labelText.includes(contactName));
 }
 
 function getContactDedupKey(contact: Pick<Contact, 'profileUrl' | 'linkedinId' | 'messageType' | 'name'>): string {

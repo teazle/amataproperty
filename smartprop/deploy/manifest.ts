@@ -5,6 +5,12 @@ import AdmZip from 'adm-zip';
 
 export const SMARTPROP_RELEASE_TARGET = {
   id: 'smartprop-existing-host',
+  host: {
+    ssh_alias: 'smartprop-vps',
+    hostname: 'vmi3201429',
+    machine_id: 'bfb5b1b8859546f9aac39a4c5bafa616',
+    ipv4: '109.123.239.107',
+  },
   root: '/opt/smartprop/app/smartprop',
   app: {
     manager: 'pm2',
@@ -20,6 +26,7 @@ export const SMARTPROP_RELEASE_TARGET = {
 } as const;
 
 export const SMARTPROP_REQUIRED_APP_INPUTS = [
+  'bun.lock',
   'ecosystem.config.js',
   'next.config.ts',
   'package-lock.json',
@@ -48,6 +55,11 @@ export interface ReleaseArtifactManifest {
     sha256: string;
     size: number;
     entries: Array<{ path: string; sha256: string; size: number }>;
+  };
+  build_artifact: {
+    name: 'smartprop-next-build';
+    sha256: string;
+    size: number;
   };
   target_identity: SmartPropReleaseTarget;
   build_identity: { kind: 'sha256'; value: string };
@@ -200,8 +212,44 @@ function inspectArchive(archivePath: string): {
   };
 }
 
+function inspectBuildArtifact(buildArtifactPath: string): {
+  sha256: string;
+  size: number;
+} {
+  let stat;
+  let buildBytes: Buffer;
+  try {
+    stat = lstatSync(buildArtifactPath);
+    buildBytes = readFileSync(buildArtifactPath);
+  } catch (error) {
+    fail(`cannot read build artifact: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    fail('build artifact must be a regular file, not a symlink');
+  }
+  return {
+    sha256: sha256(buildBytes),
+    size: buildBytes.byteLength,
+  };
+}
+
+function assertSeparateArtifactFiles(archivePath: string, buildArtifactPath: string): void {
+  let archiveStat;
+  let buildStat;
+  try {
+    archiveStat = lstatSync(archivePath);
+    buildStat = lstatSync(buildArtifactPath);
+  } catch (error) {
+    fail(`cannot compare source and build artifacts: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (archiveStat.dev === buildStat.dev && archiveStat.ino === buildStat.ino) {
+    fail('build artifact must be a separate file from the source archive');
+  }
+}
+
 export function createReleaseArtifactManifest(options: {
   archivePath: string;
+  buildArtifactPath: string;
   sourceCommit: string;
   rollbackIdentity: string;
   target: SmartPropReleaseTarget;
@@ -210,6 +258,8 @@ export function createReleaseArtifactManifest(options: {
   assertSha256Identity({ kind: 'sha256', value: options.rollbackIdentity }, 'rollback identity');
   assertExactTarget(options.target, SMARTPROP_RELEASE_TARGET);
   const artifact = inspectArchive(options.archivePath);
+  const buildArtifact = inspectBuildArtifact(options.buildArtifactPath);
+  assertSeparateArtifactFiles(options.archivePath, options.buildArtifactPath);
 
   return {
     schema_version: 1,
@@ -219,8 +269,12 @@ export function createReleaseArtifactManifest(options: {
       name: 'smartprop-source-archive',
       ...artifact,
     },
+    build_artifact: {
+      name: 'smartprop-next-build',
+      ...buildArtifact,
+    },
     target_identity: SMARTPROP_RELEASE_TARGET,
-    build_identity: { kind: 'sha256', value: artifact.sha256 },
+    build_identity: { kind: 'sha256', value: buildArtifact.sha256 },
     rollback_identity: { kind: 'sha256', value: options.rollbackIdentity },
   };
 }
@@ -229,6 +283,7 @@ export function validateReleaseArtifactManifest(
   manifest: ReleaseArtifactManifest,
   options: {
     archivePath: string;
+    buildArtifactPath: string;
     expectedSourceCommit: string;
     expectedTarget: SmartPropReleaseTarget;
   },
@@ -260,7 +315,19 @@ export function validateReleaseArtifactManifest(
   if (canonicalJson(manifest.artifact.entries) !== canonicalJson(inspected.entries)) {
     fail('release artifact entry hashes do not match the archive contents');
   }
-  if (manifest.build_identity.value !== manifest.artifact.sha256) {
-    fail('build identity does not match the immutable artifact SHA-256');
+
+  const inspectedBuild = inspectBuildArtifact(options.buildArtifactPath);
+  assertSeparateArtifactFiles(options.archivePath, options.buildArtifactPath);
+  if (manifest.build_artifact?.name !== 'smartprop-next-build') {
+    fail('build artifact name is invalid');
+  }
+  if (manifest.build_artifact.sha256 !== inspectedBuild.sha256) {
+    fail('build artifact SHA-256 does not match the build bytes');
+  }
+  if (manifest.build_artifact.size !== inspectedBuild.size) {
+    fail('build artifact size does not match the build bytes');
+  }
+  if (manifest.build_identity.value !== manifest.build_artifact.sha256) {
+    fail('build identity does not match the immutable build artifact SHA-256');
   }
 }

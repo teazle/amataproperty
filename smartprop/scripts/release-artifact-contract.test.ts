@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,15 +8,35 @@ import AdmZip from 'adm-zip';
 
 import {
   SMARTPROP_RELEASE_TARGET,
-  SMARTPROP_REQUIRED_APP_INPUTS,
   createReleaseArtifactManifest,
   validateReleaseArtifactManifest,
   type ReleaseArtifactManifest,
+  type SmartPropReleaseTarget,
 } from '../deploy/manifest';
 
 const sourceCommit = '1'.repeat(40);
 const rollbackIdentity = '2'.repeat(64);
 const temporaryDirectories: string[] = [];
+const requiredFixtureInputs = [
+  'bun.lock',
+  'ecosystem.config.js',
+  'next.config.ts',
+  'package-lock.json',
+  'package.json',
+  'src/instrumentation-node.ts',
+  'src/instrumentation.ts',
+  'src/lib/queue/scraper-worker.ts',
+  'tsconfig.json',
+] as const;
+const observedTarget = {
+  ...SMARTPROP_RELEASE_TARGET,
+  host: {
+    ssh_alias: 'smartprop-vps',
+    hostname: 'vmi3201429',
+    machine_id: 'bfb5b1b8859546f9aac39a4c5bafa616',
+    ipv4: '109.123.239.107',
+  },
+} as unknown as SmartPropReleaseTarget;
 
 function makeArchive(entries: Record<string, string>): string {
   const directory = mkdtempSync(join(tmpdir(), 'smartprop-release-contract-'));
@@ -36,13 +57,25 @@ function makeArchive(entries: Record<string, string>): string {
 
 function validEntries(): Record<string, string> {
   return Object.fromEntries(
-    SMARTPROP_REQUIRED_APP_INPUTS.map((path) => [path, `fixture:${path}\n`]),
+    requiredFixtureInputs.map((path) => [path, `fixture:${path}\n`]),
   );
 }
 
-function validManifest(archivePath: string): ReleaseArtifactManifest {
+function makeBuildArtifact(content = 'opaque compiled Next build\n'): string {
+  const directory = mkdtempSync(join(tmpdir(), 'smartprop-build-contract-'));
+  temporaryDirectories.push(directory);
+  const buildArtifactPath = join(directory, 'next-build.tar');
+  writeFileSync(buildArtifactPath, content);
+  return buildArtifactPath;
+}
+
+function validManifest(
+  archivePath: string,
+  buildArtifactPath = makeBuildArtifact(),
+): ReleaseArtifactManifest {
   return createReleaseArtifactManifest({
     archivePath,
+    buildArtifactPath,
     sourceCommit,
     rollbackIdentity,
     target: SMARTPROP_RELEASE_TARGET,
@@ -61,20 +94,22 @@ describe('SmartProp release artifact contract', () => {
       ...validEntries(),
       'public/release-marker.txt': 'candidate-1\n',
     });
-    const manifest = validManifest(archivePath);
+    const buildArtifactPath = makeBuildArtifact();
+    const manifest = validManifest(archivePath, buildArtifactPath);
 
     expect(manifest.source_identity).toEqual({ kind: 'git', value: sourceCommit });
     expect(manifest.target_identity).toEqual(SMARTPROP_RELEASE_TARGET);
     expect(manifest.build_identity).toEqual({
       kind: 'sha256',
-      value: manifest.artifact.sha256,
+      value: manifest.build_artifact.sha256,
     });
     expect(manifest.artifact.entries.map((entry) => entry.path)).toEqual([
-      ...SMARTPROP_REQUIRED_APP_INPUTS,
+      ...requiredFixtureInputs,
       'public/release-marker.txt',
     ].sort());
     expect(() => validateReleaseArtifactManifest(manifest, {
       archivePath,
+      buildArtifactPath,
       expectedSourceCommit: sourceCommit,
       expectedTarget: SMARTPROP_RELEASE_TARGET,
     })).not.toThrow();
@@ -82,7 +117,8 @@ describe('SmartProp release artifact contract', () => {
 
   test('rejects an archive whose bytes no longer match its manifest', () => {
     const archivePath = makeArchive(validEntries());
-    const manifest = validManifest(archivePath);
+    const buildArtifactPath = makeBuildArtifact();
+    const manifest = validManifest(archivePath, buildArtifactPath);
     const changedArchivePath = makeArchive({
       ...validEntries(),
       'public/unmanifested.txt': 'changed bytes\n',
@@ -90,9 +126,80 @@ describe('SmartProp release artifact contract', () => {
 
     expect(() => validateReleaseArtifactManifest(manifest, {
       archivePath: changedArchivePath,
+      buildArtifactPath,
       expectedSourceCommit: sourceCommit,
       expectedTarget: SMARTPROP_RELEASE_TARGET,
     })).toThrow('artifact SHA-256');
+  });
+
+  test('rejects an archive that omits bun.lock dependency resolution', () => {
+    const missingBunLock = validEntries();
+    delete missingBunLock['bun.lock'];
+
+    expect(() => validManifest(makeArchive(missingBunLock))).toThrow(
+      'missing required app input: bun.lock',
+    );
+  });
+
+  test('binds the source archive to a separate build artifact hash', () => {
+    const archivePath = makeArchive(validEntries());
+    const buildContent = 'opaque compiled Next build v2\n';
+    const buildArtifactPath = makeBuildArtifact(buildContent);
+    const manifest = validManifest(archivePath, buildArtifactPath);
+    const expectedBuildSha256 = createHash('sha256').update(buildContent).digest('hex');
+
+    expect(manifest.build_identity).toEqual({ kind: 'sha256', value: expectedBuildSha256 });
+    expect(manifest.build_identity.value).not.toBe(manifest.artifact.sha256);
+    writeFileSync(buildArtifactPath, 'tampered compiled build\n');
+    expect(() => validateReleaseArtifactManifest(manifest, {
+      archivePath,
+      buildArtifactPath,
+      expectedSourceCommit: sourceCommit,
+      expectedTarget: SMARTPROP_RELEASE_TARGET,
+    })).toThrow('build artifact SHA-256');
+  });
+
+  test('rejects using the source archive itself as the build artifact', () => {
+    const archivePath = makeArchive(validEntries());
+
+    expect(() => createReleaseArtifactManifest({
+      archivePath,
+      buildArtifactPath: archivePath,
+      sourceCommit,
+      rollbackIdentity,
+      target: SMARTPROP_RELEASE_TARGET,
+    })).toThrow('separate file');
+  });
+
+  test('binds and revalidates the observed host identity', () => {
+    const archivePath = makeArchive(validEntries());
+    const buildArtifactPath = makeBuildArtifact();
+    const manifest = createReleaseArtifactManifest({
+      archivePath,
+      buildArtifactPath,
+      sourceCommit,
+      rollbackIdentity,
+      target: observedTarget,
+    });
+
+    expect(() => validateReleaseArtifactManifest(manifest, {
+      archivePath,
+      buildArtifactPath,
+      expectedSourceCommit: sourceCommit,
+      expectedTarget: observedTarget,
+    })).not.toThrow();
+    expect(() => validateReleaseArtifactManifest({
+      ...manifest,
+      target_identity: {
+        ...manifest.target_identity,
+        host: { ...manifest.target_identity.host, hostname: 'other-host' },
+      },
+    }, {
+      archivePath,
+      buildArtifactPath,
+      expectedSourceCommit: sourceCommit,
+      expectedTarget: observedTarget,
+    })).toThrow('target identity');
   });
 
   test('rejects missing required app inputs and unsafe or auth-bearing paths', () => {
@@ -118,9 +225,11 @@ describe('SmartProp release artifact contract', () => {
 
   test('rejects a different target and absent or mutable build and rollback identities', () => {
     const archivePath = makeArchive(validEntries());
-    const manifest = validManifest(archivePath);
+    const buildArtifactPath = makeBuildArtifact();
+    const manifest = validManifest(archivePath, buildArtifactPath);
     const validate = (candidate: ReleaseArtifactManifest) => validateReleaseArtifactManifest(candidate, {
       archivePath,
+      buildArtifactPath,
       expectedSourceCommit: sourceCommit,
       expectedTarget: SMARTPROP_RELEASE_TARGET,
     });

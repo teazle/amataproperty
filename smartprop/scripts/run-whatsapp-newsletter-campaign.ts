@@ -12,7 +12,10 @@ import {
   type CampaignRunResult,
 } from '../src/lib/newsletter/campaign-runner';
 import { normalizeSingaporeRecipient } from '../src/lib/newsletter/recipient';
-import { getWAHAReadiness, sendCampaignWhatsApp } from '../src/lib/wa/waha';
+import {
+  createSelectedWhatsAppCampaignTransport,
+  type SelectedTransportDependencies,
+} from '../src/lib/wa/selected-transport';
 
 export type CampaignCliCommand =
   | { command: 'run'; dryRun: boolean; date?: string; json: boolean }
@@ -31,6 +34,12 @@ export function exitCodeForResult(result: CampaignRunResult): number {
 
 export function exitCodeForError(error: unknown): number {
   return error instanceof CampaignConfigurationError ? 20 : 30;
+}
+
+export function createCampaignMessagingDependencies(
+  dependencies: SelectedTransportDependencies = {},
+) {
+  return createSelectedWhatsAppCampaignTransport(dependencies);
 }
 
 function optionValue(args: string[], name: string): string | undefined {
@@ -141,13 +150,11 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return 0;
   }
 
+  const messaging = createCampaignMessagingDependencies();
   const dependencies = {
     store,
-    preflight: async () => {
-      const readiness = await getWAHAReadiness();
-      return { ready: readiness.ready, error: readiness.error };
-    },
-    transport: sendCampaignWhatsApp,
+    preflight: messaging.preflight,
+    transport: messaging.transport,
     sleep: (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     writeRecoveryRecord,
   };

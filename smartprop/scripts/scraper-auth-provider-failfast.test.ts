@@ -81,6 +81,7 @@ describe('PropertyGuru auth provider policy', () => {
     const cwd = makeWorkspace();
     const originalState = path.join(cwd, 'storage', 'pg.state.json');
     let candidatePath = '';
+    let stagedMode = 0;
     const result = await runPGAuthProvider({
       cwd,
       env: { PG_AUTH_PROVIDER: 'local' },
@@ -89,6 +90,7 @@ describe('PropertyGuru auth provider policy', () => {
         const child = new EventEmitter();
         queueMicrotask(() => {
           fs.writeFileSync(candidatePath, validPropertyGuruState());
+          stagedMode = fs.statSync(candidatePath).mode & 0o777;
           child.emit('exit', 0, null);
         });
         return child;
@@ -97,6 +99,8 @@ describe('PropertyGuru auth provider policy', () => {
 
     expect(result).toMatchObject({ ok: true, exitCode: 0, provider: 'local', diagnostic: null });
     expect(fs.readFileSync(originalState, 'utf8')).toBe(validPropertyGuruState());
+    expect(stagedMode).toBe(0o600);
+    expect(fs.statSync(originalState).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(candidatePath)).toBe(false);
   });
 

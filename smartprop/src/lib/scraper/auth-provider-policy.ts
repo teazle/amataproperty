@@ -85,7 +85,9 @@ export type PGAuthRunResult = {
 function createCandidateStatePath(cwd: string): string {
   const storageDir = path.join(cwd, 'storage');
   fs.mkdirSync(storageDir, { recursive: true });
-  return path.join(storageDir, `.pg.state.auth-candidate-${process.pid}-${Date.now()}.json`);
+  const candidatePath = path.join(storageDir, `.pg.state.auth-candidate-${process.pid}-${crypto.randomUUID()}.json`);
+  fs.writeFileSync(candidatePath, '', { flag: 'wx', mode: 0o600 });
+  return candidatePath;
 }
 
 function replaceWithValidatedCandidate(candidatePath: string, statePath: string): void {
@@ -95,6 +97,8 @@ function replaceWithValidatedCandidate(candidatePath: string, statePath: string)
     throw new Error(validation.failureReason ?? 'Authentication candidate state is not valid');
   }
 
+  // A newly staged file must not broaden access to saved login credentials.
+  fs.chmodSync(candidatePath, 0o600);
   fs.renameSync(candidatePath, statePath);
 }
 

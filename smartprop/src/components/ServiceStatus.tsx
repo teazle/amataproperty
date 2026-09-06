@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { RefreshCw, AlertCircle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import type { MessagingProviderHealth } from '@/lib/wa/provider-health';
 
 interface ServiceStatus {
   flaresolverr: {
@@ -12,7 +13,8 @@ interface ServiceStatus {
     ready: boolean;
     error?: string;
   };
-  waha: {
+  messaging?: MessagingProviderHealth;
+  waha?: {
     online: boolean;
     ready: boolean;
     sessionStatus?: string;
@@ -29,9 +31,13 @@ interface ServiceStatus {
   };
 }
 
-export function ServiceStatus() {
-  const [status, setStatus] = useState<ServiceStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+interface ServiceStatusProps {
+  initialStatus?: ServiceStatus;
+}
+
+export function ServiceStatus({ initialStatus }: ServiceStatusProps) {
+  const [status, setStatus] = useState<ServiceStatus | null>(initialStatus ?? null);
+  const [isLoading, setIsLoading] = useState(!initialStatus);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const fetchStatus = async () => {
@@ -83,6 +89,10 @@ export function ServiceStatus() {
       );
     }
   };
+
+  const messaging = status?.messaging ?? status?.waha;
+  const messagingProvider = status?.messaging?.provider ?? (status?.waha ? 'waha' : undefined);
+  const messagingLabel = messagingProvider === 'openclaw' ? 'OpenClaw' : messagingProvider === 'waha' ? 'WAHA' : 'WhatsApp';
 
   if (isLoading && !status) {
     return (
@@ -144,25 +154,27 @@ export function ServiceStatus() {
           {status && getStatusBadge(status.flaresolverr.online, status.flaresolverr.ready)}
         </div>
 
-        {/* WAHA Status */}
+        {/* Messaging Status */}
         <div className="flex items-center justify-between p-3 border rounded-lg">
           <div className="flex items-center space-x-3">
             <div className="flex flex-col">
-              <span className="font-medium">WAHA</span>
+              <span className="font-medium">{messagingLabel}</span>
               <span className="text-xs text-gray-500">
-                WhatsApp HTTP API
-                {status?.waha.sessionStatus && (
-                  <span className="ml-1">({status.waha.sessionStatus})</span>
+                {!messaging && 'Messaging status unavailable'}
+                {messagingProvider === 'waha' && 'WhatsApp HTTP API'}
+                {messagingProvider === 'openclaw' && `WhatsApp account ${status?.messaging?.account ?? 'unknown'}`}
+                {messaging?.sessionStatus && (
+                  <span className="ml-1">({messaging.sessionStatus})</span>
                 )}
               </span>
-              {status?.waha.error && (
+              {messaging?.error && (
                 <span className="text-xs text-red-500 mt-1">
-                  {status.waha.error}
+                  {messaging.error}
                 </span>
               )}
             </div>
           </div>
-          {status && getStatusBadge(status.waha.online, status.waha.ready)}
+          {status && getStatusBadge(messaging?.online ?? false, messaging?.ready ?? false)}
         </div>
 
         {/* Worker Status */}
@@ -225,4 +237,3 @@ export function ServiceStatus() {
     </Card>
   );
 }
-

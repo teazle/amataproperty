@@ -9,8 +9,6 @@ loadDotenv({ path: '.env', quiet: true });
 
 const SGT_TIME_ZONE = 'Asia/Singapore';
 const DEFAULT_APP_URL = 'http://127.0.0.1:3000';
-const DEFAULT_WAHA_URL = 'http://127.0.0.1:3030';
-const DEFAULT_WAHA_SESSION = 'default';
 const OPENCLAW_CHANNEL = 'whatsapp';
 const OPENCLAW_ACCOUNT = 'default';
 
@@ -197,6 +195,36 @@ function getRecipients(): string[] {
     .filter(Boolean);
 }
 
+type DailyMessagingSummary = {
+  provider: string;
+  ready: boolean | null;
+  account?: string;
+  error?: string;
+};
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * The app health endpoint owns provider authentication and readiness checks.
+ * The report consumes that result instead of probing WAHA independently.
+ */
+export function getDailyMessagingSummary(appHealth: unknown): DailyMessagingSummary {
+  const messaging = record(record(record(appHealth)?.checks)?.messaging);
+  if (!messaging) {
+    return { provider: 'unknown', ready: null, error: 'Application messaging health is unavailable' };
+  }
+  return {
+    provider: typeof messaging.provider === 'string' ? messaging.provider : 'unknown',
+    ready: typeof messaging.ready === 'boolean' ? messaging.ready : null,
+    account: typeof messaging.account === 'string' ? messaging.account : undefined,
+    error: typeof messaging.error === 'string' ? messaging.error : undefined,
+  };
+}
+
 async function buildReport(options: CliOptions) {
   const reportDate = options.date || previousSgtDate();
   const range = sgtRange(reportDate);
@@ -271,13 +299,9 @@ async function buildReport(options: CliOptions) {
   }
 
   const appUrl = process.env.SMARTPROP_APP_URL || DEFAULT_APP_URL;
-  const wahaUrl = process.env.WAHA_URL || DEFAULT_WAHA_URL;
-  const wahaSession = process.env.WAHA_SESSION || DEFAULT_WAHA_SESSION;
 
-  const [appHealth, wahaSessionStatus] = await Promise.all([
-    fetchJson(`${appUrl}/api/health`),
-    fetchJson(`${wahaUrl}/api/sessions/${wahaSession}`),
-  ]);
+  const appHealth = await fetchJson(`${appUrl}/api/health`);
+  const messaging = getDailyMessagingSummary(appHealth);
 
   const pm2 = parsePm2();
   const docker = parseDocker();
@@ -331,22 +355,16 @@ async function buildReport(options: CliOptions) {
     }));
 
   const unhealthyPm2 = pm2.filter((row) => row.status !== 'online');
-  const wahaReady =
-    wahaSessionStatus?.status === 'WORKING' ||
-    Boolean(wahaSessionStatus?.me?.id && wahaSessionStatus?.engine?.state === 'CONNECTED');
-  const wahaStatus = wahaSessionStatus?.status ?? 'unknown';
-  const wahaState = wahaSessionStatus?.engine?.state ?? 'n/a';
-
   const allErrors = [
     ...scraperRows.filter((row) => row.error_message).map((row) => `${row.platform}: ${row.error_message}`),
     ...linkedinFailures.map((row) => `LinkedIn ${row.contact}: ${row.error}`),
     ...(appHealth?.error ? [`App health: ${appHealth.error}`] : []),
-    ...(wahaSessionStatus?.error ? [`WAHA: ${wahaSessionStatus.error}`] : []),
-    ...(!wahaSessionStatus?.error && !wahaReady ? [`WAHA session is not ready (${wahaStatus}/${wahaState})`] : []),
+    ...(messaging.error ? [`Messaging: ${messaging.error}`] : []),
+    ...(messaging.ready === false && !messaging.error ? [`Messaging is not ready (${messaging.provider})`] : []),
   ];
 
   const verdict =
-    allErrors.length === 0 && unhealthyPm2.length === 0 && (!wahaSessionStatus || wahaReady)
+    allErrors.length === 0 && unhealthyPm2.length === 0 && messaging.ready === true
       ? 'OK'
       : 'Needs attention';
 
@@ -357,12 +375,7 @@ async function buildReport(options: CliOptions) {
     verdict,
     currentHealth: {
       app: appHealth?.status ?? appHealth?.healthy ?? appHealth?.error ?? 'unknown',
-      waha: {
-        ready: wahaReady,
-        status: wahaSessionStatus?.status ?? 'unknown',
-        engine: wahaSessionStatus?.engine?.state,
-        me: wahaSessionStatus?.me?.id,
-      },
+      messaging,
       pm2,
       docker: docker.filter((row) => /smartprop|waha|flare/i.test(row.name)),
     },
@@ -457,7 +470,7 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   lines.push(`SmartProp Daily Run Report - ${report.reportDate} SGT`);
   lines.push(`Verdict: ${report.verdict}`);
   lines.push('');
-  lines.push(`Current health: app=${report.currentHealth.app}; WAHA=${report.currentHealth.waha.status}/${report.currentHealth.waha.engine ?? 'n/a'}; PM2=${pm2Summary}`);
+  lines.push(`Current health: app=${report.currentHealth.app}; Messaging=${report.currentHealth.messaging.provider}/${report.currentHealth.messaging.ready ?? 'unknown'}; PM2=${pm2Summary}`);
   lines.push(`Containers: ${dockerSummary}`);
   lines.push('');
   lines.push('Run counts:');
@@ -553,7 +566,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

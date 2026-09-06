@@ -8,7 +8,8 @@ import {
   parseNewsletterFreshnessMinutes,
   type NewsletterRunHealthSnapshot,
 } from '@/lib/newsletter/newsletter-health';
-import { getWAHAHeaders, getWAHAReadiness } from '@/lib/wa/waha';
+import { getWAHAReadiness } from '@/lib/wa/waha';
+import { getMessagingProviderHealth } from '@/lib/wa/provider-health';
 
 const SOURCE_REVISION_PATH = process.env.SMARTPROP_DEPLOY_SOURCE_REVISION_PATH || '/opt/smartprop/app/smartprop/.deploy-source-revision';
 
@@ -55,25 +56,21 @@ export async function GET(_request: NextRequest) {
       overallStatus = 'unhealthy';
     }
 
-    // Check WAHA service connectivity
+    // Messaging readiness is provider-aware; generic liveness remains separate.
     try {
-      const wahaUrl = process.env.WAHA_URL || 'http://localhost:3030';
-      const wahaResponse = await fetch(`${wahaUrl}/api/sessions`, {
-        method: 'GET',
-        headers: getWAHAHeaders({ 'Content-Type': 'application/json' }),
-        signal: AbortSignal.timeout(5000)
-      });
-      
-      checks.waha = {
-        status: wahaResponse.ok ? 'healthy' : 'unhealthy',
+      const messaging = await getMessagingProviderHealth();
+      const messagingStatus = messaging.ready ? 'healthy' : 'degraded';
+      checks.messaging = {
+        status: messagingStatus,
         responseTime: Date.now() - startTime,
-        statusCode: wahaResponse.status
+        ...messaging,
       };
-      
-      if (!wahaResponse.ok) overallStatus = 'degraded';
+      // Preserve the legacy WAHA key only when WAHA is the selected provider.
+      if (messaging.provider === 'waha') checks.waha = checks.messaging;
+      if (!messaging.ready) overallStatus = 'degraded';
     } catch (error) {
-      checks.waha = {
-        status: 'unhealthy',
+      checks.messaging = {
+        status: 'degraded',
         error: error instanceof Error ? error.message : 'Connection failed'
       };
       overallStatus = 'degraded';

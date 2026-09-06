@@ -1,18 +1,15 @@
 import { execSync } from 'child_process';
 import { NextRequest,NextResponse } from 'next/server';
+import { getMessagingProviderHealth, type MessagingProviderHealth } from '@/lib/wa/provider-health';
 
-interface ServiceStatus {
+export interface ServiceStatus {
   flaresolverr: {
     online: boolean;
     ready: boolean;
     error?: string;
   };
-  waha: {
-    online: boolean;
-    ready: boolean;
-    sessionStatus?: string;
-    error?: string;
-  };
+  messaging: MessagingProviderHealth;
+  waha?: MessagingProviderHealth;
   worker: {
     up: boolean;
     processCount?: number;
@@ -84,92 +81,6 @@ async function checkFlareSolverr(): Promise<ServiceStatus['flaresolverr']> {
         online: false,
         ready: false,
         error: 'Service not reachable',
-      };
-    }
-    return {
-      online: false,
-      ready: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
-}
-
-/**
- * Check WAHA status
- */
-async function checkWAHA(): Promise<ServiceStatus['waha']> {
-  const wahaUrl = process.env.WAHA_URL || 'http://localhost:3030';
-  const wahaSession = process.env.WAHA_SESSION || 'default';
-  
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-    
-    // Check if WAHA API is accessible
-    const sessionsResponse = await fetch(`${wahaUrl}/api/sessions`, {
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!sessionsResponse.ok) {
-      return {
-        online: false,
-        ready: false,
-        error: `HTTP ${sessionsResponse.status}`,
-      };
-    }
-    
-    // Check specific session status
-    const sessionController = new AbortController();
-    const sessionTimeoutId = setTimeout(() => sessionController.abort(), 5000);
-    
-    try {
-      const sessionResponse = await fetch(`${wahaUrl}/api/sessions/${wahaSession}`, {
-        signal: sessionController.signal,
-      });
-      
-      clearTimeout(sessionTimeoutId);
-      
-      if (sessionResponse.ok) {
-        const sessionData = await sessionResponse.json();
-        const sessionStatus = sessionData?.status;
-        const isConnected = sessionStatus === 'WORKING' ||
-          Boolean(sessionData?.me?.id && sessionData?.engine?.state === 'CONNECTED');
-        return {
-          online: true,
-          ready: isConnected,
-          sessionStatus: sessionStatus || 'unknown',
-          error: !isConnected ? `Session status: ${sessionStatus}` : undefined,
-        };
-      } else {
-        return {
-          online: true,
-          ready: false,
-          error: `Session check failed: HTTP ${sessionResponse.status}`,
-        };
-      }
-    } catch (sessionError) {
-      clearTimeout(sessionTimeoutId);
-      if (sessionError instanceof Error && sessionError.name === 'AbortError') {
-        return {
-          online: true,
-          ready: false,
-          error: 'Session check timeout',
-        };
-      }
-      return {
-        online: true,
-        ready: false,
-        error: sessionError instanceof Error ? sessionError.message : 'Unknown error',
-      };
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      return {
-        online: false,
-        ready: false,
-        error: 'Connection timeout',
       };
     }
     return {
@@ -257,24 +168,32 @@ function countChromiumProcesses(): ServiceStatus['chromium'] {
  * GET /api/services/status
  * Returns status of all important services
  */
+export interface ServiceStatusDependencies {
+  checkFlareSolverr?: () => Promise<ServiceStatus['flaresolverr']>;
+  checkMessaging?: () => Promise<MessagingProviderHealth>;
+  checkWorker?: () => ServiceStatus['worker'];
+  checkChromium?: () => ServiceStatus['chromium'];
+}
+
+export async function getServiceStatus(dependencies: ServiceStatusDependencies = {}): Promise<ServiceStatus> {
+  const [flaresolverr, messaging, worker, chromium] = await Promise.all([
+    (dependencies.checkFlareSolverr || checkFlareSolverr)(),
+    (dependencies.checkMessaging || getMessagingProviderHealth)(),
+    Promise.resolve((dependencies.checkWorker || checkWorker)()),
+    Promise.resolve((dependencies.checkChromium || countChromiumProcesses)()),
+  ]);
+  return {
+    flaresolverr,
+    messaging,
+    ...(messaging.provider === 'waha' ? { waha: messaging } : {}),
+    worker,
+    chromium,
+  };
+}
+
 export async function GET(_request: NextRequest) {
   try {
-    // Check all services in parallel
-    const [flaresolverr, waha, worker, chromium] = await Promise.all([
-      checkFlareSolverr(),
-      checkWAHA(),
-      Promise.resolve(checkWorker()),
-      Promise.resolve(countChromiumProcesses()),
-    ]);
-    
-    const status: ServiceStatus = {
-      flaresolverr,
-      waha,
-      worker,
-      chromium,
-    };
-    
-    return NextResponse.json(status, { status: 200 });
+    return NextResponse.json(await getServiceStatus(), { status: 200 });
   } catch (error) {
     console.error('Error checking service status:', error);
     return NextResponse.json(

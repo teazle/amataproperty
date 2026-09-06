@@ -7,6 +7,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, ExternalLink, Clock, FileText, Eye, EyeOff } from 'lucide-react';
+import { ArticleBodyRenderer } from '../../ArticleBodyRenderer';
 
 interface Article {
   id: string;
@@ -30,6 +31,7 @@ type ArticleImage = string | {
 };
 
 interface FullContent {
+  html_content?: string | null;
   paragraphs?: string[];
   text_content?: string;
   reading_time_minutes?: number;
@@ -42,6 +44,17 @@ interface FullContent {
     text?: string;
     type?: string;
   }>;
+}
+
+function formatArticleDate(value?: string) {
+  if (!value) return 'Unknown date';
+
+  const numericValue = Number(value);
+  const date = Number.isFinite(numericValue)
+    ? new Date(numericValue < 1_000_000_000_000 ? numericValue * 1000 : numericValue)
+    : new Date(value);
+
+  return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleDateString();
 }
 
 export default function ArticleComparePage() {
@@ -155,7 +168,7 @@ export default function ArticleComparePage() {
               <div className="flex items-center gap-4 text-sm text-gray-600 mb-4">
                 <span>By {article.author || 'Unknown'}</span>
                 <span>•</span>
-                <span>{article.created ? new Date(article.created).toLocaleDateString() : 'Unknown date'}</span>
+                <span>{formatArticleDate(article.created)}</span>
                 {fullContent && (
                   <>
                     <span>•</span>
@@ -190,96 +203,7 @@ export default function ArticleComparePage() {
 
             {/* Content */}
             {fullContent ? (
-              <div className="prose max-w-none">
-                {fullContent.paragraphs && fullContent.paragraphs.length > 0 ? (
-                  fullContent.paragraphs.map((para: string, idx: number) => (
-                    <p key={idx} className="mb-4 text-gray-700 leading-relaxed">
-                      {para}
-                    </p>
-                  ))
-                ) : fullContent.text_content ? (
-                  <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                    {fullContent.text_content}
-                  </div>
-                ) : (
-                  <p className="text-gray-500 italic">No content available</p>
-                )}
-
-                {/* Images Section - This is where the issue is! */}
-                {fullContent.images && fullContent.images.length > 0 && (
-                  <div className="mt-8 pt-8 border-t">
-                    <h3 className="text-xl font-semibold mb-4 text-red-600">
-                      ⚠️ Images (Currently displayed at bottom - Issue to fix!)
-                    </h3>
-                    <div className="bg-red-50 p-4 rounded-lg mb-4">
-                      <p className="text-red-700 text-sm">
-                        <strong>Issue:</strong> Images are being displayed here at the bottom instead of inline with the content like in the original article.
-                        This is the problem that needs to be fixed in the scraper or display logic.
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {fullContent.images.map((img, idx: number) => {
-                        const imgUrl = typeof img === 'string' ? img : img.url || img.src;
-                        const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
-                        const imgCaption = typeof img === 'string' ? '' : (img.caption || '');
-                        
-                        if (!imgUrl) return null;
-                        
-                        return (
-                          <figure key={idx} className="space-y-2">
-                            <img 
-                              src={imgUrl}
-                              alt={imgAlt || `Image ${idx + 1}`}
-                              className="w-full h-auto rounded-lg border"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                            {imgCaption && (
-                              <figcaption className="text-sm text-gray-600 italic text-center">
-                                {imgCaption}
-                              </figcaption>
-                            )}
-                            {imgAlt && !imgCaption && (
-                              <figcaption className="text-sm text-gray-600 italic text-center">
-                                {imgAlt}
-                              </figcaption>
-                            )}
-                            <div className="text-xs text-gray-500 bg-gray-100 p-2 rounded">
-                              <strong>Debug Info:</strong><br/>
-                              URL: {imgUrl}<br/>
-                              Paragraph Index: {typeof img === 'object' && img !== null ? img.paragraph_index : 'N/A'}<br/>
-                              Type: {typeof img}
-                            </div>
-                          </figure>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Main Image */}
-                {fullContent.main_image_url && fullContent.main_image_url !== article.thumbnail && (
-                  <div className="mt-8 pt-8 border-t">
-                    <h3 className="text-xl font-semibold mb-4">Main Image</h3>
-                    <figure className="space-y-2">
-                      <img 
-                        src={fullContent.main_image_url}
-                        alt={fullContent.main_image_caption || article.title}
-                        className="w-full h-auto rounded-lg border"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                      {fullContent.main_image_caption && (
-                        <figcaption className="text-sm text-gray-600 italic text-center">
-                          {fullContent.main_image_caption}
-                        </figcaption>
-                      )}
-                    </figure>
-                  </div>
-                )}
-              </div>
+              <ArticleBodyRenderer content={fullContent} />
             ) : (
               <p className="text-gray-500 italic">Full content not yet scraped</p>
             )}

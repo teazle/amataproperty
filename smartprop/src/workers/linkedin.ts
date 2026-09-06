@@ -1975,6 +1975,51 @@ function normalizeProfileUrl(profileUrl: string): string {
   return normalized.split('?')[0].replace(/\/+$/, '');
 }
 
+function normalizeLinkedInComposeHref(href: string | null | undefined): string {
+  if (!href) {
+    return '';
+  }
+
+  try {
+    const url = new URL(href, 'https://www.linkedin.com');
+    url.hash = '';
+    return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+  } catch {
+    return href.split('?')[0].replace(/\/+$/, '');
+  }
+}
+
+function normalizeContactNameForMatch(name: string | null | undefined): string {
+  return (name || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function composeLinkMatchesContact(
+  linkInfo: { href?: string | null; ariaLabel?: string | null; textContent?: string | null },
+  contact: Pick<Contact, 'name' | 'messageHref'>,
+  linkedinId?: string | null
+): boolean {
+  const href = normalizeLinkedInComposeHref(linkInfo.href);
+  const capturedHref = normalizeLinkedInComposeHref(contact.messageHref);
+  if (capturedHref && href && capturedHref === href) {
+    return true;
+  }
+
+  if (linkedinId && href && href.includes(linkedinId)) {
+    return true;
+  }
+
+  const contactName = normalizeContactNameForMatch(contact.name);
+  if (!contactName || contactName === 'unknown') {
+    return false;
+  }
+
+  const labelText = normalizeContactNameForMatch(`${linkInfo.ariaLabel || ''} ${linkInfo.textContent || ''}`);
+  return Boolean(labelText && labelText.includes(contactName));
+}
+
 function getContactDedupKey(contact: Pick<Contact, 'profileUrl' | 'linkedinId' | 'messageType' | 'name'>): string {
   const normalizedProfileUrl = normalizeProfileUrl(contact.profileUrl);
   if (contact.linkedinId) {
@@ -3336,49 +3381,8 @@ async function processContact(
       }
     }
 
-    // Strategy 4: Fallback to first visible message link from main content (NOT from overlay)
     if (!messageLink) {
-      // Get all links from main content area, excluding any in dialogs
-      const allLinks = page.locator(`main a[href*="messaging/compose"]`);
-      const totalCount = await allLinks.count();
-      console.log(`   🔍 Found ${totalCount} total message compose links in main content`);
-
-      // Try to find first visible one that's NOT in a dialog
-      for (let i = 0; i < Math.min(totalCount, 10); i++) {
-        const link = allLinks.nth(i);
-
-        // Verify it's not inside a dialog
-        const isInDialog = await link.evaluate((el) => {
-          return !!el.closest('[role="dialog"]');
-        }).catch(() => false);
-
-        if (!isInDialog) {
-          const isVisible = await link.isVisible({ timeout: 2000 }).catch(() => false);
-          if (isVisible) {
-            messageLink = link;
-            console.log(`   ⚠️  Using message link #${i + 1} as fallback`);
-            break;
-      } else {
-            // Try scrolling into view
-            try {
-              await link.scrollIntoViewIfNeeded({ timeout: 2000 });
-        await humanPause(300, 500);
-              const isVisibleAfterScroll = await link.isVisible({ timeout: 2000 }).catch(() => false);
-              if (isVisibleAfterScroll) {
-                messageLink = link;
-                console.log(`   ⚠️  Using message link #${i + 1} after scrolling as fallback`);
-                break;
-              }
-            } catch (e) {
-              // Continue to next link
-            }
-          }
-        }
-      }
-    }
-
-    if (!messageLink) {
-      throw new Error(`Could not find message link for ${contact.name} (tried multiple strategies)`);
+      throw new Error(`Could not find verified message link for ${contact.name} (no exact contact link or LinkedIn ID match)`);
     }
 
     // CRITICAL: Verify the link is actually for THIS contact before clicking
@@ -3425,22 +3429,19 @@ async function processContact(
     });
     await humanPause(100, 200);
 
-    // VERIFY: Check that this link is actually for the contact we're processing
-    if (contact.name && contact.name !== 'Unknown') {
-      const linkContainsName =
-        (linkAriaLabel && linkAriaLabel.includes(contact.name)) ||
-        (linkText && linkText.includes(contact.name)) ||
-        (href && href.includes(contact.name.split(' ')[0])); // Check first name in URL
-
-      if (!linkContainsName) {
-        console.error(`   ❌ ERROR: Message link does not match contact name!`);
-        console.error(`      Contact: ${contact.name}`);
-        console.error(`      Link aria-label: ${linkAriaLabel || 'none'}`);
-        console.error(`      Link text: ${linkText || 'none'}`);
-        throw new Error(`Message link found but does not match contact "${contact.name}" - wrong link detected!`);
-      }
-      console.log(`   ✅ Verified link is for ${contact.name}`);
+    // VERIFY: Check that this link is actually for the contact we're processing.
+    // The href captured from the same contact card is authoritative; LinkedIn
+    // does not always include the full display name in the compose link label.
+    if (!composeLinkMatchesContact({ href, ariaLabel: linkAriaLabel, textContent: linkText }, contact, linkedinId)) {
+      console.error(`   ❌ ERROR: Message link does not match contact!`);
+      console.error(`      Contact: ${contact.name}`);
+      console.error(`      Expected captured href: ${contact.messageHref || 'none'}`);
+      console.error(`      Link href: ${href || 'none'}`);
+      console.error(`      Link aria-label: ${linkAriaLabel || 'none'}`);
+      console.error(`      Link text: ${linkText || 'none'}`);
+      throw new Error(`Message link found but does not match contact "${contact.name}" - wrong link detected!`);
     }
+    console.log(`   ✅ Verified link is for ${contact.name}`);
 
     // Also verify the link contains the LinkedIn ID if we have it
     if (linkedinId && href) {
@@ -3530,13 +3531,11 @@ async function processContact(
     // CRITICAL: Verify we're still on the correct link after any scrolling
     const hrefAfterScroll = await messageLink.getAttribute('href').catch(() => '');
     const ariaLabelAfterScroll = await messageLink.getAttribute('aria-label').catch(() => '');
-    if (contact.name && contact.name !== 'Unknown') {
-      const stillMatches =
-        (ariaLabelAfterScroll && ariaLabelAfterScroll.includes(contact.name)) ||
-        (hrefAfterScroll && hrefAfterScroll.includes(contact.name.split(' ')[0]));
-      if (!stillMatches) {
-        throw new Error(`Link changed after scroll! Expected ${contact.name}, got aria-label: ${ariaLabelAfterScroll}`);
-      }
+    if (!composeLinkMatchesContact({ href: hrefAfterScroll, ariaLabel: ariaLabelAfterScroll }, contact, linkedinId)) {
+      throw new Error(
+        `Link changed after scroll! Expected ${contact.name}, got href: ${hrefAfterScroll || 'none'}, ` +
+        `aria-label: ${ariaLabelAfterScroll || 'none'}`
+      );
     }
 
     // CRITICAL: Before clicking, verify no other message links are being hovered/clicked
@@ -3550,13 +3549,11 @@ async function processContact(
     // Verify our link is still the correct one
     const finalHref = await messageLink.getAttribute('href').catch(() => '');
     const finalAriaLabel = await messageLink.getAttribute('aria-label').catch(() => '');
-    if (contact.name && contact.name !== 'Unknown') {
-      const stillCorrect =
-        (finalAriaLabel && finalAriaLabel.includes(contact.name)) ||
-        (finalHref && finalHref.includes(contact.name.split(' ')[0]));
-      if (!stillCorrect) {
-        throw new Error(`Link changed before clicking! Expected ${contact.name}, got: ${finalAriaLabel}`);
-      }
+    if (!composeLinkMatchesContact({ href: finalHref, ariaLabel: finalAriaLabel }, contact, linkedinId)) {
+      throw new Error(
+        `Link changed before clicking! Expected ${contact.name}, got href: ${finalHref || 'none'}, ` +
+        `aria-label: ${finalAriaLabel || 'none'}`
+      );
     }
 
     // CRITICAL: Aggressive blur before clicking message link to prevent Finder popup
@@ -3778,15 +3775,31 @@ async function processContact(
       // Strategy 4: Direct compose navigation opens LinkedIn's full Messaging page,
       // not an overlay dialog. Treat the page body as the message container.
       if (!dialog && useComposeNavigation && /\/messaging\/compose\//.test(page.url())) {
-        await page
-          .waitForSelector('[contenteditable="true"][role="textbox"], div.msg-form__contenteditable', {
-            timeout: Number(process.env.LINKEDIN_COMPOSE_CONTAINER_TIMEOUT_MS || 20000),
-            state: 'attached',
-          })
-          .catch(() => {});
+        const composeReadySelectors = [
+          '[contenteditable="true"][role="textbox"]',
+          'div.msg-form__contenteditable',
+          'div[contenteditable="true"][aria-label*="message" i]',
+          'textarea[aria-label*="message" i]',
+          'textarea[placeholder*="message" i]',
+        ].join(', ');
+        await page.waitForFunction(
+          (selector) => {
+            const isVisible = (element: Element | null) => {
+              if (!(element instanceof HTMLElement)) return false;
+              const rect = element.getBoundingClientRect();
+              const style = window.getComputedStyle(element);
+              return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+            };
+            return Array.from(document.querySelectorAll(selector)).some(isVisible);
+          },
+          composeReadySelectors,
+          { timeout: Number(process.env.LINKEDIN_COMPOSE_CONTAINER_TIMEOUT_MS || 30000) },
+        ).catch(() => {});
         const body = page.locator('body').first();
-        const hasTextbox = await body.locator('[contenteditable="true"][role="textbox"], div.msg-form__contenteditable').count().catch(() => 0);
-        const hasSendButton = await body.locator('button:has-text("Send"), button[aria-label*="Send" i]').count().catch(() => 0);
+        const hasTextbox = await body.locator(composeReadySelectors).count().catch(() => 0);
+        const hasSendButton = await body.locator(
+          'button.msg-form__send-button, button:has-text("Send"), button[aria-label*="Send" i], button[type="submit"]'
+        ).count().catch(() => 0);
         if (hasTextbox && hasSendButton) {
           dialog = body;
           console.log('   ✅ Using full Messaging compose page as message container');

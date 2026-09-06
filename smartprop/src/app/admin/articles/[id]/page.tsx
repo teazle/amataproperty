@@ -7,7 +7,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, ExternalLink, Clock, FileText } from 'lucide-react';
-import { cleanArticleParagraphs, containsHtmlLinks, extractCleanTextContent } from '@/lib/utils/content-parser';
+import { ArticleBodyRenderer } from '../ArticleBodyRenderer';
 
 interface Article {
   id: string;
@@ -31,6 +31,7 @@ type ArticleImage = string | {
 };
 
 interface FullContent {
+  html_content?: string | null;
   paragraphs?: string[];
   text_content?: string;
   reading_time_minutes?: number;
@@ -43,6 +44,17 @@ interface FullContent {
     text?: string;
     type?: string;
   }>;
+}
+
+function formatArticleDate(value?: string) {
+  if (!value) return 'Unknown date';
+
+  const numericValue = Number(value);
+  const date = Number.isFinite(numericValue)
+    ? new Date(numericValue < 1_000_000_000_000 ? numericValue * 1000 : numericValue)
+    : new Date(value);
+
+  return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleDateString();
 }
 
 export default function ArticleDetailPage() {
@@ -102,7 +114,7 @@ export default function ArticleDetailPage() {
             <div className="flex items-center gap-4 text-sm text-gray-600 mb-4">
               <span>By {article.author || 'Unknown'}</span>
               <span>•</span>
-              <span>{article.created ? new Date(article.created).toLocaleDateString() : 'Unknown date'}</span>
+              <span>{formatArticleDate(article.created)}</span>
               {fullContent && (
                 <>
                   <span>•</span>
@@ -145,169 +157,7 @@ export default function ArticleDetailPage() {
           )}
 
           {fullContent ? (
-            <div className="prose max-w-none">
-              {fullContent.paragraphs && fullContent.paragraphs.length > 0 ? (
-                (() => {
-                  const cleanedParagraphs = cleanArticleParagraphs(fullContent.paragraphs);
-                  const images = Array.isArray(fullContent.images) ? fullContent.images : [];
-                  
-                  // Group images by paragraph_index
-                  const imagesByParaIndex: Record<number, ArticleImage[]> = {};
-                  images.forEach((img) => {
-                    const paraIdx = typeof img === 'string' ? undefined : img.paragraph_index;
-                    if (paraIdx !== undefined && paraIdx !== null && paraIdx >= 0) {
-                      if (!imagesByParaIndex[paraIdx]) {
-                        imagesByParaIndex[paraIdx] = [];
-                      }
-                      imagesByParaIndex[paraIdx].push(img);
-                    }
-                  });
-                  
-                  return cleanedParagraphs.map((para: string, idx: number) => {
-                  // Check if paragraph contains HTML links
-                  const hasLinks = containsHtmlLinks(para);
-                    
-                    const paraElement = hasLinks ? (
-                      <div 
-                        key={`para-${idx}`} 
-                        className="mb-4 text-gray-700 leading-relaxed"
-                        dangerouslySetInnerHTML={{ __html: para }}
-                      />
-                    ) : (
-                      <p key={`para-${idx}`} className="mb-4 text-gray-700 leading-relaxed">
-                        {para}
-                      </p>
-                    );
-                    
-                    // Check if there are images that should appear after this paragraph
-                    const imagesAfterThisPara = imagesByParaIndex[idx] || [];
-                    
-                    return (
-                      <div key={idx}>
-                        {paraElement}
-                        {imagesAfterThisPara.map((img, imgIdx: number) => {
-                          const imgUrl = typeof img === 'string' ? img : img.url || img.src;
-                          const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
-                          const imgCaption = typeof img === 'string' ? '' : (img.caption || '');
-                          
-                          if (!imgUrl) return null;
-                          
-                          return (
-                            <figure key={`img-${idx}-${imgIdx}`} className="my-6 space-y-2">
-                              <img 
-                                src={imgUrl}
-                                alt={imgAlt || `Image ${imgIdx + 1}`}
-                                className="max-w-full h-auto rounded-lg border mx-auto"
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
-                                }}
-                              />
-                              {(imgCaption || (imgAlt && !imgCaption)) && (
-                                <figcaption className="text-sm text-gray-600 italic text-center">
-                                  {imgCaption || imgAlt}
-                                </figcaption>
-                              )}
-                            </figure>
-                          );
-                        })}
-                      </div>
-                    );
-                  });
-                })()
-              ) : fullContent.text_content ? (
-                <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                  {extractCleanTextContent(fullContent.text_content)}
-                </div>
-              ) : (
-                <p className="text-gray-500 italic">No full content available</p>
-              )}
-
-              {/* Display images that don't have a paragraph_index (fallback for older scrapes) */}
-              {fullContent.images && Array.isArray(fullContent.images) && 
-               fullContent.images.some((img) => typeof img === 'string' || img.paragraph_index === undefined || img.paragraph_index === null) && (
-                <div className="mt-8 pt-8 border-t">
-                  <h3 className="text-xl font-semibold mb-4">Additional Images</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {fullContent.images
-                      .filter((img) => typeof img === 'string' || img.paragraph_index === undefined || img.paragraph_index === null)
-                      .map((img, idx: number) => {
-                        const imgUrl = typeof img === 'string' ? img : img.url || img.src;
-                        const imgAlt = typeof img === 'string' ? '' : (img.alt || '');
-                        const imgCaption = typeof img === 'string' ? '' : (img.caption || '');
-                        
-                        if (!imgUrl) return null;
-                        
-                        return (
-                          <figure key={idx} className="space-y-2">
-                            <img 
-                              src={imgUrl}
-                              alt={imgAlt || `Image ${idx + 1}`}
-                              className="w-full h-auto rounded-lg border"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                            {imgCaption && (
-                              <figcaption className="text-sm text-gray-600 italic text-center">
-                                {imgCaption}
-                              </figcaption>
-                            )}
-                            {imgAlt && !imgCaption && (
-                              <figcaption className="text-sm text-gray-600 italic text-center">
-                                {imgAlt}
-                              </figcaption>
-                            )}
-                          </figure>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {/* Display main image if different from thumbnail */}
-              {fullContent.main_image_url && fullContent.main_image_url !== article.thumbnail && (
-                <div className="mt-8 pt-8 border-t">
-                  <h3 className="text-xl font-semibold mb-4">Main Image</h3>
-                  <figure className="space-y-2">
-                    <img 
-                      src={fullContent.main_image_url}
-                      alt={fullContent.main_image_caption || article.title}
-                      className="w-full h-auto rounded-lg border"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                    {fullContent.main_image_caption && (
-                      <figcaption className="text-sm text-gray-600 italic text-center">
-                        {fullContent.main_image_caption}
-                      </figcaption>
-                    )}
-                  </figure>
-                </div>
-              )}
-
-              {fullContent.links && fullContent.links.length > 0 && (
-                <div className="mt-8 pt-8 border-t">
-                  <h3 className="text-xl font-semibold mb-4">References & Links</h3>
-                  <ul className="space-y-2">
-                    {fullContent.links.slice(0, 10).map((link, idx: number) => (
-                      <li key={idx}>
-                        <a 
-                          href={link.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          {link.text || link.url}
-                          <Badge variant="outline" className="ml-2">{link.type}</Badge>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+            <ArticleBodyRenderer content={fullContent} />
           ) : (
             <p className="text-gray-500 italic">Full content not yet scraped</p>
           )}

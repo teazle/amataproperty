@@ -2425,7 +2425,7 @@ export async function scrapeSingleArticleMCP(
   const { chromium } = await import('playwright');
 
   const launchOptions = {
-    headless: false,
+    headless: true,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
@@ -3352,6 +3352,7 @@ export async function scrapeSingleArticleMCP(
         }
       } catch (saveError) {
         console.error(`❌ Failed to save article: ${saveError}`);
+        throw saveError;
       }
     }
 

@@ -5,7 +5,7 @@
  */
 
 import Groq from 'groq-sdk';
-import { sendMessageWithTyping } from '../wa/waha';
+import { createCustomerTextTransport } from '../wa/customer-transport';
 import {
 ConversationContext as AdvancedConversationContext,
 analyzeConversationWithAdvancedAI
@@ -908,40 +908,36 @@ export async function sendAutoReply(
     console.log(`📤 Preparing auto-reply #${currentAutoReplyCount + 1} to ${agentPhone}`);
     console.log(`   Message: "${replyMessage}"`);
 
-    // Check if typing simulation is enabled
-    if (isTypingSimulationEnabled()) {
+    const typingSimulationEnabled = isTypingSimulationEnabled();
+    if (typingSimulationEnabled) {
       // Calculate contextual delay based on message length and conversation context
       const delay = getContextualDelay(replyMessage.length, context);
 
       console.log(`⌨️  Simulating human typing: ${delay}ms delay`);
-
-      // Send message with typing indicator
-      const result = await sendMessageWithTyping(agentPhone, replyMessage, delay);
-
-      if (!result.success) {
-        console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
-        console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
-        return false;
-      }
-
-      console.log(`✅ Auto-reply sent with typing indicator (reply #${currentAutoReplyCount + 1}) to ${agentPhone}`);
-      console.log(`   Message ID: ${result.messageId || 'N/A'}`);
-      return true;
-    } else {
-      // Typing simulation disabled - send immediately
-      const { sendWhatsAppMessage } = await import('../wa/waha');
-      const result = await sendWhatsAppMessage(agentPhone, replyMessage);
-
-      if (!result.success) {
-        console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
-        console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
-        return false;
-      }
-
-      console.log(`✅ Auto-reply sent successfully (reply #${currentAutoReplyCount + 1}) to ${agentPhone}`);
-      console.log(`   Message ID: ${result.messageId || 'N/A'}`);
-      return true;
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
+
+    const result = await createCustomerTextTransport().sendText({
+      to: agentPhone,
+      text: replyMessage,
+      purpose: 'auto_reply',
+    });
+
+    if (result.outcome !== 'accepted') {
+      console.error(`❌ Failed to send auto-reply to ${agentPhone}: ${result.error}`);
+      console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
+      return false;
+    }
+
+    if (!result.messageId.trim()) {
+      console.error(`❌ Failed to send auto-reply to ${agentPhone}: provider accepted without a message ID`);
+      console.error(`   Message was: "${replyMessage.substring(0, 50)}..."`);
+      return false;
+    }
+
+    console.log(`✅ Auto-reply sent${typingSimulationEnabled ? ' after typing delay' : ''} (reply #${currentAutoReplyCount + 1}) to ${agentPhone}`);
+    console.log(`   Message ID: ${result.messageId}`);
+    return true;
   } catch (error) {
     console.error('❌ Error sending auto-reply:', error);
     return false;

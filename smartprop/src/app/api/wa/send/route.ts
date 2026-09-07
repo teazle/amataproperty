@@ -1,9 +1,9 @@
-import { sendCoBrokingInquiry,sendWhatsAppMessage } from '@/lib/wa/waha';
+import { sendApiText } from '@/lib/wa/api-text';
 import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/wa/send
- * Send WhatsApp messages via WAHA
+ * Send WhatsApp messages via the configured customer transport
  * 
  * Body Examples:
  * 
@@ -39,8 +39,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let result;
-
     // Handle co-broking inquiry type
     if (type === 'co_broking_inquiry') {
       if (!agentName || !propertyTitle || !propertyUrl) {
@@ -49,13 +47,6 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-
-      result = await sendCoBrokingInquiry(
-        to,
-        agentName,
-        propertyTitle,
-        propertyUrl
-      );
     }
     // Handle viewing request type (DEPRECATED - now handled by AI natural conversation)
     else if (type === 'viewing_request') {
@@ -72,18 +63,36 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-
-      result = await sendWhatsAppMessage(to, text);
     }
 
-    if (!result.success) {
+    const result = await sendApiText({
+      to,
+      text,
+      type,
+      agentName,
+      propertyTitle,
+      propertyUrl,
+    });
+
+    if (result.outcome !== 'accepted' || !result.messageId.trim()) {
       return NextResponse.json(
-        { error: result.error },
-        { status: 500 }
+        {
+          error: 'WhatsApp provider outcome requires manual review',
+          outcome: result.outcome === 'accepted' ? 'unknown' : result.outcome,
+          retryable: false,
+          details: result.outcome === 'accepted'
+            ? 'customer transport accepted a send without a message id'
+            : result.error,
+        },
+        { status: 409 }
       );
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      success: true,
+      messageId: result.messageId,
+      messageText: result.messageText,
+    });
   } catch (error) {
     console.error('Error in /api/wa/send:', error);
     return NextResponse.json(

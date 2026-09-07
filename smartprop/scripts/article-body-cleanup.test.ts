@@ -36,6 +36,18 @@ test('keeps short editorial discussion of advertisements and related news', () =
   });
 });
 
+test('keeps editorial prose that begins with related news when no related-news bundle is present', () => {
+  const cleaned = cleanArticleBody({
+    html: '<article><p>Related news coverage shows buyers are responding to new supply.</p></article>',
+    paragraphs: ['Related news coverage shows buyers are responding to new supply.'],
+  });
+
+  expect(cleaned.paragraphs).toEqual([
+    'Related news coverage shows buyers are responding to new supply.',
+  ]);
+  expect(cleaned.text).toBe('Related news coverage shows buyers are responding to new supply.');
+});
+
 test('applies the cleanup at the content extraction boundary before storing derived text and counts', async () => {
   const page = {
     setDefaultTimeout: () => undefined,

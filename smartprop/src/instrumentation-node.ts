@@ -1,4 +1,9 @@
 export async function registerNodeInstrumentation() {
+  // A release preview must not become a second scheduler owner.
+  if (process.env.SMARTPROP_BACKGROUND_SERVICES_ENABLED === 'false') {
+    console.log('[Instrumentation] Background services explicitly disabled for this process');
+    return;
+  }
   try {
     // Initialize the scraper scheduler with delay to allow database to be ready.
     // Use a longer delay to avoid hitting rate limits on startup.

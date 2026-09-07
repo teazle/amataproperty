@@ -33,6 +33,16 @@ const REQUIRED_ENTRIES = [
   '.next/server/pages-manifest.json',
 ] as const;
 const REQUIRED_JSON_ENTRIES = REQUIRED_ENTRIES.filter((path) => path.endsWith('.json'));
+const ALLOWED_ROOT_RUNTIME_METADATA = new Set([
+  '.next/app-build-manifest.json',
+  '.next/app-path-routes-manifest.json',
+  '.next/export-marker.json',
+  '.next/images-manifest.json',
+  '.next/next-minimal-server.js.nft.json',
+  '.next/next-server.js.nft.json',
+  '.next/package.json',
+  '.next/react-loadable-manifest.json',
+]);
 const FORBIDDEN_FILE_NAMES = new Set([
   'auth.json',
   'cookies.json',
@@ -84,10 +94,16 @@ function assertSafePath(path: string): void {
 function assertAllowedPayloadPath(path: string): void {
   if (path === '.next' || path === '.next/server' || path === '.next/static') return;
   if (!path.startsWith('.next/')) fail(`runtime payload contains a non-.next path: ${path}`);
-  if (path === '.next/cache' || path.startsWith('.next/cache/')) {
-    fail(`runtime payload contains excluded cache content: ${path}`);
+  if (
+    path === '.next/cache' || path.startsWith('.next/cache/')
+    || path === '.next/diagnostics' || path.startsWith('.next/diagnostics/')
+    || path === '.next/trace' || path.startsWith('.next/trace/')
+    || path === '.next/types' || path.startsWith('.next/types/')
+  ) {
+    fail(`runtime payload contains excluded build-state content: ${path}`);
   }
   if (REQUIRED_ENTRIES.includes(path as typeof REQUIRED_ENTRIES[number])) return;
+  if (ALLOWED_ROOT_RUNTIME_METADATA.has(path)) return;
   if (path.startsWith('.next/server/') || path.startsWith('.next/static/')) return;
   fail(`runtime payload contains unsupported .next content: ${path}`);
 }
@@ -98,6 +114,25 @@ function assertJson(content: Buffer, path: string): void {
   } catch {
     fail(`required Next runtime manifest is not valid JSON: ${path}`);
   }
+}
+
+function requiredRuntimeFiles(content: Buffer): string[] {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(content.toString('utf8'));
+  } catch {
+    fail('required-server-files.json must contain a non-null object with a string files array');
+  }
+  if (
+    manifest === null
+    || typeof manifest !== 'object'
+    || Array.isArray(manifest)
+    || !Array.isArray((manifest as { files?: unknown }).files)
+    || !(manifest as { files: unknown[] }).files.every((path) => typeof path === 'string')
+  ) {
+    fail('required-server-files.json must contain a non-null object with a string files array');
+  }
+  return (manifest as { files: string[] }).files;
 }
 
 /**
@@ -149,6 +184,11 @@ export function inspectRuntimePayload(payloadPath: string): RuntimePayloadInspec
   }
   for (const manifestPath of REQUIRED_JSON_ENTRIES) {
     assertJson(contents.get(manifestPath)!, manifestPath);
+  }
+  for (const path of requiredRuntimeFiles(contents.get('.next/required-server-files.json')!)) {
+    assertSafePath(path);
+    assertAllowedPayloadPath(path);
+    if (!contents.has(path)) fail(`declared Next runtime file is missing: ${path}`);
   }
   const buildId = contents.get('.next/BUILD_ID')!.toString('utf8').trim();
   if (!buildId) fail('Next runtime BUILD_ID must not be empty');

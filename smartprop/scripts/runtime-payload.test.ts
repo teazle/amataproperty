@@ -8,28 +8,44 @@ import AdmZip from 'adm-zip';
 import { inspectRuntimePayload } from '../deploy/runtime-payload';
 
 const temporaryDirectories: string[] = [];
-const requiredPayloadEntries = [
-  '.next/BUILD_ID',
+const requiredServerFiles = [
+  '.next/routes-manifest.json',
+  '.next/server/pages-manifest.json',
   '.next/build-manifest.json',
   '.next/prerender-manifest.json',
-  '.next/routes-manifest.json',
-  '.next/required-server-files.json',
+  '.next/server/functions-config-manifest.json',
+  '.next/server/middleware-manifest.json',
+  '.next/server/middleware-build-manifest.js',
+  '.next/server/middleware-react-loadable-manifest.js',
+  '.next/react-loadable-manifest.json',
   '.next/server/app-paths-manifest.json',
-  '.next/server/pages-manifest.json',
+  '.next/app-path-routes-manifest.json',
+  '.next/app-build-manifest.json',
+  '.next/server/server-reference-manifest.js',
+  '.next/server/server-reference-manifest.json',
+  '.next/BUILD_ID',
+  '.next/server/next-font-manifest.js',
+  '.next/server/next-font-manifest.json',
+  '.next/required-server-files.json',
+  '.next/server/instrumentation.js',
 ] as const;
 
 function validPayloadEntries(): Record<string, string> {
-  return {
+  const entries: Record<string, string> = {
     '.next/BUILD_ID': 'next-build-123\n',
     '.next/build-manifest.json': '{}',
     '.next/prerender-manifest.json': '{}',
     '.next/routes-manifest.json': '{}',
-    '.next/required-server-files.json': '{}',
     '.next/server/app-paths-manifest.json': '{}',
     '.next/server/pages-manifest.json': '{}',
     '.next/server/app/page.js': 'exports.routeModule = {};\n',
     '.next/static/chunks/app.js': 'self.__next_f.push([]);\n',
   };
+  for (const path of requiredServerFiles) {
+    entries[path] ??= path.endsWith('.json') ? '{}' : 'runtime metadata\n';
+  }
+  entries['.next/required-server-files.json'] = JSON.stringify({ files: requiredServerFiles });
+  return entries;
 }
 
 function makePayload(entries: Record<string, string>): string {
@@ -57,11 +73,9 @@ describe('runtime payload inspection', () => {
     const inspection = inspectRuntimePayload(makePayload(validPayloadEntries()));
 
     expect(inspection.buildId).toBe('next-build-123');
-    expect(inspection.entries.map((entry) => entry.path)).toEqual([
-      ...requiredPayloadEntries,
-      '.next/server/app/page.js',
-      '.next/static/chunks/app.js',
-    ].sort());
+    expect(inspection.entries.map((entry) => entry.path)).toEqual(
+      Object.keys(validPayloadEntries()).sort((left, right) => left.localeCompare(right)),
+    );
     expect(inspection.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(inspection.size).toBeGreaterThan(0);
   });
@@ -86,7 +100,19 @@ describe('runtime payload inspection', () => {
     expect(() => inspectRuntimePayload(makePayload({
       ...validPayloadEntries(),
       '.next/cache/webpack/client-production.pack': 'cache',
-    }))).toThrow('cache');
+    }))).toThrow('excluded build-state content');
+    expect(() => inspectRuntimePayload(makePayload({
+      ...validPayloadEntries(),
+      '.next/types/app/page.ts': 'type BuildOnly = true;',
+    }))).toThrow('excluded build-state content');
+    expect(() => inspectRuntimePayload(makePayload({
+      ...validPayloadEntries(),
+      '.next/trace': 'trace data',
+    }))).toThrow('excluded build-state content');
+    expect(() => inspectRuntimePayload(makePayload({
+      ...validPayloadEntries(),
+      '.next/diagnostics/build.json': '{}',
+    }))).toThrow('excluded build-state content');
     expect(() => inspectRuntimePayload(makePayload({
       ...validPayloadEntries(),
       '.next/.env.production': 'SECRET=fixture',
@@ -95,6 +121,39 @@ describe('runtime payload inspection', () => {
       ...validPayloadEntries(),
       '../outside.js': 'escape',
     }))).toThrow('unsafe runtime payload path');
+  });
+
+  test('requires every safe declared Next runtime file while accepting actual root metadata', () => {
+    const missingDeclared = validPayloadEntries();
+    missingDeclared['.next/required-server-files.json'] = JSON.stringify({
+      files: [...requiredServerFiles, '.next/server/missing-runtime.js'],
+    });
+    expect(() => inspectRuntimePayload(makePayload(missingDeclared)))
+      .toThrow('declared Next runtime file is missing: .next/server/missing-runtime.js');
+
+    const malformedManifest = validPayloadEntries();
+    malformedManifest['.next/required-server-files.json'] = JSON.stringify({ files: [42] });
+    expect(() => inspectRuntimePayload(makePayload(malformedManifest)))
+      .toThrow('required-server-files.json must contain a non-null object with a string files array');
+
+    const nullManifest = validPayloadEntries();
+    nullManifest['.next/required-server-files.json'] = 'null';
+    expect(() => inspectRuntimePayload(makePayload(nullManifest)))
+      .toThrow('required-server-files.json must contain a non-null object with a string files array');
+
+    const unsafeDeclaration = validPayloadEntries();
+    unsafeDeclaration['.next/required-server-files.json'] = JSON.stringify({ files: ['../outside.js'] });
+    expect(() => inspectRuntimePayload(makePayload(unsafeDeclaration)))
+      .toThrow('unsafe runtime payload path: ../outside.js');
+
+    expect(() => inspectRuntimePayload(makePayload({
+      ...validPayloadEntries(),
+      '.next/package.json': '{}',
+      '.next/images-manifest.json': '{}',
+      '.next/export-marker.json': '{}',
+      '.next/next-minimal-server.js.nft.json': '{}',
+      '.next/next-server.js.nft.json': '{}',
+    }))).not.toThrow();
   });
 
   test('binds the inspection signature to exact ZIP bytes and rejects duplicate entries', () => {

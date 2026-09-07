@@ -70,7 +70,7 @@ function makeBuildArtifact(overrides: Record<string, string> = {}): string {
     '.next/build-manifest.json': '{}',
     '.next/prerender-manifest.json': '{}',
     '.next/routes-manifest.json': '{}',
-    '.next/required-server-files.json': '{}',
+    '.next/required-server-files.json': JSON.stringify({ files: [] }),
     '.next/server/app-paths-manifest.json': '{}',
     '.next/server/pages-manifest.json': '{}',
     '.next/server/app/page.js': 'exports.routeModule = {};\n',

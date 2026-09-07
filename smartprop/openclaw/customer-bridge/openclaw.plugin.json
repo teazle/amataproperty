@@ -1,0 +1,18 @@
+{
+  "id": "smartprop-customer-bridge",
+  "name": "SmartProp customer bridge",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["accountId", "selfNumber", "operatorNumbers", "customerNumbers", "endpoint", "secretEnv"],
+    "properties": {
+      "accountId": { "type": "string", "minLength": 1 },
+      "selfNumber": { "type": "string", "minLength": 1 },
+      "operatorNumbers": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+      "customerNumbers": { "type": "array", "items": { "type": "string" } },
+      "endpoint": { "type": "string" },
+      "secretEnv": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+    }
+  }
+}

@@ -8,6 +8,12 @@ import { fileURLToPath } from 'node:url';
 interface LayoutPaths { app: string; release: string; journal: string }
 interface Journal extends LayoutPaths { version: 1; inode: number; device: number; status: 'prepared' | 'applied' | 'rolled-back' }
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message); };
+const QUIET_UNITS = ['smartprop-articles.service', 'smartprop-articles.timer', 'smartprop-healthcheck.service', 'smartprop-healthcheck.timer'];
+export function assertQuiescent(processes: Array<{ name: string; status: string }>, units: Record<string, string>): void {
+  const affected = processes.filter(p => ['smartprop', 'scraper-worker'].includes(p.name));
+  assert(affected.length === 2 && new Set(affected.map(p => p.name)).size === 2 && affected.every(p => p.status === 'stopped'), 'App and worker must be stopped');
+  assert(QUIET_UNITS.every(unit => units[unit] === 'inactive'), 'Article and auto-recovery service/timers must be inactive');
+}
 function present(path: string) { try { lstatSync(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
 function readJournal(path: string): Journal {
   const j = JSON.parse(readFileSync(path, 'utf8')) as Journal;
@@ -88,11 +94,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   assert(/^\/opt\/smartprop\/backups\/layout-[A-Za-z0-9_-]+\/layout\.json$/.test(journal), 'Unexpected private journal path');
   if (mode !== 'verify') {
     const entries = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' })) as Array<{ name: string; pm2_env: { status: string } }>;
-    const affected = entries.filter(p => ['smartprop', 'scraper-worker'].includes(p.name));
-    assert(affected.length === 2 && affected.every(p => p.pm2_env.status === 'stopped'), 'App and worker must be stopped');
-    for (const unit of ['smartprop-articles.service', 'smartprop-articles.timer']) {
-      assert(execFileSync('systemctl', ['show', unit, '-p', 'ActiveState', '--value'], { encoding: 'utf8' }).trim() === 'inactive', 'Article service/timer must be inactive');
-    }
+    const units = Object.fromEntries(QUIET_UNITS.map(unit => [unit,
+      execFileSync('systemctl', ['show', unit, '-p', 'ActiveState', '--value'], { encoding: 'utf8' }).trim()]));
+    assertQuiescent(entries.map(p => ({ name: p.name, status: p.pm2_env.status })), units);
   }
   if (mode === 'apply') {
     assert(/^\/opt\/smartprop\/releases\/baseline-[A-Za-z0-9_-]+$/.test(release), 'Unexpected baseline release path');

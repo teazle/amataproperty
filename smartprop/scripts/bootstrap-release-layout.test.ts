@@ -2,7 +2,16 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, lstatSync, symlinkSync, unlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyLayout, rollbackLayout, verifyLayout } from '../deploy/bootstrap-release-layout';
+import { applyLayout, rollbackLayout, verifyLayout, assertQuiescent } from '../deploy/bootstrap-release-layout';
+
+test('active auto-recovery timer blocks migration even when app and worker are stopped', () => {
+  const processes = [{ name: 'smartprop', status: 'stopped' }, { name: 'scraper-worker', status: 'stopped' }];
+  const units = { 'smartprop-articles.service': 'inactive', 'smartprop-articles.timer': 'inactive',
+    'smartprop-healthcheck.service': 'inactive', 'smartprop-healthcheck.timer': 'active' };
+  expect(() => assertQuiescent(processes, units)).toThrow();
+  units['smartprop-healthcheck.timer'] = 'inactive';
+  expect(() => assertQuiescent(processes, units)).not.toThrow();
+});
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'smartprop-layout-test-'));

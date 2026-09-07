@@ -1,5 +1,5 @@
 /** One-time, user-approved layout maintenance; NOT a qualified release executor. */
-import { existsSync, lstatSync, statSync, readFileSync, writeFileSync, renameSync, symlinkSync, readlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, statSync, readFileSync, writeFileSync, renameSync, symlinkSync, readlinkSync, unlinkSync, openSync, closeSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { hostname } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -7,8 +7,12 @@ import { fileURLToPath } from 'node:url';
 
 interface LayoutPaths { app: string; release: string; journal: string }
 interface Journal extends LayoutPaths { version: 1; inode: number; device: number; status: 'prepared' | 'applied' | 'rolled-back' }
+type JournalWriter = (path: string, contents: string, options: { mode: number; flag: 'w' | 'wx' }) => void;
+interface LayoutDependencies { writeJournal?: JournalWriter }
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message); };
 const QUIET_UNITS = ['smartprop-articles.service', 'smartprop-articles.timer', 'smartprop-healthcheck.service', 'smartprop-healthcheck.timer'];
+const defaultJournalWriter: JournalWriter = (path, contents, options) => writeFileSync(path, contents, options);
+let temporaryJournalSequence = 0;
 export function assertQuiescent(processes: Array<{ name: string; status: string }>, units: Record<string, string>): void {
   const affected = processes.filter(p => ['smartprop', 'scraper-worker'].includes(p.name));
   assert(affected.length === 2 && new Set(affected.map(p => p.name)).size === 2 && affected.every(p => p.status === 'stopped'), 'App and worker must be stopped');
@@ -22,15 +26,35 @@ function readJournal(path: string): Journal {
   assert(['prepared', 'applied', 'rolled-back'].includes(j.status), 'Invalid journal state');
   return j;
 }
-function save(j: Journal, exclusive = false) {
-  writeFileSync(j.journal, JSON.stringify(j, null, 2) + '\n', { mode: 0o600, flag: exclusive ? 'wx' : 'w' });
+function save(j: Journal, exclusive = false, writeJournal: JournalWriter = defaultJournalWriter) {
+  const contents = JSON.stringify(j, null, 2) + '\n';
+  if (exclusive) {
+    writeJournal(j.journal, contents, { mode: 0o600, flag: 'wx' });
+    return;
+  }
+
+  const temporary = `${j.journal}.tmp-${process.pid}-${++temporaryJournalSequence}`;
+  const descriptor = openSync(temporary, 'wx', 0o600);
+  const identity = lstatSync(temporary);
+  try {
+    closeSync(descriptor);
+    writeJournal(temporary, contents, { mode: 0o600, flag: 'w' });
+    renameSync(temporary, j.journal);
+  } finally {
+    try {
+      const current = lstatSync(temporary);
+      if (current.ino === identity.ino && current.dev === identity.dev) unlinkSync(temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
 }
 function originalDirectory(path: string, j: Journal): boolean {
   if (!present(path)) return false;
   const st = lstatSync(path);
   return st.isDirectory() && st.ino === j.inode && st.dev === j.device;
 }
-export function applyLayout(paths: LayoutPaths): Journal {
+export function applyLayout(paths: LayoutPaths, dependencies: LayoutDependencies = {}): Journal {
   const { app, release, journal } = paths;
   assert([app, release, journal].every(p => resolve(p) === p && p !== '/'), 'Absolute bounded paths required');
   assert(!release.startsWith(app + '/') && app !== release, 'Release must be outside app tree');
@@ -40,19 +64,20 @@ export function applyLayout(paths: LayoutPaths): Journal {
   assert(st.isDirectory() && !st.isSymbolicLink(), 'Source must be a real directory');
   assert(statSync(dirname(release)).dev === st.dev && statSync(dirname(app)).dev === st.dev, 'Same filesystem required');
   const j: Journal = { version: 1, app, release, journal, inode: st.ino, device: st.dev, status: 'prepared' };
-  save(j, true);
+  const writeJournal = dependencies.writeJournal ?? defaultJournalWriter;
+  save(j, true, writeJournal);
   symlinkSync(release, app + '.layout-next');
   try {
     renameSync(app, release);
     renameSync(app + '.layout-next', app);
-    j.status = 'applied'; save(j);
+    j.status = 'applied'; save(j, false, writeJournal);
     return verifyLayout(journal);
   } catch (error) {
-    rollbackLayout(journal);
+    rollbackLayout(journal, dependencies);
     throw error;
   }
 }
-export function rollbackLayout(path: string): Journal {
+export function rollbackLayout(path: string, dependencies: LayoutDependencies = {}): Journal {
   const j = readJournal(path);
   if (originalDirectory(j.app, j) && !present(j.release)) {
     // Already restored, or the move never started.
@@ -72,7 +97,7 @@ export function rollbackLayout(path: string): Journal {
     assert(lstatSync(prepared).isSymbolicLink() && readlinkSync(prepared) === j.release, 'Prepared pointer changed externally');
     unlinkSync(prepared);
   }
-  j.status = 'rolled-back'; save(j);
+  j.status = 'rolled-back'; save(j, false, dependencies.writeJournal ?? defaultJournalWriter);
   return verifyLayout(path);
 }
 export function verifyLayout(path: string): Journal {

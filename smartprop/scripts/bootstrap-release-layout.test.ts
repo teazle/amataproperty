@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, lstatSync, symlinkSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, lstatSync, symlinkSync, unlinkSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyLayout, rollbackLayout, verifyLayout, assertQuiescent } from '../deploy/bootstrap-release-layout';
@@ -70,5 +70,30 @@ test('rollback restores original directory after interrupted pointer placement',
     expect(lstatSync(f.app).isDirectory()).toBe(true);
     expect(statSync(f.app).ino).toBe(j.inode);
     expect(readFileSync(join(f.app, '.env'), 'utf8')).toBe('test-only-private-state');
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('journal update failure restores the original tree without truncating the prepared journal', () => {
+  const f = fixture();
+  const inode = statSync(f.app).ino;
+  let writes = 0;
+  const injectedWriter = (path: string, contents: string, options: { mode: number; flag: 'w' | 'wx' }) => {
+    writes += 1;
+    if (writes === 2) {
+      writeFileSync(path, '', options);
+      expect(JSON.parse(readFileSync(f.journal, 'utf8'))).toEqual(expect.objectContaining({ status: 'prepared' }));
+      throw new Error('injected journal update failure');
+    }
+    writeFileSync(path, contents, options);
+  };
+
+  try {
+    expect(() => applyLayout(f, { writeJournal: injectedWriter })).toThrow('injected journal update failure');
+    expect(lstatSync(f.app).isDirectory()).toBe(true);
+    expect(statSync(f.app).ino).toBe(inode);
+    expect(readFileSync(join(f.app, '.env'), 'utf8')).toBe('test-only-private-state');
+    expect(verifyLayout(f.journal).status).toBe('rolled-back');
+    expect(JSON.parse(readFileSync(f.journal, 'utf8'))).toEqual(expect.objectContaining({ status: 'rolled-back' }));
+    expect(readdirSync(f.root).filter(name => name.startsWith('layout.json.tmp-'))).toEqual([]);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

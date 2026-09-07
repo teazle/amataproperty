@@ -33,3 +33,24 @@ Focused local verification:
 ```sh
 bun test scripts/release-artifact-contract.test.ts
 ```
+
+## Preparing a local release package
+
+`scripts/prepare-release-artifact.ts` packages only an explicit committed Git
+tree. It requires a separately supplied build artifact and controller-provided
+rollback SHA-256; it does not build, upload, select a route, or deploy.
+
+```sh
+bun scripts/prepare-release-artifact.ts \
+  --repo /absolute/path/to/repository \
+  --source-dir smartprop \
+  --source-commit <exact-lowercase-40-hex-commit> \
+  --build-artifact /absolute/path/to/next-build.tar \
+  --rollback-sha256 <controller-provided-64-hex-digest> \
+  --source-archive /absolute/new/path/smartprop-source.zip \
+  --manifest /absolute/new/path/release-manifest.json
+```
+
+Both output paths must be new files. The manifest is written atomically with
+private permissions after the generated ZIP and supplied build artifact have
+been revalidated against the existing release-artifact contract.

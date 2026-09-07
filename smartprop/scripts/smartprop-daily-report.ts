@@ -228,6 +228,39 @@ export function getDailyMessagingSummary(appHealth: unknown): DailyMessagingSumm
   };
 }
 
+type ListingRowsTouched = Array<{ portal: string; count: number }>;
+
+type ListingTouchQuery = {
+  select: (columns: string, options: { count: 'exact'; head: true }) => ListingTouchQuery;
+  eq: (column: string, value: string) => ListingTouchQuery;
+  gte: (column: string, value: string) => ListingTouchQuery;
+  lt: (column: string, value: string) => Promise<{ count: number | null; error: { message: string } | null }>;
+};
+
+type ListingTouchClient = {
+  from: (table: string) => ListingTouchQuery;
+};
+
+export async function getListingRowsTouched(
+  supabase: ListingTouchClient,
+  range: { startUtc: string; endUtc: string },
+): Promise<ListingRowsTouched> {
+  return Promise.all(['edgeprop', 'propertyguru'].map(async (portal) => {
+    const { count, error } = await supabase
+      .from('listings')
+      .select('id', { count: 'exact', head: true })
+      .eq('portal', portal)
+      .gte('scraped_at', range.startUtc)
+      .lt('scraped_at', range.endUtc);
+
+    if (error) {
+      throw new Error(`Listing touched count failed for ${portal}: ${error.message}`);
+    }
+
+    return { portal, count: count ?? 0 };
+  }));
+}
+
 async function buildReport(options: CliOptions) {
   const reportDate = options.date || previousSgtDate();
   const range = sgtRange(reportDate);
@@ -300,6 +333,11 @@ async function buildReport(options: CliOptions) {
   if (queryErrors.length > 0) {
     throw new Error(queryErrors.map((error) => error?.message).join('; '));
   }
+
+  const listingRowsTouched = await getListingRowsTouched(
+    supabase as unknown as ListingTouchClient,
+    range,
+  );
 
   const appUrl = process.env.SMARTPROP_APP_URL || DEFAULT_APP_URL;
 
@@ -388,6 +426,7 @@ async function buildReport(options: CliOptions) {
       byPlatform: scraperByPlatform,
       statuses: countBy(scraperRows, 'status'),
       listingsProcessed: sum(scraperRows, 'listings_processed'),
+      listingRowsTouched,
     },
     articleSessions: {
       total: articleSessions.data?.length ?? 0,
@@ -447,6 +486,31 @@ function findPlatformSummary(
   };
 }
 
+function findPortalCount(items: ListingRowsTouched, portal: string): number {
+  return items.find((item) => item.portal.toLowerCase() === portal.toLowerCase())?.count ?? 0;
+}
+
+type ListingScraperSummary = {
+  totalJobs: number;
+  statuses: CountMap;
+  listingsProcessed: number;
+  listingRowsTouched: ListingRowsTouched;
+  byPlatform: Array<{ platform: string; jobs: number; listings: number; statuses: CountMap; errors: string[] }>;
+};
+
+export function formatListingRowsTouched(scrapers: ListingScraperSummary): [string, string, string] {
+  const edgepropListings = findPlatformSummary(scrapers.byPlatform, 'edgeprop');
+  const propertyGuruListings = findPlatformSummary(scrapers.byPlatform, 'propertyguru');
+  const edgepropTouched = findPortalCount(scrapers.listingRowsTouched, 'edgeprop');
+  const propertyGuruTouched = findPortalCount(scrapers.listingRowsTouched, 'propertyguru');
+
+  return [
+    `- EdgeProp listing jobs: ${edgepropListings.listings} processed/upsert attempts; ${edgepropTouched} unique rows touched by scraped_at; jobs=${edgepropListings.jobs}; statuses=${formatCounts(edgepropListings.statuses)}; errors=${edgepropListings.errors.length}`,
+    `- PropertyGuru listing jobs: ${propertyGuruListings.listings} processed/upsert attempts; ${propertyGuruTouched} unique rows touched by scraped_at; jobs=${propertyGuruListings.jobs}; statuses=${formatCounts(propertyGuruListings.statuses)}; errors=${propertyGuruListings.errors.length}`,
+    `Listing scrapers total: ${scrapers.totalJobs} jobs; statuses=${formatCounts(scrapers.statuses)}; processed/upsert attempts=${scrapers.listingsProcessed}; unique rows touched by scraped_at=${edgepropTouched + propertyGuruTouched}`,
+  ];
+}
+
 function formatLikeRun(run: { targetLikes: number; counts: Record<string, unknown>; errors: unknown[] }) {
   const counts = run.counts ?? {};
   const confirmed = counts.confirmed ?? counts.liked ?? 0;
@@ -461,8 +525,7 @@ function formatLikeRun(run: { targetLikes: number; counts: Record<string, unknow
 
 function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   const lines: string[] = [];
-  const edgepropListings = findPlatformSummary(report.scrapers.byPlatform, 'edgeprop');
-  const propertyGuruListings = findPlatformSummary(report.scrapers.byPlatform, 'propertyguru');
+  const [edgepropListingLine, propertyGuruListingLine, listingScraperTotalLine] = formatListingRowsTouched(report.scrapers);
   const pm2Summary = report.currentHealth.pm2.length
     ? report.currentHealth.pm2.map((row) => `${row.name}:${row.status}`).join(', ')
     : 'unavailable';
@@ -481,8 +544,8 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   for (const item of report.articleSessions.bySource) {
     lines.push(`  - ${item.source}: articles=${item.articlesScraped}; unique=${item.uniqueArticles}; sessions=${item.sessions}; errors=${item.errors.length}`);
   }
-  lines.push(`- EdgeProp listings: ${edgepropListings.listings} listings; jobs=${edgepropListings.jobs}; statuses=${formatCounts(edgepropListings.statuses)}; errors=${edgepropListings.errors.length}`);
-  lines.push(`- PropertyGuru listings: ${propertyGuruListings.listings} listings; jobs=${propertyGuruListings.jobs}; statuses=${formatCounts(propertyGuruListings.statuses)}; errors=${propertyGuruListings.errors.length}`);
+  lines.push(edgepropListingLine);
+  lines.push(propertyGuruListingLine);
   lines.push(`- LinkedIn outreach: total=${report.linkedin.messages.total}; ${formatCounts(report.linkedin.messages.statuses)}`);
   if (report.linkedin.likes.length > 0) {
     for (const likeRun of report.linkedin.likes) {
@@ -500,7 +563,7 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   }
   if (report.scheduledJobs.length === 0) lines.push('- none found');
   lines.push('');
-  lines.push(`Listing scrapers total: ${report.scrapers.totalJobs} jobs; statuses=${formatCounts(report.scrapers.statuses)}; listings=${report.scrapers.listingsProcessed}`);
+  lines.push(listingScraperTotalLine);
   if (report.linkedin.messages.failures.length > 0) {
     lines.push('LinkedIn failures:');
     for (const failure of report.linkedin.messages.failures) {

@@ -5,78 +5,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
-import { createCustomerTextTransport, type CustomerTextTransport } from '@/lib/wa/customer-transport';
-
-type ManualPersist = (data: Record<string, unknown>) => Promise<{ error: unknown }>;
-
-export async function finalizeManualOutreachSend(input: {
-  outreachId: string;
-  phone: string;
-  message: string;
-  conversationHistory: Array<Record<string, unknown>>;
-  transport: CustomerTextTransport;
-  persist: ManualPersist;
-}): Promise<{
-  outcome: 'accepted' | 'blocked' | 'rejected' | 'unknown';
-  retryable: false;
-  messageId: string | null;
-  timestamp: string | null;
-  reconciliationWarning?: string;
-  error?: string;
-}> {
-  const result = await input.transport.sendText({
-    to: input.phone,
-    text: input.message,
-    purpose: 'manual_outreach',
-  });
-
-  if (result.outcome !== 'accepted') {
-    const persisted = await input.persist({
-      conversation_phase: 'manual_review',
-      conversation_state: 'manual_review',
-      co_broking_notes: `Manual outreach provider outcome=${result.outcome}; retryable=false; ${result.error}`,
-    });
-    const persistenceError = persisted.error instanceof Error
-      ? persisted.error.message
-      : persisted.error
-        ? String(persisted.error)
-        : null;
-    return {
-      outcome: result.outcome,
-      retryable: false,
-      messageId: null,
-      timestamp: null,
-      error: persistenceError
-        ? `${result.error}; manual-review persistence failed: ${persistenceError}`
-        : result.error,
-    };
-  }
-
-  const timestamp = new Date().toISOString();
-  const conversationHistory = [...input.conversationHistory, {
-    role: 'user',
-    message: input.message,
-    timestamp,
-    messageId: result.messageId,
-  }];
-  const persisted = await input.persist({
-    conversation_history: conversationHistory,
-    last_message_at: timestamp,
-    status: 'sent',
-  });
-  const reconciliationWarning = persisted.error instanceof Error
-    ? persisted.error.message
-    : persisted.error
-      ? String(persisted.error)
-      : undefined;
-  return {
-    outcome: 'accepted',
-    retryable: false,
-    messageId: result.messageId,
-    timestamp,
-    ...(reconciliationWarning ? { reconciliationWarning } : {}),
-  };
-}
+import { createCustomerTextTransport } from '@/lib/wa/customer-transport';
+import { finalizeManualOutreachSend } from '@/lib/wa/manual-outreach';
 
 export async function POST(request: NextRequest) {
   try {
@@ -125,12 +55,9 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Normalize phone number (ensure it starts with country code)
-      const normalizedPhone = phoneNumber.startsWith('65') ? phoneNumber : `65${phoneNumber}`;
-      
       const finalized = await finalizeManualOutreachSend({
         outreachId,
-        phone: normalizedPhone,
+        phone: phoneNumber,
         message,
         conversationHistory: Array.isArray(outreachRecord.conversation_history)
           ? outreachRecord.conversation_history

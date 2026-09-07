@@ -53,7 +53,7 @@ mock.module('@/workers/supa', () => ({
 }));
 
 const { processInboundWhatsAppMessage } = await import('../src/lib/ai/whatsapp-conversation-engine.ts');
-const { finalizeManualOutreachSend } = await import('../src/app/api/outreach/send-message/route.ts');
+const { finalizeManualOutreachSend } = await import('../src/lib/wa/manual-outreach.ts');
 
 beforeEach(() => {
   transportResult = { outcome: 'accepted', provider: 'waha', messageId: 'provider-accepted-1', messageText: 'default' };
@@ -103,6 +103,21 @@ describe('customer text callers', () => {
       status: 'sent',
       conversation_history: [expect.objectContaining({ messageId: 'provider-manual-1' })],
     })]);
+  });
+
+  test('reports accepted manual outreach when final persistence throws after provider acceptance', async () => {
+    const result = await finalizeManualOutreachSend({
+      outreachId: 'outreach-1', phone: '+6591234567', message: 'Please confirm the viewing time.',
+      conversationHistory: [],
+      transport: { sendText: async () => ({ outcome: 'accepted', provider: 'waha', messageId: 'provider-manual-throw-1', messageText: 'Please confirm the viewing time.' }) },
+      persist: async () => { throw new Error('database connection lost'); },
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      outcome: 'accepted',
+      messageId: 'provider-manual-throw-1',
+      reconciliationWarning: 'database connection lost',
+    }));
   });
 
   test('puts an unknown manual outcome into non-retryable manual review without a synthetic message id', async () => {

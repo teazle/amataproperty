@@ -1,7 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { sendWhatsAppMessage } from '@/lib/wa/waha';
+import {
+  createCustomerTextTransport,
+  type CustomerTextResult,
+  type CustomerTextTransport,
+} from '@/lib/wa/customer-transport';
 
 const execFileAsync = promisify(execFile);
 const JEREMY_AGENT_ID = process.env.VIEWPROPERTY_JEREMY_AGENT_ID || 'jeremy-viewproperty';
@@ -36,6 +40,10 @@ export type ValuationCampaignInboundInput = {
   timestamp?: string | number | null;
   rawPayload?: unknown;
 };
+
+export interface ValuationCampaignReplyDependencies {
+  customerTransport?: CustomerTextTransport;
+}
 
 type NewsletterSendContext = {
   id: string;
@@ -333,6 +341,40 @@ export function decideValuationCampaignReply(args: {
   }
 }
 
+/**
+ * Sends exactly one customer-message attempt for a valuation reply. Unknown
+ * outcomes are returned unchanged so the caller can record manual
+ * reconciliation rather than claiming delivery or retrying automatically.
+ */
+export async function sendValuationCampaignReply(
+  to: string,
+  text: string,
+  dependencies: ValuationCampaignReplyDependencies = {},
+): Promise<CustomerTextResult> {
+  const customerTransport = dependencies.customerTransport || createCustomerTextTransport();
+  let result: CustomerTextResult;
+  try {
+    result = await customerTransport.sendText({ to, text, purpose: 'valuation_reply' });
+  } catch (error) {
+    return {
+      outcome: 'unknown',
+      provider: 'unknown',
+      error: error instanceof Error ? error.message : 'Unknown customer transport error',
+    };
+  }
+  if (result.outcome !== 'accepted') return result;
+
+  const messageId = result.messageId.trim();
+  if (!messageId) {
+    return {
+      outcome: 'unknown',
+      provider: result.provider,
+      error: 'Customer transport accepted a valuation reply without a message id',
+    };
+  }
+  return { ...result, messageId };
+}
+
 async function findLatestNewsletterSendByPhone(phone: string): Promise<NewsletterSendContext | null> {
   const { getSupabaseClient } = await import('@/workers/supa');
   const supabase = getSupabaseClient();
@@ -469,18 +511,25 @@ export async function processValuationCampaignInbound(input: ValuationCampaignIn
   });
   const replyMessage = jeremyReply || decision.replyMessage;
 
-  const sendResult = await sendWhatsAppMessage(phone, replyMessage);
-  if (!sendResult.success) {
+  const sendResult = await sendValuationCampaignReply(phone, replyMessage);
+  if (sendResult.outcome !== 'accepted') {
+    const requiresManualReconciliation = sendResult.outcome === 'unknown';
+    const failureNote = requiresManualReconciliation
+      ? `Valuation campaign auto-reply requires manual reconciliation after ${decision.intent} reply: ${sendResult.error}`
+      : `Valuation campaign auto-reply failed after ${decision.intent} reply: ${sendResult.error}`;
     await supabase.from('crm_lead_activities').insert({
       lead_id: lead.id,
       type: 'note',
-      note: `Valuation campaign auto-reply failed after ${decision.intent} reply: ${sendResult.error || 'unknown error'}`,
+      note: failureNote,
       metadata: {
         campaignRelay: true,
         sendId: context.id,
         direction: 'outbound',
         failed: true,
         intent: decision.intent,
+        outcome: sendResult.outcome,
+        provider: sendResult.provider,
+        requiresManualReconciliation,
       },
       created_by: 'valuation-campaign-relay',
     });
@@ -492,7 +541,7 @@ export async function processValuationCampaignInbound(input: ValuationCampaignIn
       sendId: context.id,
       leadId: lead.id,
       intent: decision.intent,
-      reason: sendResult.error || 'Auto-reply failed',
+      reason: sendResult.error,
     };
   }
 
@@ -505,7 +554,7 @@ export async function processValuationCampaignInbound(input: ValuationCampaignIn
       sendId: context.id,
       direction: 'outbound',
       intent: decision.intent,
-      messageId: sendResult.messageId || null,
+      messageId: sendResult.messageId,
       body: replyMessage,
       draftedBy: jeremyReply ? JEREMY_AGENT_ID : 'valuation-campaign-relay',
       escalatesToHuman: decision.escalate,

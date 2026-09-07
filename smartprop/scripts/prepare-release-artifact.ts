@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, lstatSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -119,13 +119,27 @@ function assertCommittedTree(repository: string, sourceCommit: string, sourceDir
   return tree;
 }
 
+function publishNoClobber(stagedPath: string, destination: string, label: string): void {
+  try {
+    linkSync(stagedPath, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail(`${label} must not already exist`);
+    fail(`${label} cannot be published: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    unlinkSync(stagedPath);
+  } catch (error) {
+    fail(`${label} was published but staging cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function writePrivateManifestAtomically(path: string, content: string): void {
   const staging = mkdtempSync(join(dirname(path), '.release-manifest-'));
   const stagedManifest = join(staging, 'manifest.json');
   try {
     writeFileSync(stagedManifest, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     chmodSync(stagedManifest, 0o600);
-    renameSync(stagedManifest, path);
+    publishNoClobber(stagedManifest, path, '--manifest');
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -179,7 +193,7 @@ export function prepareReleaseArtifact(options: PrepareReleaseArtifactOptions): 
       expectedTarget: SMARTPROP_RELEASE_TARGET,
     });
 
-    renameSync(stagedArchive, sourceArchive);
+    publishNoClobber(stagedArchive, sourceArchive, '--source-archive');
     validateReleaseArtifactManifest(releaseManifest, {
       archivePath: sourceArchive,
       buildArtifactPath: options.buildArtifact,

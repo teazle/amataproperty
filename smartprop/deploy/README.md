@@ -51,6 +51,7 @@ bun scripts/prepare-release-artifact.ts \
   --manifest /absolute/new/path/release-manifest.json
 ```
 
-Both output paths must be new files. The manifest is written atomically with
-private permissions after the generated ZIP and supplied build artifact have
-been revalidated against the existing release-artifact contract.
+Both output paths must be new files. Publication refuses a destination created
+while packaging is in progress; the manifest is written atomically with private
+permissions after the generated ZIP and supplied build artifact have been
+revalidated against the existing release-artifact contract.

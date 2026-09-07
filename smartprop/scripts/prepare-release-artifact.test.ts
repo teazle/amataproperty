@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -59,20 +59,59 @@ function invoke(options: {
   rollback?: string;
 }) {
   return Bun.spawnSync({
-    cmd: [
-      'bun', scriptPath,
-      '--repo', options.repository,
-      '--source-dir', '.',
-      '--source-commit', options.sourceCommit,
-      '--source-archive', options.sourceArchive,
-      '--manifest', options.manifest,
-      '--build-artifact', options.buildArtifact,
-      ...(options.rollback ? ['--rollback-sha256', options.rollback] : []),
-    ],
+    cmd: packagingCommand(options),
     cwd: options.repository,
     stdout: 'pipe',
     stderr: 'pipe',
   });
+}
+
+function packagingCommand(options: {
+  repository: string;
+  sourceCommit: string;
+  sourceArchive: string;
+  manifest: string;
+  buildArtifact: string;
+  rollback?: string;
+}): string[] {
+  return [
+    'bun', scriptPath,
+    '--repo', options.repository,
+    '--source-dir', '.',
+    '--source-commit', options.sourceCommit,
+    '--source-archive', options.sourceArchive,
+    '--manifest', options.manifest,
+    '--build-artifact', options.buildArtifact,
+    ...(options.rollback ? ['--rollback-sha256', options.rollback] : []),
+  ];
+}
+
+async function waitFor(condition: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`);
+    await Bun.sleep(1);
+  }
+}
+
+function invokeAsync(options: {
+  repository: string;
+  sourceCommit: string;
+  sourceArchive: string;
+  manifest: string;
+  buildArtifact: string;
+  rollback?: string;
+}) {
+  return Bun.spawn({
+    cmd: packagingCommand(options),
+    cwd: options.repository,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+function hasSourceStagingDirectory(output: string): boolean {
+  return readdirSync(output).some((entry) => entry.startsWith('.release-source-'));
 }
 
 afterEach(() => {
@@ -132,6 +171,35 @@ describe('prepare-release-artifact CLI', () => {
     const existingOutput = invoke({ repository: root, sourceCommit: commit, sourceArchive, manifest, buildArtifact, rollback: rollbackSha256 });
     expect(existingOutput.exitCode).not.toBe(0);
     expect(existingOutput.stderr.toString()).toContain('must not already exist');
+  });
+
+  test('never clobbers a source archive destination created after preflight', async () => {
+    const { root, commit } = makeRepository({ 'large-committed-input.txt': 'x'.repeat(8_000_000) });
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
+    temporaryDirectories.push(output);
+    const buildArtifact = join(output, 'next-build.tar');
+    const sourceArchive = join(output, 'smartprop-source.zip');
+    const manifest = join(output, 'release-manifest.json');
+    const racedContent = 'raced output must survive\n';
+    writeFileSync(buildArtifact, 'separately supplied build bytes\n');
+
+    const child = invokeAsync({
+      repository: root,
+      sourceCommit: commit,
+      sourceArchive,
+      manifest,
+      buildArtifact,
+      rollback: rollbackSha256,
+    });
+    await waitFor(() => hasSourceStagingDirectory(output), 'source archive staging');
+    writeFileSync(sourceArchive, racedContent);
+    const exitCode = await child.exited;
+    const stderr = await new Response(child.stderr).text();
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain('--source-archive must not already exist');
+    expect(readFileSync(sourceArchive, 'utf8')).toBe(racedContent);
+    expect(existsSync(manifest)).toBeFalse();
   });
 
   test('rejects committed secret and symlink entries before publishing either output', () => {

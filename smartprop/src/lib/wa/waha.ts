@@ -36,6 +36,12 @@ interface WAHASessionData {
 
 const DEFAULT_WAHA_URL = 'http://localhost:3030';
 
+function directWAHASendBlock(): string | undefined {
+  if ((process.env.SMARTPROP_WHATSAPP_PROVIDER || 'waha').trim().toLowerCase() !== 'waha') {
+    return 'Direct WAHA sends are disabled for the selected provider; migrate this caller to customer transport';
+  }
+}
+
 function getWAHAConfig() {
   return {
     url: process.env.WAHA_URL || DEFAULT_WAHA_URL,
@@ -182,6 +188,8 @@ export async function sendCampaignWhatsApp(
   text: string,
   dependencies: CampaignTransportDependencies = {},
 ): Promise<CampaignTransportResult> {
+  const blocked = directWAHASendBlock();
+  if (blocked) return { outcome: 'blocked', error: blocked };
   const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
   const fetchImpl = dependencies.fetch || fetch;
 
@@ -269,6 +277,8 @@ export async function sendWhatsAppMessage(
   to: string,
   text: string
 ): Promise<SendMessageResponse> {
+  const blocked = directWAHASendBlock();
+  if (blocked) return { success: false, error: blocked };
   const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
 
   if (!WAHA_URL) {
@@ -493,6 +503,8 @@ export async function sendPresence(
   to: string,
   state: PresenceState = 'composing'
 ): Promise<PresenceResponse> {
+  const blocked = directWAHASendBlock();
+  if (blocked) return { success: false, error: blocked };
   const { url: WAHA_URL, session: WAHA_SESSION } = getWAHAConfig();
 
   if (!WAHA_URL) {
@@ -576,6 +588,8 @@ export async function sendMessageWithTyping(
   text: string,
   typingDuration: number
 ): Promise<SendMessageResponse> {
+  const blocked = directWAHASendBlock();
+  if (blocked) return { success: false, error: blocked };
   try {
     // Note: WEBJS engine doesn't support presence API (typing indicators)
     // So we just add a realistic delay to simulate human typing time

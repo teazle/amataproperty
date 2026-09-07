@@ -31,12 +31,17 @@ export async function finalizeManualOutreachSend(input: {
   });
 
   if (result.outcome !== 'accepted') {
-    const persisted = await input.persist({
-      conversation_phase: 'manual_review',
-      conversation_state: 'manual_review',
-      co_broking_notes: `Manual outreach provider outcome=${result.outcome}; retryable=false; ${result.error}`,
-    });
-    const persistenceError = persistenceErrorMessage(persisted.error);
+    let persistenceError: string | undefined;
+    try {
+      const persisted = await input.persist({
+        conversation_phase: 'manual_review',
+        conversation_state: 'manual_review',
+        co_broking_notes: `Manual outreach provider outcome=${result.outcome}; retryable=false; ${result.error}`,
+      });
+      persistenceError = persistenceErrorMessage(persisted.error);
+    } catch (error) {
+      persistenceError = persistenceErrorMessage(error) || 'database persistence failed';
+    }
     return {
       outcome: result.outcome,
       retryable: false,

@@ -139,4 +139,15 @@ describe('customer text callers', () => {
       co_broking_notes: expect.stringContaining('outcome=unknown; retryable=false'),
     })]);
   });
+
+  test('preserves unknown and non-retryable when manual-review persistence throws', async () => {
+    const result = await finalizeManualOutreachSend({
+      outreachId: 'outreach-1', phone: '91234567', message: 'Confirm the viewing.',
+      conversationHistory: [],
+      transport: { sendText: async () => ({ outcome: 'unknown', provider: 'openclaw', error: 'send timed out' }) },
+      persist: async () => { throw new Error('database connection lost'); },
+    });
+    expect(result).toMatchObject({ outcome: 'unknown', retryable: false, messageId: null });
+    expect(result.error).toContain('manual-review persistence failed: database connection lost');
+  });
 });

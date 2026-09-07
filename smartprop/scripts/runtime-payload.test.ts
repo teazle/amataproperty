@@ -49,11 +49,18 @@ function validPayloadEntries(): Record<string, string> {
 }
 
 function makePayload(entries: Record<string, string>): string {
+  return makePayloadEntries(Object.entries(entries));
+}
+
+function makePayloadEntries(entries: Array<[string, string]>, directories: string[] = []): string {
   const directory = mkdtempSync(join(tmpdir(), 'smartprop-runtime-payload-'));
   temporaryDirectories.push(directory);
   const archivePath = join(directory, 'runtime.zip');
   const archive = new AdmZip();
-  for (const [index, [path, content]] of Object.entries(entries).entries()) {
+  for (const path of directories) {
+    archive.addFile(`${path}/`, Buffer.alloc(0));
+  }
+  for (const [index, [path, content]] of entries.entries()) {
     const stagedPath = path.includes('..') ? `staged-${index}` : path;
     archive.addFile(stagedPath, Buffer.from(content));
     if (stagedPath !== path) archive.getEntry(stagedPath)!.entryName = path;
@@ -121,6 +128,35 @@ describe('runtime payload inspection', () => {
       ...validPayloadEntries(),
       '../outside.js': 'escape',
     }))).toThrow('unsafe runtime payload path');
+  });
+
+  test('rejects files at reserved directory paths and file ancestor conflicts in either ZIP order', () => {
+    for (const reservedDirectory of ['.next', '.next/server', '.next/static']) {
+      expect(() => inspectRuntimePayload(makePayload({
+        ...validPayloadEntries(),
+        [reservedDirectory]: 'regular file',
+      }))).toThrow(`reserved runtime directory must be an explicit directory: ${reservedDirectory}`);
+    }
+
+    const base = validPayloadEntries();
+    delete base['.next/server/app/page.js'];
+    const descendant = ['.next/server/app/page.js', 'compiled route'] as [string, string];
+    const ancestor = ['.next/server/app', 'regular file'] as [string, string];
+    expect(() => inspectRuntimePayload(makePayloadEntries([
+      ...Object.entries(base),
+      ancestor,
+      descendant,
+    ]))).toThrow('runtime payload file conflicts with ancestor or descendant: .next/server/app');
+    expect(() => inspectRuntimePayload(makePayloadEntries([
+      ...Object.entries(base),
+      descendant,
+      ancestor,
+    ]))).toThrow('runtime payload file conflicts with ancestor or descendant: .next/server/app');
+
+    expect(() => inspectRuntimePayload(makePayloadEntries(
+      Object.entries(validPayloadEntries()),
+      ['.next', '.next/server', '.next/static'],
+    ))).not.toThrow();
   });
 
   test('requires every safe declared Next runtime file while accepting actual root metadata', () => {

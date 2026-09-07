@@ -43,6 +43,7 @@ const ALLOWED_ROOT_RUNTIME_METADATA = new Set([
   '.next/package.json',
   '.next/react-loadable-manifest.json',
 ]);
+const RESERVED_DIRECTORY_PATHS = new Set(['.next', '.next/server', '.next/static']);
 const FORBIDDEN_FILE_NAMES = new Set([
   'auth.json',
   'cookies.json',
@@ -160,6 +161,7 @@ export function inspectRuntimePayload(payloadPath: string): RuntimePayloadInspec
   }
 
   const seen = new Set<string>();
+  const entryKinds = new Map<string, 'directory' | 'file'>();
   const entries: RuntimePayloadEntry[] = [];
   const contents = new Map<string, Buffer>();
   for (const entry of zipEntries) {
@@ -171,6 +173,16 @@ export function inspectRuntimePayload(payloadPath: string): RuntimePayloadInspec
 
     const unixMode = (entry.attr >>> 16) & 0xf000;
     if (unixMode === 0xa000) fail(`runtime payload contains a symbolic link: ${path}`);
+    if (!entry.isDirectory && RESERVED_DIRECTORY_PATHS.has(path)) {
+      fail(`reserved runtime directory must be an explicit directory: ${path}`);
+    }
+    const conflictingFilePath = [...entryKinds].find(([knownPath, kind]) => (
+      kind === 'file' && (path.startsWith(`${knownPath}/`) || knownPath.startsWith(`${path}/`))
+    ))?.[0];
+    if (conflictingFilePath) {
+      fail(`runtime payload file conflicts with ancestor or descendant: ${conflictingFilePath}`);
+    }
+    entryKinds.set(path, entry.isDirectory ? 'directory' : 'file');
     if (entry.isDirectory) continue;
 
     const content = entry.getData();

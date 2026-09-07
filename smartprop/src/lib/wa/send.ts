@@ -1,123 +1,105 @@
-/**
- * WhatsApp Template Messaging via WAHA
- * Handles sending template messages through WAHA API
- */
+import {
+  createCustomerTextTransport,
+  type CustomerTextResult,
+  type CustomerTextTransport,
+  type CustomerTransportProvider,
+} from './customer-transport';
 
-interface SendTemplateResponse {
+export interface SendTemplateResponse {
   success: boolean;
   messageId?: string;
   error?: string;
+  outcome: CustomerTextResult['outcome'];
+  provider: CustomerTransportProvider;
 }
 
-interface WAHATemplateResponse {
-  id: string;
-  timestamp: number;
-  from: string;
-  to: string;
+export interface SendTemplateOptions {
+  customerTransport?: CustomerTextTransport;
 }
 
-const DEFAULT_WAHA_URL = 'http://localhost:3030';
-
-function normalizeChatId(to: string): string {
-  const trimmed = to.trim();
-  return trimmed.includes('@') ? trimmed : `${trimmed.replace(/[^\d]/g, '')}@c.us`;
-}
-
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit = {},
-  timeoutMs = 15000
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+function validateHttpsListingUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '' || value !== value.trim()) return null;
   try {
-    return await fetch(url, {
-      ...options,
-      signal: options.signal || controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname !== '' ? value : null;
+  } catch {
+    return null;
   }
 }
 
+function signingNotificationText(templateName: string, parameters: string[]): string | null {
+  if (templateName !== 'agreement_received' || parameters.length !== 2) return null;
+  const [agreementName, listingUrl] = parameters;
+  if (agreementName !== 'Co-broking Agreement') return null;
+  const validListingUrl = validateHttpsListingUrl(listingUrl);
+  return validListingUrl
+    ? `We have received your Co-broking Agreement. Property: ${validListingUrl}`
+    : null;
+}
+
+function blockedTemplate(): SendTemplateResponse {
+  return {
+    success: false,
+    outcome: 'blocked',
+    provider: 'unknown',
+    error: 'Unsupported signing notification template or parameters',
+  };
+}
+
+function transportFailure(result: Exclude<CustomerTextResult, { outcome: 'accepted' }>): SendTemplateResponse {
+  return {
+    success: false,
+    outcome: result.outcome,
+    provider: result.provider,
+    error: result.error,
+  };
+}
+
 /**
- * Send a WhatsApp template message via WAHA
- * @param to - Recipient phone number (e.g., "6591234567" for Singapore)
- * @param templateName - Name of the template to send
- * @param parameters - Array of parameters to fill template placeholders
- * @returns Promise with success status and message ID
+ * Compatibility seam for the one approved signing notification. It accepts
+ * only the route's existing agreement template intent and sends deterministic
+ * plain text through the customer transport; no template/media translation is
+ * inferred for other callers.
  */
 export async function sendTemplate(
   to: string,
   templateName: string,
-  parameters: string[] = []
+  parameters: string[] = [],
+  options: SendTemplateOptions = {},
 ): Promise<SendTemplateResponse> {
-  const WAHA_URL = process.env.WAHA_URL || DEFAULT_WAHA_URL;
-  const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
+  const text = signingNotificationText(templateName, parameters);
+  if (!text) return blockedTemplate();
 
-  if (!WAHA_URL) {
-    console.error('Missing WAHA configuration: WAHA_URL');
-    return {
-      success: false,
-      error: 'WAHA not configured',
-    };
-  }
-
-  // Format phone number for WhatsApp (must end with @c.us)
-  const chatId = normalizeChatId(to);
-
-  const url = `${WAHA_URL}/api/sendTemplate`;
-  
-  const payload = {
-    session: WAHA_SESSION,
-    chatId,
-    template: {
-      name: templateName,
-      language: {
-        code: 'en'
-      },
-      components: parameters.length > 0 ? [
-        {
-          type: 'body',
-          parameters: parameters.map(param => ({
-            type: 'text',
-            text: param
-          }))
-        }
-      ] : []
-    }
-  };
-
+  const customerTransport = options.customerTransport || createCustomerTextTransport();
   try {
-    const response = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+    const result = await customerTransport.sendText({
+      to,
+      text,
+      purpose: 'signing_confirmation',
     });
+    if (result.outcome !== 'accepted') return transportFailure(result);
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('WAHA API error sending template:', errorData);
+    const messageId = result.messageId.trim();
+    if (!messageId) {
       return {
         success: false,
-        error: errorData.error || `WAHA API request failed: ${response.status}`,
+        outcome: 'unknown',
+        provider: result.provider,
+        error: 'Customer transport accepted a signing notification without a message id',
       };
     }
-
-    const data: WAHATemplateResponse = await response.json();
-    console.log(`✅ WhatsApp template message sent to ${to} (Template: ${templateName}, ID: ${data.id})`);
-    
     return {
       success: true,
-      messageId: data.id,
+      messageId,
+      outcome: 'accepted',
+      provider: result.provider,
     };
   } catch (error) {
-    console.error('Error sending WhatsApp template message:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      outcome: 'unknown',
+      provider: 'unknown',
+      error: error instanceof Error ? error.message : 'Unknown customer transport error',
     };
   }
 }

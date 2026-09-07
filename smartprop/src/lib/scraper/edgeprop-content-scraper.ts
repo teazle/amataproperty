@@ -5,6 +5,7 @@
 
 import { chromium, type Browser } from 'patchright';
 import { sanitizeHtmlContent } from '../utils/content-parser';
+import { cleanArticleBody } from './article-body-cleanup';
 import { validateArticleContent } from './article-content-validation';
 
 export interface ArticleContent {
@@ -460,6 +461,11 @@ export async function scrapeArticleContent(
       };
     });
     
+    const articleBody = cleanArticleBody({
+      html: sanitizeHtmlContent(articleData.htmlContent),
+      paragraphs: articleData.paragraphs,
+    });
+
     const content: ArticleContent = {
       nid,
       path: articlePath,
@@ -468,14 +474,14 @@ export async function scrapeArticleContent(
       published_date: articleData.publishedDate,
       main_image_url: articleData.mainImage,
       main_image_caption: articleData.mainImageCaption,
-      html_content: sanitizeHtmlContent(articleData.htmlContent),
-      text_content: articleData.textContent,
-      paragraphs: articleData.paragraphs,
+      html_content: articleBody.html,
+      text_content: articleBody.text,
+      paragraphs: articleBody.paragraphs,
       images: articleData.images,
       links: articleData.links as ArticleLink[],
       tags: articleData.tags,
-      word_count: articleData.wordCount,
-      reading_time_minutes: articleData.readingTime,
+      word_count: articleBody.text ? articleBody.text.split(/\s+/).length : 0,
+      reading_time_minutes: articleBody.text ? Math.ceil(articleBody.text.split(/\s+/).length / 200) : 0,
       scraped_at: new Date()
     };
 

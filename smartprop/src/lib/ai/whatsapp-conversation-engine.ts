@@ -1,6 +1,6 @@
 import Groq from 'groq-sdk';
 import { parseViewingTimeslotsWithAI, formatParsedTimeslots, type ParsedViewingSlots } from '@/lib/ai/groq';
-import { sendMessageWithTyping } from '@/lib/wa/waha';
+import { createCustomerTextTransport, type CustomerTextTransport } from '@/lib/wa/customer-transport';
 import {
   findLatestOutreachByPhone,
   getConversationHistory,
@@ -445,14 +445,21 @@ export async function decideWhatsAppReply(input: {
   };
 }
 
-export async function processInboundWhatsAppMessage(input: WhatsAppInboundInput): Promise<{
+export type InboundWhatsAppProcessResult = {
   success: boolean;
   duplicate?: boolean;
   outreachId?: string;
   sent?: boolean;
+  outcome?: 'accepted' | 'blocked' | 'rejected' | 'unknown';
+  retryable?: false;
   decision?: WhatsAppDecision;
   reason?: string;
-}> {
+};
+
+export async function processInboundWhatsAppMessage(
+  input: WhatsAppInboundInput,
+  options?: { transport?: CustomerTextTransport },
+): Promise<InboundWhatsAppProcessResult> {
   const phone = normalizeWhatsAppPhone(input.from);
   const outreach = await findLatestOutreachByPhone(phone);
   const occurredAt = input.timestamp
@@ -523,20 +530,24 @@ export async function processInboundWhatsAppMessage(input: WhatsAppInboundInput)
     return { success: true, outreachId: outreach.id, sent: false, decision };
   }
 
-  const typingDelay = Math.min(8000, Math.max(1200, decision.replyMessage.length * 45));
-  const sendResult = await sendMessageWithTyping(phone, decision.replyMessage, typingDelay);
-  if (!sendResult.success) {
+  const transport = options?.transport ?? createCustomerTextTransport();
+  const sendResult = await transport.sendText({
+    to: phone,
+    text: decision.replyMessage,
+    purpose: 'auto_reply',
+  });
+  if (sendResult.outcome !== 'accepted') {
     await supabase
       .from('outreach')
       .update({
         ...updateData,
         conversation_phase: 'manual_review',
         conversation_state: 'manual_review',
-        co_broking_notes: `Auto-reply failed: ${sendResult.error || 'unknown error'}`,
+        co_broking_notes: `Auto-reply provider outcome=${sendResult.outcome}; retryable=false; ${sendResult.error}`,
       })
       .eq('id', outreach.id);
     await syncOutreachConversationHistory(outreach.id);
-    return { success: false, outreachId: outreach.id, sent: false, decision, reason: sendResult.error };
+    return { success: false, outreachId: outreach.id, sent: false, outcome: sendResult.outcome, retryable: false, decision, reason: sendResult.error };
   }
 
   await logWhatsAppMessage({
@@ -545,7 +556,7 @@ export async function processInboundWhatsAppMessage(input: WhatsAppInboundInput)
     direction: 'outbound',
     phone,
     chatId: input.from,
-    wahaMessageId: sendResult.messageId || null,
+    wahaMessageId: sendResult.messageId,
     body: decision.replyMessage,
     rawPayload: sendResult,
   });

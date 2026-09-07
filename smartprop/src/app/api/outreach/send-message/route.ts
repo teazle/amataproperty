@@ -5,7 +5,78 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
-import { sendWhatsAppMessage } from '@/lib/wa/waha';
+import { createCustomerTextTransport, type CustomerTextTransport } from '@/lib/wa/customer-transport';
+
+type ManualPersist = (data: Record<string, unknown>) => Promise<{ error: unknown }>;
+
+export async function finalizeManualOutreachSend(input: {
+  outreachId: string;
+  phone: string;
+  message: string;
+  conversationHistory: Array<Record<string, unknown>>;
+  transport: CustomerTextTransport;
+  persist: ManualPersist;
+}): Promise<{
+  outcome: 'accepted' | 'blocked' | 'rejected' | 'unknown';
+  retryable: false;
+  messageId: string | null;
+  timestamp: string | null;
+  reconciliationWarning?: string;
+  error?: string;
+}> {
+  const result = await input.transport.sendText({
+    to: input.phone,
+    text: input.message,
+    purpose: 'manual_outreach',
+  });
+
+  if (result.outcome !== 'accepted') {
+    const persisted = await input.persist({
+      conversation_phase: 'manual_review',
+      conversation_state: 'manual_review',
+      co_broking_notes: `Manual outreach provider outcome=${result.outcome}; retryable=false; ${result.error}`,
+    });
+    const persistenceError = persisted.error instanceof Error
+      ? persisted.error.message
+      : persisted.error
+        ? String(persisted.error)
+        : null;
+    return {
+      outcome: result.outcome,
+      retryable: false,
+      messageId: null,
+      timestamp: null,
+      error: persistenceError
+        ? `${result.error}; manual-review persistence failed: ${persistenceError}`
+        : result.error,
+    };
+  }
+
+  const timestamp = new Date().toISOString();
+  const conversationHistory = [...input.conversationHistory, {
+    role: 'user',
+    message: input.message,
+    timestamp,
+    messageId: result.messageId,
+  }];
+  const persisted = await input.persist({
+    conversation_history: conversationHistory,
+    last_message_at: timestamp,
+    status: 'sent',
+  });
+  const reconciliationWarning = persisted.error instanceof Error
+    ? persisted.error.message
+    : persisted.error
+      ? String(persisted.error)
+      : undefined;
+  return {
+    outcome: 'accepted',
+    retryable: false,
+    messageId: result.messageId,
+    timestamp,
+    ...(reconciliationWarning ? { reconciliationWarning } : {}),
+  };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,51 +128,39 @@ export async function POST(request: NextRequest) {
       // Normalize phone number (ensure it starts with country code)
       const normalizedPhone = phoneNumber.startsWith('65') ? phoneNumber : `65${phoneNumber}`;
       
-      const sendResult = await sendWhatsAppMessage(normalizedPhone, message);
-      
-      if (!sendResult.success) {
+      const finalized = await finalizeManualOutreachSend({
+        outreachId,
+        phone: normalizedPhone,
+        message,
+        conversationHistory: Array.isArray(outreachRecord.conversation_history)
+          ? outreachRecord.conversation_history
+          : (typeof outreachRecord.conversation_history === 'string'
+            ? JSON.parse(outreachRecord.conversation_history)
+            : []),
+        transport: createCustomerTextTransport(),
+        persist: async (data) => supabase.from('outreach').update(data).eq('id', outreachId),
+      });
+
+      if (finalized.outcome !== 'accepted') {
         return NextResponse.json(
-          { error: 'Failed to send WhatsApp message', details: sendResult.error },
-          { status: 500 }
+          {
+            error: 'WhatsApp provider outcome requires manual review',
+            outcome: finalized.outcome,
+            retryable: false,
+            details: finalized.error,
+          },
+          { status: 409 }
         );
       }
 
-      // Update conversation history
-      const conversationHistory = Array.isArray(outreachRecord.conversation_history)
-        ? outreachRecord.conversation_history
-        : (typeof outreachRecord.conversation_history === 'string'
-          ? JSON.parse(outreachRecord.conversation_history)
-          : []);
-
-      const newMessage = {
-        role: 'user',
-        message: message,
-        timestamp: new Date().toISOString(),
-        messageId: sendResult.messageId || `manual_${Date.now()}`
-      };
-
-      conversationHistory.push(newMessage);
-
-      // Update the outreach record
-      const { error: updateError } = await supabase
-        .from('outreach')
-        .update({
-          conversation_history: conversationHistory,
-          last_message_at: new Date().toISOString(),
-          status: 'sent' // Update status to sent
-        })
-        .eq('id', outreachId);
-
-      if (updateError) {
-        console.error('Error updating conversation history:', updateError);
-        // Don't fail the request since the message was sent successfully
-      }
-
       return NextResponse.json({
-        message: 'Message sent successfully',
-        messageId: sendResult.messageId,
-        timestamp: newMessage.timestamp
-      });
+        message: finalized.reconciliationWarning
+          ? 'Message accepted; conversation reconciliation required'
+          : 'Message accepted successfully',
+        messageId: finalized.messageId,
+        timestamp: finalized.timestamp,
+        ...(finalized.reconciliationWarning ? { reconciliationWarning: finalized.reconciliationWarning } : {}),
+      }, { status: finalized.reconciliationWarning ? 202 : 200 });
 
     } catch (waError) {
       console.error('WhatsApp send error:', waError);

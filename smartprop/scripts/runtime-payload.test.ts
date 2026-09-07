@@ -52,18 +52,21 @@ function makePayload(entries: Record<string, string>): string {
   return makePayloadEntries(Object.entries(entries));
 }
 
-function makePayloadEntries(entries: Array<[string, string]>, directories: string[] = []): string {
+function makePayloadEntries(entries: Array<[string, string]>, directories: string[] = [], directoriesLast = false): string {
   const directory = mkdtempSync(join(tmpdir(), 'smartprop-runtime-payload-'));
   temporaryDirectories.push(directory);
   const archivePath = join(directory, 'runtime.zip');
-  const archive = new AdmZip();
-  for (const path of directories) {
+  const archive = new AdmZip({ noSort: true });
+  for (const path of directoriesLast ? [] : directories) {
     archive.addFile(`${path}/`, Buffer.alloc(0));
   }
   for (const [index, [path, content]] of entries.entries()) {
     const stagedPath = path.includes('..') ? `staged-${index}` : path;
     archive.addFile(stagedPath, Buffer.from(content));
     if (stagedPath !== path) archive.getEntry(stagedPath)!.entryName = path;
+  }
+  for (const path of directoriesLast ? directories : []) {
+    archive.addFile(`${path}/`, Buffer.alloc(0));
   }
   archive.writeZip(archivePath);
   return archivePath;
@@ -156,6 +159,11 @@ describe('runtime payload inspection', () => {
     expect(() => inspectRuntimePayload(makePayloadEntries(
       Object.entries(validPayloadEntries()),
       ['.next', '.next/server', '.next/static'],
+    ))).not.toThrow();
+    expect(() => inspectRuntimePayload(makePayloadEntries(
+      Object.entries(validPayloadEntries()),
+      ['.next', '.next/server', '.next/static', '.next/server/app'],
+      true,
     ))).not.toThrow();
   });
 

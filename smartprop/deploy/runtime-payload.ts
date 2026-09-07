@@ -177,7 +177,8 @@ export function inspectRuntimePayload(payloadPath: string): RuntimePayloadInspec
       fail(`reserved runtime directory must be an explicit directory: ${path}`);
     }
     const conflictingFilePath = [...entryKinds].find(([knownPath, kind]) => (
-      kind === 'file' && (path.startsWith(`${knownPath}/`) || knownPath.startsWith(`${path}/`))
+      (kind === 'file' && path.startsWith(`${knownPath}/`))
+      || (!entry.isDirectory && knownPath.startsWith(`${path}/`))
     ))?.[0];
     if (conflictingFilePath) {
       fail(`runtime payload file conflicts with ancestor or descendant: ${conflictingFilePath}`);

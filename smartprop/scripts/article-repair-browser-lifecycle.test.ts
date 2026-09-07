@@ -10,14 +10,17 @@ type Counters = {
 const launches: unknown[] = [];
 let launchedBrowser: ReturnType<typeof browserDouble>;
 
-mock.module('playwright', () => ({
+const browserModule = () => ({
   chromium: {
-    launch: async () => {
+    launch: async (options: { channel?: string }) => {
+      // The deployed runtime has installed Chrome; a bundled browser is not required.
+      if (options.channel !== 'chrome') throw new Error('Bundled Chromium is unavailable in this runtime');
       launches.push(true);
       return launchedBrowser;
     },
   },
-}));
+});
+mock.module('patchright', browserModule);
 
 const { scrapeArticleContent } = await import('../src/lib/scraper/edgeprop-content-scraper');
 
@@ -103,7 +106,7 @@ describe('scrapeArticleContent browser ownership', () => {
     expect(suppliedContext.counters).toEqual({ browserClosed: 0, pageClosed: 1, pagesCreated: 1, launches: 0 });
   });
 
-  test('owns and closes both browser and page when no browser is supplied', async () => {
+  test('uses installed Chrome and closes browser and page when no browser is supplied', async () => {
     const ownedBrowser = browserDouble();
     launchedBrowser = ownedBrowser;
 

@@ -74,6 +74,7 @@
     "node-cron": "^4.2.1",
     "pdf-lib": "^1.17.1",
     "pg-boss": "^12.4.0",
+    "patchright": "1.62.3",
     "playwright": "1.56.1",
     "playwright-ghost": "^0.15.0",
     "react": "19.1.5",
@@ -100,7 +101,7 @@
     "typescript": "^5"
   },
   "engines": {
-    "node": ">=18.0.0",
+    "node": ">=20.0.0",
     "bun": ">=1.0.0",
     "npm": "please-use-bun",
     "yarn": "please-use-bun",

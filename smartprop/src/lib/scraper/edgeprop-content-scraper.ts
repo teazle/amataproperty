@@ -3,7 +3,7 @@
  * Scrapes complete article HTML and text content from individual article pages
  */
 
-import { type Page, chromium, type Browser, type BrowserContext } from 'playwright';
+import { chromium, type Browser } from 'patchright';
 import { sanitizeHtmlContent } from '../utils/content-parser';
 import { validateArticleContent } from './article-content-validation';
 
@@ -47,8 +47,19 @@ export interface ContentScraperProgress {
 
 export type ContentProgressCallback = (progress: ContentScraperProgress) => void;
 
+// Only require operations this extractor uses. Playwright and Patchright expose
+// different versioned Page APIs, while caller-owned contexts support this slice.
+type ArticlePage = {
+  setDefaultTimeout(timeout: number): void;
+  setDefaultNavigationTimeout(timeout: number): void;
+  goto(url: string, options: { waitUntil: 'domcontentloaded'; timeout: number }): Promise<unknown>;
+  waitForTimeout(timeout: number): Promise<void>;
+  evaluate<T>(pageFunction: () => T): Promise<T>;
+  close(): Promise<void>;
+};
+
 export type ScrapeArticleContentOptions = {
-  context?: BrowserContext;
+  context?: { newPage(): Promise<ArticlePage> };
 };
 
 let currentBrowser: Browser | null = null;
@@ -64,11 +75,12 @@ export async function scrapeArticleContent(
 ): Promise<ArticleContent | null> {
   const ownsBrowser = options?.context === undefined;
   let browser: Browser | null = null;
-  let page: Page | null = null;
+  let page: ArticlePage | null = null;
   
   try {
     if (!options?.context) {
       browser = await chromium.launch({
+        channel: 'chrome',
         headless: true,
         timeout: 15000,
         args: ['--no-sandbox', '--disable-dev-shm-usage'],
@@ -508,7 +520,7 @@ export async function scrapeMultipleArticles(
   let failed = 0;
   
   try {
-    currentBrowser = await chromium.launch({ headless: true });
+    currentBrowser = await chromium.launch({ channel: 'chrome', headless: true });
     
     for (let i = 0; i < articles.length; i++) {
       if (shouldStop) {

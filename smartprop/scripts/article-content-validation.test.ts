@@ -48,7 +48,7 @@ mock.module('@supabase/supabase-js', () => ({
   createClient: () => fakeSupabase,
 }));
 
-mock.module('playwright', () => ({
+mock.module('patchright', () => ({
   chromium: {
     launch: async () => ({
       newPage: async () => ({

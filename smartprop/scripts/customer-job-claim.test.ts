@@ -11,6 +11,7 @@ const viewingUpdates: Array<Record<string, unknown>> = [];
 const viewingOutreachInserts: Array<Record<string, unknown>> = [];
 const legacyCalls: string[] = [];
 let matchUpdateThrows = false;
+let messageLogThrows = false;
 let viewingOutreachError = false;
 let viewingUpdateError = false;
 let defaultDeliveryStore: { claim: (input: Record<string, string>) => Promise<string | null>; finish: (input: Record<string, string>) => Promise<boolean> } | null = null;
@@ -81,7 +82,10 @@ mock.module('@/lib/wa/message-log', () => ({
   findLatestOutreachByPhone: async () => null,
   getConversationHistory: async () => [],
   syncOutreachConversationHistory: async () => [],
-  logWhatsAppMessage: async () => ({ inserted: true, duplicate: false }),
+  logWhatsAppMessage: async () => {
+    if (messageLogThrows) throw new Error('conversation log write failed');
+    return { inserted: true, duplicate: false };
+  },
 }));
 mock.module('@/lib/wa/waha', () => ({
   generateCoBrokingInquiryMessage: (name: string, title: string, url: string) => `Hi ${name.split(' ')[0]}, Jeremy here\n\nI have a buyer who is interested in your ${title}.\n\nWould you be open to co-broking?\n\n🔗 ${url}`,
@@ -162,6 +166,7 @@ beforeEach(() => {
   viewingOutreachInserts.length = 0;
   legacyCalls.length = 0;
   matchUpdateThrows = false;
+  messageLogThrows = false;
   viewingOutreachError = false;
   viewingUpdateError = false;
   defaultDeliveryStore = null;
@@ -204,10 +209,11 @@ describe('customer delivery claims in remaining jobs', () => {
     const delivery = sharedStore({ finish: () => new Error('delivery finalization failed') });
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-viewing-1', messageText: 'viewing message' }]);
 
-    await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    const first = await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
     await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
     expect(selected.calls).toHaveLength(1);
+    expect(first).toMatchObject({ success: false, sent: 1, failed: 1, reconciliationRequired: 1 });
     expect(viewingOutreachInserts).toEqual([]);
     expect(viewingUpdates).toEqual([]);
     expect(legacyCalls).toEqual([]);
@@ -251,10 +257,11 @@ describe('customer delivery claims in remaining jobs', () => {
     const delivery = sharedStore({ finish: () => false });
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-viewing-false', messageText: 'viewing message' }]);
 
-    await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    const first = await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
     await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
     expect(selected.calls).toHaveLength(1);
+    expect(first).toMatchObject({ success: false, sent: 1, failed: 1, reconciliationRequired: 1 });
     expect(viewingOutreachInserts).toEqual([]);
     expect(viewingUpdates).toEqual([]);
     expect(legacyCalls).toEqual([]);
@@ -304,5 +311,29 @@ describe('customer delivery claims in remaining jobs', () => {
 
     expect(result).toMatchObject({ success: false, stats: { messagesSent: 1, messagesReconciliationRequired: 1 } });
     expect(selected.calls).toHaveLength(1);
+  });
+
+  test('matching-job caller exposes a failed conversation log and never resends accepted delivery', async () => {
+    matchRows = [initialOutreach('outreach-log')];
+    messageLogThrows = true;
+    const delivery = sharedStore();
+    const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-log', messageText: 'initial message' }]);
+    defaultDeliveryStore = delivery.store;
+    defaultCustomerTransport = selected.customerTransport;
+    const first = await runMatchingJob(10);
+    await runMatchingJob(10);
+    expect(first).toMatchObject({ success: false, stats: { messagesSent: 1, messagesReconciliationRequired: 1 } });
+    expect(selected.calls).toHaveLength(1);
+  });
+
+  test('initial accepted delivery with failed finalization is visibly reconciliation-required', async () => {
+    matchRows = [initialOutreach('outreach-finalize')];
+    const delivery = sharedStore({ finish: () => false });
+    const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-finalize', messageText: 'initial message' }]);
+    const first = await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    expect(first).toMatchObject({ sent: 1, failed: 1, reconciliationRequired: 1 });
+    expect(selected.calls).toHaveLength(1);
+    expect(matchUpdates).toEqual([]);
   });
 });

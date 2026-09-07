@@ -156,11 +156,17 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
           });
         } catch (error) {
           results.failed++;
+          results.success = false;
+          results.reconciliationRequired++;
+          if (result.outcome === 'accepted' && result.messageId.trim()) results.sent++;
           results.errors.push(`Failed to finalize viewing request for ${listing.id}: ${error instanceof Error ? error.message : String(error)}`);
           continue;
         }
         if (!finalized) {
           results.failed++;
+          results.success = false;
+          results.reconciliationRequired++;
+          if (result.outcome === 'accepted' && result.messageId.trim()) results.sent++;
           results.errors.push(`Viewing request finalization was not accepted for ${listing.id}`);
           continue;
         }
@@ -229,6 +235,7 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
     console.log(`   ❌ Failed: ${results.failed}`);
     console.log(`   ⏭️  Skipped: ${results.skipped}`);
 
+    results.success = results.success && results.failed === 0;
     return results;
 
   } catch (error) {

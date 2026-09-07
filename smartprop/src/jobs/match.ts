@@ -311,6 +311,9 @@ export async function processOutreachMessages(
     }
     if (!finalized) {
       failed++;
+      reconciliationRequired++;
+      reconciliationErrors.push(`Outreach ${outreach.id} requires reconciliation: delivery finalization was not confirmed`);
+      if (result.outcome === 'accepted' && result.messageId.trim()) sent++;
       continue;
     }
     if (result.outcome !== 'accepted' || !result.messageId.trim()) {
@@ -352,7 +355,12 @@ export async function processOutreachMessages(
         rawPayload: result,
       });
     } catch (error) {
-      console.error(`⚠️ Failed to log accepted outreach ${outreach.id}:`, error);
+      const message = `Accepted outreach ${outreach.id} requires reconciliation: conversation log persistence failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(message);
+      reconciliationRequired++;
+      reconciliationErrors.push(message);
+      sent++;
+      continue;
     }
     console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
     sent++;

@@ -3,6 +3,7 @@ import { existsSync, lstatSync, statSync, readFileSync, writeFileSync, renameSyn
 import { dirname, resolve } from 'node:path';
 import { hostname } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 interface LayoutPaths { app: string; release: string; journal: string }
 interface Journal extends LayoutPaths { version: 1; inode: number; device: number; status: 'prepared' | 'applied' | 'rolled-back' }
@@ -79,7 +80,7 @@ export function verifyLayout(path: string): Journal {
   return j;
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, journal, release] = process.argv.slice(2);
   const app = '/opt/smartprop/app/smartprop';
   assert(hostname() === 'vmi3201429' && readFileSync('/etc/machine-id', 'utf8').trim() === 'bfb5b1b8859546f9aac39a4c5bafa616', 'Wrong migration host');

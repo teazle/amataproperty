@@ -44,7 +44,8 @@ must **not** be changed as part of this work.
 4. Use the bridge candidate's configuration vocabulary only:
    `accountId`, `selfNumber`, `operatorNumbers`, `customerNumbers`, `endpoint`,
    and `secretEnv`. Its configuration schema rejects undeclared properties.
-5. Use only the loopback endpoint `http://127.0.0.1/api/wa/openclaw`. Set
+5. Use only the loopback endpoint `http://127.0.0.1:<app-port>/api/wa/openclaw`,
+   with the actual app port verified by the controller. Set
    `secretEnv` to `SMARTPROP_OPENCLAW_WEBHOOK_SECRET`; the local value is an
    HMAC secret placeholder such as `<set-locally-never-copy>`, never a real
    secret in this document, source control, chat, or plugin configuration.
@@ -58,10 +59,12 @@ must **not** be changed as part of this work.
 - Operators are deliberately not forwarded to SmartProp and continue to the
   explicit operator peer route. Customer routing must not become an implicit
   operator fallback.
-- Groups, LID-like/invalid senders, unknown customers, account/channel
-  mismatches, missing IDs, malformed payloads, and plugin configuration failures
-  are fail-closed. They must never fall through into the operator model as a
-  customer message.
+- Within the configured account/channel, groups, LID-like/invalid senders,
+  unknown customers, conflicting identities, missing IDs and malformed messages
+  are claimed without invoking the operator model. Other accounts/channels are
+  outside this hook's scope. Plugin configuration/load failures require the
+  separate unprivileged fallback route; the hook cannot protect a runtime in
+  which it did not load.
 - A failed handoff is also terminal for that customer event: reconcile it through
   the controller; do not auto-retry or hand the message to the operator model.
 - The SmartProp ingress verifies the raw body with HMAC SHA-256 and a fresh
@@ -78,7 +81,7 @@ numeric-seconds contract. Do not pass hook milliseconds through unchanged.
 ## Functional acceptance — controller-owned, after authorization
 
 Do not use a synthetic send or a test-send shortcut as acceptance. After the
-preconditions are met and the controller authorizes the live boundary, require:
+preconditions are met and user authorization covers the live boundary, require:
 
 1. One permitted real inbound message from a customer already present in the
    exact customer allowlist.

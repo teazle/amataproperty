@@ -3,7 +3,7 @@
  * Scrapes complete article HTML and text content from individual article pages
  */
 
-import { type Page as _Page, chromium, type Browser } from 'playwright';
+import { type Page, chromium, type Browser, type BrowserContext } from 'playwright';
 import { sanitizeHtmlContent } from '../utils/content-parser';
 import { validateArticleContent } from './article-content-validation';
 
@@ -47,6 +47,10 @@ export interface ContentScraperProgress {
 
 export type ContentProgressCallback = (progress: ContentScraperProgress) => void;
 
+export type ScrapeArticleContentOptions = {
+  context?: BrowserContext;
+};
+
 let currentBrowser: Browser | null = null;
 let shouldStop = false;
 
@@ -55,17 +59,22 @@ let shouldStop = false;
  */
 export async function scrapeArticleContent(
   articlePath: string,
-  nid: string
+  nid: string,
+  options?: ScrapeArticleContentOptions,
 ): Promise<ArticleContent | null> {
+  const ownsBrowser = options?.context === undefined;
   let browser: Browser | null = null;
+  let page: Page | null = null;
   
   try {
-    browser = await chromium.launch({
-      headless: true,
-      timeout: 15000,
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
-    });
-    const page = await browser.newPage();
+    if (!options?.context) {
+      browser = await chromium.launch({
+        headless: true,
+        timeout: 15000,
+        args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      });
+    }
+    page = options?.context ? await options.context.newPage() : await browser!.newPage();
     page.setDefaultTimeout(15000);
     page.setDefaultNavigationTimeout(30000);
     
@@ -439,8 +448,6 @@ export async function scrapeArticleContent(
       };
     });
     
-    await browser.close();
-    
     const content: ArticleContent = {
       nid,
       path: articlePath,
@@ -474,8 +481,18 @@ export async function scrapeArticleContent(
     
   } catch (_error) {
     console.error(`Failed to scrape article ${articlePath}:`, _error instanceof Error ? _error.message : String(_error));
-    if (browser) await browser.close();
     return null;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch {
+        // Cleanup must not discard a successfully scraped article.
+      }
+    }
+    if (ownsBrowser && browser) {
+      await browser.close().catch(() => undefined);
+    }
   }
 }
 

@@ -32,6 +32,19 @@ async function main() {
     backup.rows.some(row => !ids.has(row.article_id)) || backup.articles.some(article => !ids.has(article.id))) {
     throw new Error('Exact approved cohort mismatch');
   }
+  let prepared: Map<string, ArticleContent> | undefined;
+  if (process.env.ARTICLE_REPAIR_INPUT_FILE) {
+    const inputFile = process.env.ARTICLE_REPAIR_INPUT_FILE;
+    if (!inputFile.startsWith('/root/smartprop-article-recovery-20260907-') || !inputFile.endsWith('.json')) throw new Error('Invalid prepared input path');
+    const inputRaw = readFileSync(inputFile);
+    if (!process.env.ARTICLE_REPAIR_INPUT_SHA || digest(inputRaw) !== process.env.ARTICLE_REPAIR_INPUT_SHA) throw new Error('Prepared input checksum mismatch');
+    const input = JSON.parse(inputRaw.toString()) as { schema: number; articles: { article_id: string; content: ArticleContent }[] };
+    if (input.schema !== 1 || !Array.isArray(input.articles) || !input.articles.length || input.articles.length > 399 ||
+      input.articles.some(item => !item || !ids.has(item.article_id)) || new Set(input.articles.map(item => item.article_id)).size !== input.articles.length) {
+      throw new Error('Prepared input cohort mismatch');
+    }
+    prepared = new Map(input.articles.map(item => [item.article_id, item.content]));
+  }
   const mode = process.env.ARTICLE_REPAIR_MODE ?? 'dry-run';
   const offset = Number(process.env.ARTICLE_REPAIR_OFFSET ?? '0');
   const count = Number(process.env.ARTICLE_REPAIR_COUNT ?? '1');
@@ -48,11 +61,15 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE;
   if (!url || !key) throw new Error('Database configuration absent');
-  const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const client = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(30000) }) },
+  });
   const runDir = mkdtempSync('/root/smartprop-article-recovery-20260907-run-');
   const journal = `${runDir}/outcomes.jsonl`;
   writeFileSync(journal, '', { mode: 0o600, flag: 'wx' });
-  const selected = [...backup.rows].sort((a, b) => a.article_id.localeCompare(b.article_id)).slice(offset, offset + count);
+  const selected = [...backup.rows].sort((a, b) => a.article_id.localeCompare(b.article_id)).slice(offset, offset + count)
+    .filter(row => !prepared || prepared.has(row.article_id));
   let next = 0;
   let stopped = false;
   let rejected = 0;
@@ -65,7 +82,7 @@ async function main() {
     appendFileSync(journal, JSON.stringify(result) + '\n');
     console.log(JSON.stringify(result));
   };
-  record({ status: 'started', mode, offset, count, concurrency, runDir, backupSha256: BACKUP_SHA, extractorSha256: EXTRACTOR_SHA });
+  record({ status: 'started', mode, offset, count, selectedCount: selected.length, preparedInput: !!prepared, inputSha256: process.env.ARTICLE_REPAIR_INPUT_SHA ?? null, concurrency, runDir, backupSha256: BACKUP_SHA, extractorSha256: EXTRACTOR_SHA });
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (!stopped && next < selected.length) {
       const original = selected[next++];
@@ -81,7 +98,7 @@ async function main() {
           record({ articleId: article.id, status: 'skip', reason: 'snapshot_or_metadata_changed' });
           continue;
         }
-        const content = await scrapeArticleContent(article.path, article.nid);
+        const content = prepared ? prepared.get(article.id)! : await scrapeArticleContent(article.path, article.nid);
         const plan = planApprovedArticleRepair({ backup: original, current, article, content });
         if (plan.status === 'skip') {
           skipped++;

@@ -48,6 +48,17 @@ test('keeps editorial prose that begins with related news when no related-news b
   expect(cleaned.text).toBe('Related news coverage shows buyers are responding to new supply.');
 });
 
+test('keeps editorial related-news prose alongside a real related-news footer', () => {
+  const editorial = 'Related news coverage shows buyers are responding to new supply.';
+  const cleaned = cleanArticleBody({
+    html: `<p>${editorial}</p><div class="related-news"><div class="related-news--title">RELATED NEWS</div><ul><li>Another sale &amp; analysis</li></ul></div>`,
+    paragraphs: [editorial, 'RELATED NEWSAnother sale & analysis'],
+  });
+  expect(cleaned.paragraphs).toEqual([editorial]);
+  expect(cleaned.text).toBe(editorial);
+  expect(cleaned.html).toBe(`<p>${editorial}</p>`);
+});
+
 test('applies the cleanup at the content extraction boundary before storing derived text and counts', async () => {
   const page = {
     setDefaultTimeout: () => undefined,

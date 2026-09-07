@@ -74,15 +74,29 @@ function removeAdLabelRuns(text: string): string {
     .trim();
 }
 
-function hasRelatedNewsBundle(html: string): boolean {
-  return /class=(?:"[^"]*\brelated-news\b[^"]*"|'[^']*\brelated-news\b[^']*')/i.test(html) &&
-    /RELATED NEWS/i.test(html);
+function normalizeBundleText(text: string): string {
+  return text.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/\s+/g, '');
 }
 
-function isFooterParagraph(paragraph: string, relatedNewsBundle: boolean): boolean {
+function relatedNewsBundleTexts(html: string): Set<string> {
+  const bundles = new Set<string>();
+  const openingTag = /<div\b[^>]*\bclass=(?:"([^"]*)"|'([^']*)')[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = openingTag.exec(html))) {
+    if (!(match[1] ?? match[2]).split(/\s+/).includes('related-news')) continue;
+    const end = findMatchingElementEnd(html, match.index, 'div');
+    if (end === -1) continue;
+    const text = html.slice(match.index, end).replace(/<[^>]*>/g, '');
+    bundles.add(normalizeBundleText(text));
+    openingTag.lastIndex = end;
+  }
+  return bundles;
+}
+
+function isFooterParagraph(paragraph: string, relatedNewsBundles: Set<string>): boolean {
   const normalized = paragraph.replace(/\s+/g, ' ').trim().toLowerCase();
   return footerPromotionParagraphs.has(normalized) ||
-    (relatedNewsBundle && normalized.startsWith('related news'));
+    relatedNewsBundles.has(normalizeBundleText(paragraph));
 }
 
 /**
@@ -90,7 +104,7 @@ function isFooterParagraph(paragraph: string, relatedNewsBundle: boolean): boole
  * This boundary keeps stored HTML, paragraphs, and text derived from one body.
  */
 export function cleanArticleBody({ html, paragraphs }: ArticleBodyInput): CleanArticleBody {
-  const relatedNewsBundle = hasRelatedNewsBundle(html || '');
+  const relatedNewsBundles = relatedNewsBundleTexts(html || '');
   let cleanedHtml = removeHtmlBlocksByClass(html || '');
   cleanedHtml = removeElementContaining(cleanedHtml, 'For more news and analysis, read our');
   cleanedHtml = removeElementContaining(cleanedHtml, 'Get it delivered to your home every Monday.');
@@ -102,7 +116,7 @@ export function cleanArticleBody({ html, paragraphs }: ArticleBodyInput): CleanA
 
   const cleanedParagraphs = (Array.isArray(paragraphs) ? paragraphs : [])
     .map(removeAdLabelRuns)
-    .filter((paragraph) => paragraph.length > 0 && !isFooterParagraph(paragraph, relatedNewsBundle));
+    .filter((paragraph) => paragraph.length > 0 && !isFooterParagraph(paragraph, relatedNewsBundles));
 
   return {
     html: cleanedHtml,

@@ -20,6 +20,24 @@ const requiredInputs = [
   'tsconfig.json',
 ];
 
+function writeRuntimePayload(path: string): void {
+  const archive = new AdmZip();
+  for (const [entryPath, content] of Object.entries({
+    '.next/BUILD_ID': 'next-build-package\n',
+    '.next/build-manifest.json': '{}',
+    '.next/prerender-manifest.json': '{}',
+    '.next/routes-manifest.json': '{}',
+    '.next/required-server-files.json': '{}',
+    '.next/server/app-paths-manifest.json': '{}',
+    '.next/server/pages-manifest.json': '{}',
+    '.next/server/app/page.js': 'exports.routeModule = {};\n',
+    '.next/static/chunks/app.js': 'self.__next_f.push([]);\n',
+  })) {
+    archive.addFile(entryPath, Buffer.from(content));
+  }
+  archive.writeZip(path);
+}
+
 function run(command: string[], cwd: string): void {
   const result = Bun.spawnSync({ cmd: command, cwd, stdout: 'pipe', stderr: 'pipe' });
   if (result.exitCode !== 0) {
@@ -129,7 +147,7 @@ describe('prepare-release-artifact CLI', () => {
     const buildArtifact = join(output, 'next-build.tar');
     const sourceArchive = join(output, 'smartprop-source.zip');
     const manifest = join(output, 'release-manifest.json');
-    writeFileSync(buildArtifact, 'separately supplied build bytes\n');
+    writeRuntimePayload(buildArtifact);
 
     const result = invoke({
       repository: root,
@@ -157,7 +175,7 @@ describe('prepare-release-artifact CLI', () => {
     const buildArtifact = join(output, 'next-build.tar');
     const sourceArchive = join(output, 'smartprop-source.zip');
     const manifest = join(output, 'release-manifest.json');
-    writeFileSync(buildArtifact, 'separately supplied build bytes\n');
+    writeRuntimePayload(buildArtifact);
 
     const missingRollback = invoke({ repository: root, sourceCommit: commit, sourceArchive, manifest, buildArtifact });
     expect(missingRollback.exitCode).not.toBe(0);
@@ -181,7 +199,7 @@ describe('prepare-release-artifact CLI', () => {
     const sourceArchive = join(output, 'smartprop-source.zip');
     const manifest = join(output, 'release-manifest.json');
     const racedContent = 'raced output must survive\n';
-    writeFileSync(buildArtifact, 'separately supplied build bytes\n');
+    writeRuntimePayload(buildArtifact);
 
     const child = invokeAsync({
       repository: root,
@@ -209,7 +227,7 @@ describe('prepare-release-artifact CLI', () => {
     const buildArtifact = join(output, 'next-build.tar');
     const sourceArchive = join(output, 'smartprop-source.zip');
     const manifest = join(output, 'release-manifest.json');
-    writeFileSync(buildArtifact, 'separately supplied build bytes\n');
+    writeRuntimePayload(buildArtifact);
 
     const secretResult = invoke({
       repository: secretRepository.root,

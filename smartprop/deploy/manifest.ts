@@ -3,6 +3,8 @@ import { lstatSync, readFileSync } from 'node:fs';
 
 import AdmZip from 'adm-zip';
 
+import { inspectRuntimePayload, type RuntimePayloadInspection } from './runtime-payload';
+
 export const SMARTPROP_RELEASE_TARGET = {
   id: 'smartprop-existing-host',
   host: {
@@ -57,9 +59,11 @@ export interface ReleaseArtifactManifest {
     entries: Array<{ path: string; sha256: string; size: number }>;
   };
   build_artifact: {
-    name: 'smartprop-next-build';
+    name: 'smartprop-next-runtime-payload';
     sha256: string;
     size: number;
+    build_id: string;
+    entries: Array<{ path: string; sha256: string; size: number }>;
   };
   target_identity: SmartPropReleaseTarget;
   build_identity: { kind: 'sha256'; value: string };
@@ -213,26 +217,12 @@ function inspectArchive(archivePath: string): {
   };
 }
 
-function inspectBuildArtifact(buildArtifactPath: string): {
-  sha256: string;
-  size: number;
-} {
-  let stat;
-  let buildBytes: Buffer;
+function inspectBuildArtifact(buildArtifactPath: string): RuntimePayloadInspection {
   try {
-    stat = lstatSync(buildArtifactPath);
-    buildBytes = readFileSync(buildArtifactPath);
+    return inspectRuntimePayload(buildArtifactPath);
   } catch (error) {
-    fail(`cannot read build artifact: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`invalid Next runtime build artifact: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    fail('build artifact must be a regular file, not a symlink');
-  }
-  if (buildBytes.byteLength === 0) fail('build artifact must not be empty');
-  return {
-    sha256: sha256(buildBytes),
-    size: buildBytes.byteLength,
-  };
 }
 
 function assertSeparateArtifactFiles(archivePath: string, buildArtifactPath: string): void {
@@ -260,8 +250,8 @@ export function createReleaseArtifactManifest(options: {
   assertSha256Identity({ kind: 'sha256', value: options.rollbackIdentity }, 'rollback identity');
   assertExactTarget(options.target, SMARTPROP_RELEASE_TARGET);
   const artifact = inspectArchive(options.archivePath);
-  const buildArtifact = inspectBuildArtifact(options.buildArtifactPath);
   assertSeparateArtifactFiles(options.archivePath, options.buildArtifactPath);
+  const buildArtifact = inspectBuildArtifact(options.buildArtifactPath);
 
   return {
     schema_version: 1,
@@ -272,8 +262,11 @@ export function createReleaseArtifactManifest(options: {
       ...artifact,
     },
     build_artifact: {
-      name: 'smartprop-next-build',
-      ...buildArtifact,
+      name: 'smartprop-next-runtime-payload',
+      sha256: buildArtifact.sha256,
+      size: buildArtifact.size,
+      build_id: buildArtifact.buildId,
+      entries: buildArtifact.entries,
     },
     target_identity: SMARTPROP_RELEASE_TARGET,
     build_identity: { kind: 'sha256', value: buildArtifact.sha256 },
@@ -320,7 +313,7 @@ export function validateReleaseArtifactManifest(
 
   const inspectedBuild = inspectBuildArtifact(options.buildArtifactPath);
   assertSeparateArtifactFiles(options.archivePath, options.buildArtifactPath);
-  if (manifest.build_artifact?.name !== 'smartprop-next-build') {
+  if (manifest.build_artifact?.name !== 'smartprop-next-runtime-payload') {
     fail('build artifact name is invalid');
   }
   if (manifest.build_artifact.sha256 !== inspectedBuild.sha256) {
@@ -328,6 +321,12 @@ export function validateReleaseArtifactManifest(
   }
   if (manifest.build_artifact.size !== inspectedBuild.size) {
     fail('build artifact size does not match the build bytes');
+  }
+  if (manifest.build_artifact.build_id !== inspectedBuild.buildId) {
+    fail('build artifact BUILD_ID does not match the runtime payload');
+  }
+  if (canonicalJson(manifest.build_artifact.entries) !== canonicalJson(inspectedBuild.entries)) {
+    fail('build artifact entry hashes do not match the runtime payload');
   }
   if (manifest.build_identity.value !== manifest.build_artifact.sha256) {
     fail('build identity does not match the immutable build artifact SHA-256');

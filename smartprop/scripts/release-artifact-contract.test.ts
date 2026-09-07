@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -61,11 +60,26 @@ function validEntries(): Record<string, string> {
   );
 }
 
-function makeBuildArtifact(content = 'opaque compiled Next build\n'): string {
+function makeBuildArtifact(overrides: Record<string, string> = {}): string {
   const directory = mkdtempSync(join(tmpdir(), 'smartprop-build-contract-'));
   temporaryDirectories.push(directory);
-  const buildArtifactPath = join(directory, 'next-build.tar');
-  writeFileSync(buildArtifactPath, content);
+  const buildArtifactPath = join(directory, 'next-runtime.zip');
+  const archive = new AdmZip();
+  for (const [path, content] of Object.entries({
+    '.next/BUILD_ID': 'next-build-contract\n',
+    '.next/build-manifest.json': '{}',
+    '.next/prerender-manifest.json': '{}',
+    '.next/routes-manifest.json': '{}',
+    '.next/required-server-files.json': '{}',
+    '.next/server/app-paths-manifest.json': '{}',
+    '.next/server/pages-manifest.json': '{}',
+    '.next/server/app/page.js': 'exports.routeModule = {};\n',
+    '.next/static/chunks/app.js': 'self.__next_f.push([]);\n',
+    ...overrides,
+  })) {
+    archive.addFile(path, Buffer.from(content));
+  }
+  archive.writeZip(buildArtifactPath);
   return buildArtifactPath;
 }
 
@@ -141,19 +155,19 @@ describe('SmartProp release artifact contract', () => {
     );
   });
 
-  test('binds the source archive to a separate build artifact hash', () => {
+  test('binds the source archive to a separate validated runtime payload hash', () => {
     const archivePath = makeArchive(validEntries());
-    const buildContent = 'opaque compiled Next build v2\n';
-    const buildArtifactPath = makeBuildArtifact(buildContent);
+    const buildArtifactPath = makeBuildArtifact({ '.next/server/app/page.js': 'compiled Next build v2\n' });
     const manifest = validManifest(archivePath, buildArtifactPath);
-    const expectedBuildSha256 = createHash('sha256').update(buildContent).digest('hex');
 
-    expect(manifest.build_identity).toEqual({ kind: 'sha256', value: expectedBuildSha256 });
+    expect(manifest.build_artifact.name).toBe('smartprop-next-runtime-payload');
+    expect(manifest.build_artifact.build_id).toBe('next-build-contract');
+    expect(manifest.build_identity).toEqual({ kind: 'sha256', value: manifest.build_artifact.sha256 });
     expect(manifest.build_identity.value).not.toBe(manifest.artifact.sha256);
-    writeFileSync(buildArtifactPath, 'tampered compiled build\n');
+    const tamperedBuildArtifactPath = makeBuildArtifact({ '.next/server/app/page.js': 'tampered compiled build\n' });
     expect(() => validateReleaseArtifactManifest(manifest, {
       archivePath,
-      buildArtifactPath,
+      buildArtifactPath: tamperedBuildArtifactPath,
       expectedSourceCommit: sourceCommit,
       expectedTarget: SMARTPROP_RELEASE_TARGET,
     })).toThrow('build artifact SHA-256');
@@ -178,9 +192,9 @@ describe('SmartProp release artifact contract', () => {
     }))).toThrow('environment or authentication artifact');
   });
 
-  test('rejects an empty compiled artifact', () => {
-    expect(() => validManifest(makeArchive(validEntries()), makeBuildArtifact('')))
-      .toThrow('build artifact must not be empty');
+  test('rejects a runtime payload without a usable build ID', () => {
+    expect(() => validManifest(makeArchive(validEntries()), makeBuildArtifact({ '.next/BUILD_ID': '' })))
+      .toThrow('BUILD_ID must not be empty');
   });
 
   test('binds and revalidates the observed host identity', () => {

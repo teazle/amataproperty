@@ -84,6 +84,8 @@ export type WebhookSupabaseClient = NewsletterOptOutClient & {
 };
 
 export type WebhookDependencies = {
+  authorizeRequest: (request: NextRequest) => Promise<WebhookAuthorizationFailure | null> | WebhookAuthorizationFailure | null;
+  trustedIngressProvider: 'openclaw';
   processInboundMessage: (input: {
     from: string;
     to?: string;
@@ -108,6 +110,15 @@ export type WebhookDependencies = {
   getSupabaseClient: () => WebhookSupabaseClient;
   recordOptOut: (input: Omit<RecordNewsletterOptOutInput, 'client'>) => Promise<void>;
 };
+
+export type WebhookAuthorizationFailure = {
+  status: 401 | 503;
+  error: string;
+};
+
+function openClawIsExplicitlySelected(): boolean {
+  return process.env.SMARTPROP_WHATSAPP_PROVIDER?.trim().toLowerCase() === 'openclaw';
+}
 
 async function resolveMessageLogDependencies(overrides: Partial<WebhookDependencies>) {
   const messageLog = overrides.normalizePhone && overrides.findLatestOutreach && overrides.logMessage
@@ -156,11 +167,22 @@ async function reconcileUnknownOutboundMessage(
 export function createWebhookHandler(overrides: Partial<WebhookDependencies> = {}) {
   return async function POST(request: NextRequest) {
     try {
-      const authorizationStatus = webhookAuthorizationStatus(request);
-      if (authorizationStatus) {
+      if (openClawIsExplicitlySelected() && overrides.trustedIngressProvider !== 'openclaw') {
+        return NextResponse.json({ error: 'WAHA ingress is disabled while OpenClaw is selected' }, { status: 503 });
+      }
+
+      const authorizationFailure = overrides.authorizeRequest
+        ? await overrides.authorizeRequest(request)
+        : (() => {
+          const status = webhookAuthorizationStatus(request);
+          return status
+            ? { status, error: status === 503 ? 'WAHA webhook secret is not configured' : 'Unauthorized' }
+            : null;
+        })();
+      if (authorizationFailure) {
         return NextResponse.json(
-          { error: authorizationStatus === 503 ? 'WAHA webhook secret is not configured' : 'Unauthorized' },
-          { status: authorizationStatus },
+          { error: authorizationFailure.error },
+          { status: authorizationFailure.status },
         );
       }
 

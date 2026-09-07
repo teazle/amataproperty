@@ -45,6 +45,7 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
   failed: number;
   skipped: number;
   errors: string[];
+  reconciliationRequired?: number;
 }> {
   const supabase = getSupabaseClient();
   const deliveryStore = dependencies.deliveryStore ?? createCustomerDeliveryStore(supabase);
@@ -55,6 +56,7 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
     failed: 0,
     skipped: 0,
     errors: [] as string[],
+    reconciliationRequired: 0,
   };
 
   // Try to acquire lock
@@ -171,8 +173,8 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
           continue;
         }
 
-        {
-          // Create outreach record
+        const reconciliationErrors: string[] = [];
+        try {
           const { error: outreachError } = await supabase
             .from('outreach')
             .insert({
@@ -183,12 +185,12 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
               message_text: `Viewing request for ${propertyTitle}`,
               wa_conversation_id: result.messageId,
             });
+          if (outreachError) throw outreachError;
+        } catch (error) {
+          reconciliationErrors.push(`Accepted viewing delivery ${listing.id} requires reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+        }
 
-          if (outreachError) {
-            console.error(`⚠️  Failed to create outreach record:`, outreachError);
-          }
-
-          // Update listing status
+        try {
           const { error: updateError } = await supabase
             .from('listings')
             .update({
@@ -196,12 +198,18 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
               viewing_requested_at: new Date().toISOString(),
             })
             .eq('id', listing.id);
+          if (updateError) throw updateError;
+        } catch (error) {
+          reconciliationErrors.push(`Accepted viewing delivery ${listing.id} requires reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+        }
 
-          if (updateError) {
-            console.error(`⚠️  Failed to update listing status:`, updateError);
-          }
-
-          results.sent++;
+        results.sent++;
+        if (reconciliationErrors.length > 0) {
+          results.success = false;
+          results.reconciliationRequired++;
+          results.errors.push(...reconciliationErrors);
+          for (const error of reconciliationErrors) console.error(error);
+        } else {
           console.log(`✅ [${JOB_NAME}] Message sent successfully (${results.sent}/${limit})`);
         }
 

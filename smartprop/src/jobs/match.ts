@@ -71,6 +71,8 @@ type OutreachProcessStats = {
   }>;
   wahaReady?: boolean;
   wahaError?: string;
+  reconciliationRequired?: number;
+  reconciliationErrors?: string[];
 };
 
 /**
@@ -259,6 +261,8 @@ export async function processOutreachMessages(
   const customerTransport = dependencies.customerTransport ?? createCustomerTextTransport();
   let sent = 0;
   let failed = 0;
+  let reconciliationRequired = 0;
+  const reconciliationErrors: string[] = [];
 
   // Process each message with delay between messages to avoid rate limiting
   for (let i = 0; i < queuedOutreach.length; i++) {
@@ -316,19 +320,24 @@ export async function processOutreachMessages(
 
     const timestamp = new Date().toISOString();
     const initialMessage = { role: 'user', message: result.messageText, timestamp };
-    const { error: updateError } = await supabase
-      .from('outreach')
-      .update({
-        status: 'sent',
-        message_text: result.messageText,
-        wa_conversation_id: JSON.stringify(result.messageId),
-        first_message_sent_at: timestamp,
-        conversation_history: [initialMessage]
-      })
-      .eq('id', outreach.id);
-    if (updateError) {
-      console.error(`Failed to update outreach status for ${outreach.id}:`, updateError);
-      failed++;
+    try {
+      const { error: updateError } = await supabase
+        .from('outreach')
+        .update({
+          status: 'sent',
+          message_text: result.messageText,
+          wa_conversation_id: JSON.stringify(result.messageId),
+          first_message_sent_at: timestamp,
+          conversation_history: [initialMessage]
+        })
+        .eq('id', outreach.id);
+      if (updateError) throw updateError;
+    } catch (error) {
+      const message = `Accepted outreach ${outreach.id} requires reconciliation: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(message);
+      reconciliationRequired++;
+      reconciliationErrors.push(message);
+      sent++;
       continue;
     }
 
@@ -352,7 +361,8 @@ export async function processOutreachMessages(
   return { 
     processed: queuedOutreach.length, 
     sent, 
-    failed 
+    failed,
+    ...(reconciliationRequired ? { reconciliationRequired, reconciliationErrors } : {}),
   };
 }
 
@@ -360,7 +370,11 @@ export async function processOutreachMessages(
  * Main matching job function
  * @param outreachLimit - Optional limit for outreach messages (defaults to 15 if not provided)
  */
-export async function runMatchingJob(outreachLimit?: number, options: MatchingJobOptions = {}): Promise<{
+export async function runMatchingJob(
+  outreachLimit?: number,
+  options: MatchingJobOptions = {},
+  dependencies: MatchingJobDependencies = {},
+): Promise<{
   success: boolean;
   message: string;
   dryRun?: boolean;
@@ -373,6 +387,7 @@ export async function runMatchingJob(outreachLimit?: number, options: MatchingJo
     messagesFailed: number;
     messagesQueued?: number;
     previewMessages?: number;
+    messagesReconciliationRequired?: number;
   };
 }> {
   try {
@@ -391,12 +406,18 @@ export async function runMatchingJob(outreachLimit?: number, options: MatchingJo
     console.log(`${options.dryRun ? 'Would create' : 'Created'} ${outreachEntries.length} new outreach entries`);
 
     // Process queued messages (use provided limit or default)
-    const messageStats = await processOutreachMessages(outreachLimit, undefined, options);
+    const messageStats = await processOutreachMessages(outreachLimit, undefined, options, dependencies);
     console.log(`${options.dryRun ? 'Would process' : 'Processed'} ${messageStats.processed} messages: ${messageStats.sent} sent, ${messageStats.failed} failed`);
+    const reconciliationRequired = messageStats.reconciliationRequired || 0;
+    const deliveryFailed = messageStats.failed > 0;
 
     return {
-      success: true,
-      message: options.dryRun ? 'Matching job dry-run completed successfully' : 'Matching job completed successfully',
+      success: !deliveryFailed && reconciliationRequired === 0,
+      message: reconciliationRequired > 0
+        ? 'Matching job completed with reconciliation required'
+        : deliveryFailed
+          ? 'Matching job completed with delivery failures'
+        : options.dryRun ? 'Matching job dry-run completed successfully' : 'Matching job completed successfully',
       dryRun: options.dryRun || undefined,
       stats: {
         listingsFound: listings.length,
@@ -406,7 +427,8 @@ export async function runMatchingJob(outreachLimit?: number, options: MatchingJo
         messagesSent: messageStats.sent,
         messagesFailed: messageStats.failed,
         messagesQueued: messageStats.queued,
-        previewMessages: messageStats.previews?.length
+        previewMessages: messageStats.previews?.length,
+        ...(reconciliationRequired ? { messagesReconciliationRequired: reconciliationRequired } : {}),
       }
     };
   } catch (error) {

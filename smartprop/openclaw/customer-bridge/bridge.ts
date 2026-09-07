@@ -55,7 +55,9 @@ export function createCustomerBridge(config: BridgeConfig, dependencies: Depende
 
     // content is the raw hook message; body can contain prepared model context.
     const raw = JSON.stringify({ version: 1, accountId: config.accountId, from: sender,
-      to: phone(config.selfNumber), body: event.content, messageId: event.messageId, timestamp: event.timestamp });
+      to: phone(config.selfNumber), body: event.content, messageId: event.messageId,
+      // OpenClaw hook milliseconds -> existing CRM/WAHA numeric seconds.
+      timestamp: Math.floor(event.timestamp! / 1000) });
     const timestamp = String(Math.floor(now() / 1000));
     const signature = createHmac('sha256', config.secret).update(`${timestamp}.${raw}`).digest('hex');
     try {

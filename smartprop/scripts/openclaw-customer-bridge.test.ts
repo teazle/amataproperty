@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { createCustomerBridge } from '../openclaw/customer-bridge/bridge';
 
 const config = { accountId: 'default', operatorNumbers: ['+6591111111'], customerNumbers: ['+6592222222'], endpoint: 'http://127.0.0.1:3000/api/wa/openclaw', secret: 'test-secret', selfNumber: '+6583333333' };
-const event = { messageId: 'provider-1', content: 'STOP', body: 'UNTRUSTED formatted prompt', channel: 'whatsapp', senderId: '+6592222222', timestamp: 1700000000, isGroup: false };
+const event = { messageId: 'provider-1', content: 'STOP', body: 'UNTRUSTED formatted prompt', channel: 'whatsapp', senderId: '+6592222222', timestamp: 1700000000123, isGroup: false };
 const ctx = { accountId: 'default', channelId: 'whatsapp', senderId: '+6592222222', messageId: 'provider-1' };
 
 test('operator continues normally while unknown customers and groups cannot reach operator model', async () => {

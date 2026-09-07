@@ -4,12 +4,10 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import {
-  generateCoBrokingInquiryMessage,
-  getWAHAReadiness,
-  sendCoBrokingInquiry
-} from '@/lib/wa/waha';
+import { generateCoBrokingInquiryMessage } from '@/lib/wa/waha';
 import { logWhatsAppMessage } from '@/lib/wa/message-log';
+import { createCustomerTextTransport, type CustomerTextTransport } from '../lib/wa/customer-transport';
+import { createCustomerDeliveryStore, type CustomerDeliveryStore } from '../lib/wa/customer-delivery-store';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
@@ -52,6 +50,11 @@ interface Outreach {
 type MatchingJobOptions = {
   dryRun?: boolean;
   preview?: boolean;
+};
+
+type MatchingJobDependencies = {
+  deliveryStore?: CustomerDeliveryStore;
+  customerTransport?: CustomerTextTransport;
 };
 
 type OutreachProcessStats = {
@@ -197,7 +200,8 @@ async function upsertOutreachEntries(
 export async function processOutreachMessages(
   limit: number = 15,
   delayBetweenMessages: number = 1000,
-  options: MatchingJobOptions = {}
+  options: MatchingJobOptions = {},
+  dependencies: MatchingJobDependencies = {}
 ): Promise<OutreachProcessStats> {
   // Ensure limit is within safe range (10-20 recommended by WAHA docs)
   const safeLimit = Math.max(1, Math.min(limit, 20));
@@ -251,19 +255,8 @@ export async function processOutreachMessages(
     };
   }
 
-  const waha = await getWAHAReadiness();
-  if (!waha.ready) {
-    console.warn(`WAHA is not ready; leaving ${queuedOutreach.length} outreach messages queued: ${waha.error || 'unknown readiness error'}`);
-    return {
-      processed: queuedOutreach.length,
-      sent: 0,
-      failed: 0,
-      queued: queuedOutreach.length,
-      wahaReady: false,
-      wahaError: waha.error || 'WAHA is not ready',
-    };
-  }
-
+  const deliveryStore = dependencies.deliveryStore ?? createCustomerDeliveryStore(supabase);
+  const customerTransport = dependencies.customerTransport ?? createCustomerTextTransport();
   let sent = 0;
   let failed = 0;
 
@@ -277,85 +270,83 @@ export async function processOutreachMessages(
       await new Promise(resolve => setTimeout(resolve, delayBetweenMessages));
     }
     
+    const key = `initial_cobroking:${outreach.agent_id}:${outreach.listing_id}`;
+    let token: string | null;
     try {
-      // Update status to 'sent' first
-      const { error: updateError } = await supabase
-        .from('outreach')
-        .update({ status: 'sent' })
-        .eq('id', outreach.id);
-
-      if (updateError) {
-        console.error(`Failed to update outreach status for ${outreach.id}:`, updateError);
-        failed++;
-        continue;
-      }
-
-      // Send co-broking inquiry via WhatsApp
-      try {
-        const result = await sendCoBrokingInquiry(
-          outreach.agents.phone,
-          outreach.agents.name,
-          outreach.listings.title || 'New Property',
-          outreach.listings.url
-        );
-
-        if (result.success) {
-          // Initialize conversation history with the initial message
-          const initialMessage = {
-            role: 'user',
-            message: result.messageText || 'Co-broking inquiry sent',
-            timestamp: new Date().toISOString()
-          };
-
-          // Update outreach record with message details and conversation history
-          await supabase
-            .from('outreach')
-            .update({ 
-              status: 'sent',
-              message_text: result.messageText || 'Co-broking inquiry sent',
-              wa_conversation_id: result.messageId ? JSON.stringify(result.messageId) : null,
-              first_message_sent_at: new Date().toISOString(),
-              conversation_history: [initialMessage]
-            })
-            .eq('id', outreach.id);
-
-          await logWhatsAppMessage({
-            outreachId: outreach.id,
-            agentId: outreach.agent_id,
-            direction: 'outbound',
-            phone: outreach.agents.phone,
-            wahaMessageId: result.messageId || null,
-            body: result.messageText || 'Co-broking inquiry sent',
-            rawPayload: result,
-          });
-
-          console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
-          sent++;
-        } else {
-          throw new Error(result.error || 'Failed to send message');
-        }
-      } catch (error) {
-        console.error(`❌ Failed to send WhatsApp message to ${outreach.agents.phone}:`, error);
-        
-        // Update status to 'failed'
-        await supabase
-          .from('outreach')
-          .update({ status: 'failed' })
-          .eq('id', outreach.id);
-        
-        failed++;
-      }
+      token = await deliveryStore.claim({ key, purpose: 'initial_cobroking', recipient: outreach.agents.phone });
     } catch (error) {
-      console.error(`❌ Error processing outreach ${outreach.id}:`, error);
-      
-      // Update status to 'failed'
-      await supabase
-        .from('outreach')
-        .update({ status: 'failed' })
-        .eq('id', outreach.id);
-      
+      console.error(`❌ Failed to claim outreach ${outreach.id}:`, error);
       failed++;
+      continue;
     }
+    if (!token) continue;
+
+    const message = generateCoBrokingInquiryMessage(
+      outreach.agents.name,
+      outreach.listings.title || 'New Property',
+      outreach.listings.url
+    );
+    let result: Awaited<ReturnType<CustomerTextTransport['sendText']>>;
+    try {
+      result = await customerTransport.sendText({ to: outreach.agents.phone, text: message, purpose: 'initial_cobroking' });
+    } catch (error) {
+      result = { outcome: 'unknown', provider: 'unknown', error: error instanceof Error ? error.message : String(error) };
+    }
+
+    let finalized = false;
+    try {
+      finalized = await deliveryStore.finish({
+        key,
+        token,
+        outcome: result.outcome,
+        provider: result.provider,
+        ...(result.outcome === 'accepted' ? { messageId: result.messageId } : { error: result.error }),
+      });
+    } catch (error) {
+      console.error(`❌ Failed to finalize outreach ${outreach.id}:`, error);
+    }
+    if (!finalized) {
+      failed++;
+      continue;
+    }
+    if (result.outcome !== 'accepted' || !result.messageId.trim()) {
+      if (result.outcome !== 'blocked') failed++;
+      continue;
+    }
+
+    const timestamp = new Date().toISOString();
+    const initialMessage = { role: 'user', message: result.messageText, timestamp };
+    const { error: updateError } = await supabase
+      .from('outreach')
+      .update({
+        status: 'sent',
+        message_text: result.messageText,
+        wa_conversation_id: JSON.stringify(result.messageId),
+        first_message_sent_at: timestamp,
+        conversation_history: [initialMessage]
+      })
+      .eq('id', outreach.id);
+    if (updateError) {
+      console.error(`Failed to update outreach status for ${outreach.id}:`, updateError);
+      failed++;
+      continue;
+    }
+
+    try {
+      await logWhatsAppMessage({
+        outreachId: outreach.id,
+        agentId: outreach.agent_id,
+        direction: 'outbound',
+        phone: outreach.agents.phone,
+        wahaMessageId: result.messageId,
+        body: result.messageText,
+        rawPayload: result,
+      });
+    } catch (error) {
+      console.error(`⚠️ Failed to log accepted outreach ${outreach.id}:`, error);
+    }
+    console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
+    sent++;
   }
 
   return { 

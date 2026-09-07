@@ -5,9 +5,11 @@
  * for newly scraped listings that haven't been contacted yet.
  */
 
-import { sendViewingRequest } from '@/lib/wa/waha';
+import { generateViewingRequestMessage } from '@/lib/wa/waha';
 import { getSupabaseClient } from '@/workers/supa';
 import { advisoryUnlock,tryAdvisoryLock } from './lock';
+import { createCustomerTextTransport, type CustomerTextTransport } from '../lib/wa/customer-transport';
+import { createCustomerDeliveryStore, type CustomerDeliveryStore } from '../lib/wa/customer-delivery-store';
 
 const JOB_NAME = 'viewing-request';
 const _LOCK_DURATION_MS = 5 * 60 * 1000; // 5 minutes
@@ -24,6 +26,11 @@ interface ListingWithAgent {
   } | null;
 }
 
+type ViewingRequestDependencies = {
+  deliveryStore?: CustomerDeliveryStore;
+  customerTransport?: CustomerTextTransport;
+};
+
 /**
  * Process listings that need viewing timeslot requests
  * - Only sends to listings with status 'pending'
@@ -32,7 +39,7 @@ interface ListingWithAgent {
  * 
  * @param limit - Maximum number of messages to send per run (default: 10)
  */
-export async function sendViewingRequests(limit: number = 10): Promise<{
+export async function sendViewingRequests(limit: number = 10, dependencies: ViewingRequestDependencies = {}): Promise<{
   success: boolean;
   sent: number;
   failed: number;
@@ -40,6 +47,8 @@ export async function sendViewingRequests(limit: number = 10): Promise<{
   errors: string[];
 }> {
   const supabase = getSupabaseClient();
+  const deliveryStore = dependencies.deliveryStore ?? createCustomerDeliveryStore(supabase);
+  const customerTransport = dependencies.customerTransport ?? createCustomerTextTransport();
   const results = {
     success: true,
     sent: 0,
@@ -112,14 +121,57 @@ export async function sendViewingRequests(limit: number = 10): Promise<{
         console.log(`📤 [${JOB_NAME}] Sending request for: ${propertyTitle}`);
         console.log(`   👤 Agent: ${agentName} (${agentPhone})`);
 
-        // Send the viewing request
-        const result = await sendViewingRequest(
-          agentPhone,
-          agentName,
-          propertyTitle
-        );
+        const key = `viewing_request:${listing.id}`;
+        let token: string | null;
+        try {
+          token = await deliveryStore.claim({ key, purpose: 'viewing_request', recipient: agentPhone });
+        } catch (error) {
+          results.failed++;
+          results.errors.push(`Failed to claim viewing request for ${listing.id}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+        if (!token) {
+          results.skipped++;
+          continue;
+        }
 
-        if (result.success) {
+        const message = generateViewingRequestMessage(agentName, propertyTitle);
+        let result: Awaited<ReturnType<CustomerTextTransport['sendText']>>;
+        try {
+          result = await customerTransport.sendText({ to: agentPhone, text: message, purpose: 'viewing_request' });
+        } catch (error) {
+          result = { outcome: 'unknown', provider: 'unknown', error: error instanceof Error ? error.message : String(error) };
+        }
+
+        let finalized = false;
+        try {
+          finalized = await deliveryStore.finish({
+            key,
+            token,
+            outcome: result.outcome,
+            provider: result.provider,
+            ...(result.outcome === 'accepted' ? { messageId: result.messageId } : { error: result.error }),
+          });
+        } catch (error) {
+          results.failed++;
+          results.errors.push(`Failed to finalize viewing request for ${listing.id}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+        if (!finalized) {
+          results.failed++;
+          results.errors.push(`Viewing request finalization was not accepted for ${listing.id}`);
+          continue;
+        }
+        if (result.outcome !== 'accepted' || !result.messageId.trim()) {
+          if (result.outcome === 'blocked') results.skipped++;
+          else {
+            results.failed++;
+            results.errors.push(`Failed to send to ${agentPhone}: ${result.outcome === 'accepted' ? 'provider accepted without a message ID' : result.error}`);
+          }
+          continue;
+        }
+
+        {
           // Create outreach record
           const { error: outreachError } = await supabase
             .from('outreach')
@@ -151,17 +203,6 @@ export async function sendViewingRequests(limit: number = 10): Promise<{
 
           results.sent++;
           console.log(`✅ [${JOB_NAME}] Message sent successfully (${results.sent}/${limit})`);
-        } else {
-          results.failed++;
-          const errorMsg = `Failed to send to ${agentPhone}: ${result.error}`;
-          results.errors.push(errorMsg);
-          console.error(`❌ [${JOB_NAME}] ${errorMsg}`);
-
-          // Update listing status to failed
-          await supabase
-            .from('listings')
-            .update({ viewing_status: 'failed' })
-            .eq('id', listing.id);
         }
 
         // Small delay to avoid rate limiting (1 second between messages)
@@ -192,4 +233,3 @@ export async function sendViewingRequests(limit: number = 10): Promise<{
     await advisoryUnlock(lockKey);
   }
 }
-

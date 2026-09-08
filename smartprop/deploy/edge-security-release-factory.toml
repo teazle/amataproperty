@@ -34,3 +34,36 @@ component_inputs = ["smartprop/deploy/edge_security_*.py", "smartprop/deploy/edg
 artifacts = ["web_edge_configuration"]
 consumers = ["web_edge"]
 smoke = [["smartprop/scripts/edge-security-verify.py"]]
+
+# These consumers have no edge-release artifact and cannot be changed by this route.
+[[rules]]
+id = "main_app"
+patterns = ["smartprop/src/**"]
+component_inputs = ["smartprop/src/**"]
+artifacts = []
+consumers = ["main_app"]
+smoke = []
+
+[[rules]]
+id = "scraper_worker"
+patterns = ["smartprop/scripts/scraper-worker.ts"]
+component_inputs = ["smartprop/scripts/scraper-worker.ts"]
+artifacts = []
+consumers = ["scraper_worker"]
+smoke = []
+
+[[rules]]
+id = "daily_report"
+patterns = ["smartprop/scripts/smartprop-daily-report.ts"]
+component_inputs = ["smartprop/scripts/smartprop-daily-report.ts"]
+artifacts = []
+consumers = ["daily_report"]
+smoke = []
+
+[[rules]]
+id = "public_site"
+patterns = ["landing/**"]
+component_inputs = ["landing/**"]
+artifacts = []
+consumers = ["public_site"]
+smoke = []

@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { ADMIN_SESSION_COOKIE, isValidAdminSession } from "@/lib/admin-auth";
 import { getPublicOrigin } from "@/lib/public-origin";
 
-const PUBLIC_ADMIN_API_PREFIX = "/api/admin/auth";
+const PUBLIC_API_PATHS = new Set([
+  "/api/admin/auth/login",
+  "/api/admin/auth/logout",
+  "/api/health",
+  "/api/public/leads",
+  "/api/sign/submit",
+  "/api/wa/openclaw",
+  "/api/wa/webhook",
+]);
 
 export async function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
@@ -11,7 +19,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname.startsWith(PUBLIC_ADMIN_API_PREFIX)) {
+  if (PUBLIC_API_PATHS.has(pathname)) {
     return NextResponse.next();
   }
 
@@ -34,18 +42,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     "/admin/:path*",
-    "/api/admin/:path*",
-    "/api/agents/:path*",
-    "/api/articles/:path*",
-    "/api/conversations/:path*",
-    "/api/jobs/:path*",
-    "/api/linkedin/:path*",
-    "/api/listings/:path*",
-    "/api/outreach/:path*",
-    "/api/scheduler/:path*",
-    "/api/scraper/:path*",
-    "/api/services/:path*",
-    "/api/viewings/:path*",
-    "/api/wa/send/:path*",
+    "/api/:path*",
   ],
 };

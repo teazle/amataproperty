@@ -68,12 +68,38 @@ describe("admin authentication", () => {
     setConfiguration("configured-admin-password", "configured-session-secret");
 
     const response = await login("configured-admin-password");
-    const token = await createAdminSessionToken();
+    const setCookie = response.headers.get("set-cookie") || "";
+    const token = setCookie.match(/viewproperty_admin_session=([^;]+)/)?.[1];
 
     expect(response.status).toBe(200);
     expect(token).toBeString();
-    expect(response.headers.get("set-cookie")).toContain(token!);
     expect(await isValidAdminSession(token)).toBe(true);
+  });
+
+  test("rejects an expired signed session", async () => {
+    setConfiguration("configured-admin-password", "configured-session-secret");
+
+    const token = await createAdminSessionToken(1_000_000);
+
+    expect(await isValidAdminSession(token, 1_000_000 + (60 * 60 * 24 * 7) + 1)).toBe(false);
+  });
+
+  test("rejects a tampered session", async () => {
+    setConfiguration("configured-admin-password", "configured-session-secret");
+
+    const token = await createAdminSessionToken(1_000_000);
+    const tampered = `${token!.slice(0, -1)}${token!.endsWith("a") ? "b" : "a"}`;
+
+    expect(await isValidAdminSession(tampered, 1_000_000)).toBe(false);
+  });
+
+  test("issues a fresh session nonce for each successful login", async () => {
+    setConfiguration("configured-admin-password", "configured-session-secret");
+
+    const first = await createAdminSessionToken(1_000_000);
+    const second = await createAdminSessionToken(1_000_000);
+
+    expect(first).not.toBe(second);
   });
 
   test("rejects the former built-in fallback while configured credentials are present", async () => {

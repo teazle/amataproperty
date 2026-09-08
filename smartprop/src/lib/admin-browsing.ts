@@ -3,6 +3,7 @@ export const MAX_BROWSE_PAGE_SIZE = 100;
 
 export type FilterQuery = {
   or: (filters: string) => FilterQuery;
+  ilike: (column: string, value: string) => FilterQuery;
   eq: (column: string, value: string) => FilterQuery;
   in: (column: string, values: string[]) => FilterQuery;
   is: (column: string, value: null) => FilterQuery;
@@ -83,15 +84,13 @@ export function districtAliases(district: string): string[] {
   return [...new Set([`D${padded}`, padded, `D${numeric}`, numeric])];
 }
 
-function listingSearchFilter(search: string, agentIds: string[]): string {
-  const matchingAgentIds = agentIds.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
-  const agentCondition = matchingAgentIds.length > 0 ? `,agent_id.in.(${matchingAgentIds.join(',')})` : '';
-  return `title.ilike.%${search}%,address.ilike.%${search}%,district.ilike.%${search}%,property_type.ilike.%${search}%${agentCondition}`;
+function listingSearchFilter(search: string): string {
+  return `title.ilike.%${search}%,address.ilike.%${search}%,district.ilike.%${search}%,property_type.ilike.%${search}%,matched_agent.not.is.null`;
 }
 
-export function applyListingBrowseFilters(query: FilterQuery, params: ListingBrowseParams, agentIds: string[] = []): FilterQuery {
+export function applyListingBrowseFilters(query: FilterQuery, params: ListingBrowseParams): FilterQuery {
   if (params.search) {
-    query = query.or(listingSearchFilter(params.search, agentIds));
+    query = query.ilike('matched_agent.name', `%${params.search}%`).or(listingSearchFilter(params.search));
   }
   if (params.district === 'No District') {
     query = query.is('district', null);

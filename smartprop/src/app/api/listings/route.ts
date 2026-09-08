@@ -10,22 +10,12 @@ export async function GET(request: Request) {
     const params = parseListingBrowseParams(searchParams);
     const { page, limit } = params;
     const offset = (page - 1) * limit;
-    let matchingAgentIds: string[] = [];
-    if (params.search) {
-      const { data: matchingAgents, error: matchingAgentsError } = await supabase
-        .from('agents')
-        .select('id')
-        .ilike('name', `%${params.search}%`)
-        .limit(200);
-      if (matchingAgentsError) return NextResponse.json({ error: matchingAgentsError.message }, { status: 500 });
-      matchingAgentIds = (matchingAgents || []).map((agent) => agent.id);
-    }
 
     // Get total count
     let countQuery = supabase
       .from('listings')
-      .select('*', { count: 'exact', head: true });
-    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params, matchingAgentIds) as never;
+      .select('*, matched_agent:agents()', { count: 'exact', head: true });
+    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params) as never;
     const { count, error: countError } = await countQuery;
 
     if (countError) {
@@ -68,6 +58,7 @@ export async function GET(request: Request) {
           source_url,
           last_seen_at
         ),
+        matched_agent:agents(),
         outreach!left(
           id,
           status,
@@ -79,7 +70,7 @@ export async function GET(request: Request) {
         )
       `)
       .order('scraped_at', { ascending: false });
-    query = applyListingBrowseFilters(query as unknown as FilterQuery, params, matchingAgentIds) as never;
+    query = applyListingBrowseFilters(query as unknown as FilterQuery, params) as never;
     const { data, error } = await query.range(offset, offset + limit - 1);
 
     if (error) {

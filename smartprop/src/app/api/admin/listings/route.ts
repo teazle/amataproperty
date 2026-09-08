@@ -13,16 +13,6 @@ export async function GET(request: NextRequest) {
     const { page, limit } = params;
     
     const supabase = getSupabaseClient();
-    let matchingAgentIds: string[] = [];
-    if (params.search) {
-      const { data: matchingAgents, error: matchingAgentsError } = await supabase
-        .from('agents')
-        .select('id')
-        .ilike('name', `%${params.search}%`)
-        .limit(200);
-      if (matchingAgentsError) throw matchingAgentsError;
-      matchingAgentIds = (matchingAgents || []).map((agent) => agent.id);
-    }
     
     let query = supabase
       .from('listings')
@@ -33,11 +23,12 @@ export async function GET(request: NextRequest) {
           name,
           phone,
           agency
-        )
+        ),
+        matched_agent:agents()
       `)
       .order('scraped_at', { ascending: false });
 
-    query = applyListingBrowseFilters(query as unknown as FilterQuery, params, matchingAgentIds) as never;
+    query = applyListingBrowseFilters(query as unknown as FilterQuery, params) as never;
 
     // Apply pagination
     const from = (page - 1) * limit;
@@ -53,8 +44,8 @@ export async function GET(request: NextRequest) {
     // Get total count for pagination
     let countQuery = supabase
       .from('listings')
-      .select('*', { count: 'exact', head: true });
-    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params, matchingAgentIds) as never;
+      .select('*, matched_agent:agents()', { count: 'exact', head: true });
+    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params) as never;
 
     const { count: totalCount } = await countQuery;
 

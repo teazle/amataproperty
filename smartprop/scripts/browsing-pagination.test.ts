@@ -19,6 +19,7 @@ type Listing = {
   baths: number | null;
   property_type: string | null;
   agent_id: string | null;
+  matched_agent: { name: string } | null;
 };
 
 type Agent = {
@@ -44,8 +45,19 @@ class InMemoryBrowseQuery<T extends Record<string, unknown>> {
     this.rows = this.rows.filter((row) => conditions.some(({ field, operator, value }) => {
       if (operator === 'ilike') return String(row[field] ?? '').toLowerCase().includes(value.replaceAll('%', '').toLowerCase());
       if (operator === 'in') return value.slice(1, -1).split(',').includes(String(row[field] ?? ''));
+      if (operator === 'not' && value === 'is.null') return row[field] !== null;
       return false;
     }));
+    return this;
+  }
+
+  ilike(field: string, value: string) {
+    if (field !== 'matched_agent.name') return this;
+    const search = value.replaceAll('%', '').toLowerCase();
+    this.rows = this.rows.map((row) => {
+      const matchedAgent = row.matched_agent as { name?: string } | null;
+      return { ...row, matched_agent: matchedAgent?.name?.toLowerCase().includes(search) ? matchedAgent : null };
+    });
     return this;
   }
 
@@ -94,6 +106,7 @@ const listings: Listing[] = Array.from({ length: 1200 }, (_, index) => ({
   baths: index % 3 + 1,
   property_type: 'Condominium',
   agent_id: index === 1000 ? '00000000-0000-4000-8000-000000000001' : null,
+  matched_agent: index === 1000 ? { name: 'Jasmine Tan' } : null,
 }));
 
 const agents: Agent[] = Array.from({ length: 4449 }, (_, index) => ({
@@ -116,7 +129,7 @@ describe('admin browsing query semantics', () => {
 
   test('keeps an agent-name search result when its listing text does not contain the agent name', () => {
     const params = parseListingBrowseParams(new URLSearchParams('search=Jasmine Tan'));
-    const query = applyListingBrowseFilters(new InMemoryBrowseQuery(listings), params, ['00000000-0000-4000-8000-000000000001']);
+    const query = applyListingBrowseFilters(new InMemoryBrowseQuery(listings), params);
 
     expect(query.count()).toBe(1);
     expect(query.range(0, 49)[0]?.id).toBe('listing-1001');

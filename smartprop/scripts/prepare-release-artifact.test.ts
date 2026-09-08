@@ -67,6 +67,25 @@ function makeRepository(extraFiles: Record<string, string> = {}): { root: string
   return { root, commit };
 }
 
+function makeNestedSourceRepository(): { root: string; commit: string } {
+  const root = mkdtempSync(join(tmpdir(), 'smartprop-release-packager-nested-'));
+  temporaryDirectories.push(root);
+  for (const file of requiredInputs) {
+    const path = join(root, 'smartprop', file);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, `committed:${file}\n`);
+  }
+  writeFileSync(join(root, 'README.md'), 'outer repository content\n');
+  run(['git', 'init', '--quiet'], root);
+  run(['git', 'config', 'user.email', 'release-test@example.invalid'], root);
+  run(['git', 'config', 'user.name', 'Release Test'], root);
+  run(['git', 'add', '.'], root);
+  run(['git', 'commit', '--quiet', '-m', 'nested release fixture'], root);
+  const commit = Bun.spawnSync({ cmd: ['git', 'rev-parse', 'HEAD'], cwd: root, stdout: 'pipe' })
+    .stdout.toString().trim();
+  return { root, commit };
+}
+
 function invoke(options: {
   repository: string;
   sourceCommit: string;
@@ -74,6 +93,7 @@ function invoke(options: {
   manifest: string;
   buildArtifact: string;
   rollback?: string;
+  sourceDirectory?: string;
 }) {
   return Bun.spawnSync({
     cmd: packagingCommand(options),
@@ -90,11 +110,12 @@ function packagingCommand(options: {
   manifest: string;
   buildArtifact: string;
   rollback?: string;
+  sourceDirectory?: string;
 }): string[] {
   return [
     'bun', scriptPath,
     '--repo', options.repository,
-    '--source-dir', '.',
+    '--source-dir', options.sourceDirectory ?? '.',
     '--source-commit', options.sourceCommit,
     '--source-archive', options.sourceArchive,
     '--manifest', options.manifest,
@@ -138,6 +159,29 @@ afterEach(() => {
 });
 
 describe('prepare-release-artifact CLI', () => {
+  test('packages a committed nested source directory', () => {
+    const { root, commit } = makeNestedSourceRepository();
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
+    temporaryDirectories.push(output);
+    const buildArtifact = join(output, 'next-build.zip');
+    const sourceArchive = join(output, 'smartprop-source.zip');
+    writeRuntimePayload(buildArtifact);
+
+    const result = invoke({
+      repository: root,
+      sourceCommit: commit,
+      sourceDirectory: 'smartprop',
+      sourceArchive,
+      manifest: join(output, 'manifest.json'),
+      buildArtifact,
+      rollback: rollbackSha256,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(new AdmZip(sourceArchive).getEntries().filter((entry) => !entry.isDirectory).map((entry) => entry.entryName).sort())
+      .toEqual(requiredInputs.slice().sort());
+  });
+
   test('omits historical browser profiles, local secrets and unrelated evidence from the application source', () => {
     const { root, commit } = makeRepository({
       '.playwright/linkedin-profile/Default/Cookies': 'synthetic historical cookie bytes',

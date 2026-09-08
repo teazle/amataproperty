@@ -123,7 +123,11 @@ function sourceTree(repository: string, sourceDirectory: string): string {
 function assertCommittedTree(repository: string, sourceCommit: string, sourceDirectory: string): string {
   git(repository, ['cat-file', '-e', `${sourceCommit}^{commit}`]);
   const tree = sourceDirectory === '.' ? sourceCommit : `${sourceCommit}:${sourceDirectory}`;
-  git(repository, ['cat-file', '-e', `${tree}^{tree}`]);
+  const treeObject = sourceDirectory === '.' ? `${tree}^{tree}` : tree;
+  git(repository, ['cat-file', '-e', treeObject]);
+  if (git(repository, ['cat-file', '-t', treeObject]) !== 'tree') {
+    fail('--source-dir must resolve to a committed tree');
+  }
   return tree;
 }
 

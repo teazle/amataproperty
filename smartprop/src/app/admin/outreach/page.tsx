@@ -48,6 +48,9 @@ export default function OutreachPage() {
   const [preview, setPreview] = useState<PreviewCandidate[]>([]);
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState(false);
+  const [selectedOutreachIds, setSelectedOutreachIds] = useState<Set<string>>(new Set());
+  const [sendConfirmed, setSendConfirmed] = useState(false);
+  const [sendingSelected, setSendingSelected] = useState(false);
 
   const loadOutreach = async () => {
     setLoading(true);
@@ -129,6 +132,40 @@ export default function OutreachPage() {
     }
   };
 
+  const toggleOutreachSelection = (outreachId: string, checked: boolean) => {
+    setSelectedOutreachIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(outreachId);
+      else next.delete(outreachId);
+      return next;
+    });
+    setSendConfirmed(false);
+  };
+
+  const sendSelected = async () => {
+    const confirmedOutreachIds = Array.from(selectedOutreachIds);
+    if (!sendConfirmed || confirmedOutreachIds.length === 0) return;
+
+    setSendingSelected(true);
+    try {
+      const response = await fetch('/api/outreach/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, confirmedOutreachIds }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to process selected outreach');
+      setSelectedOutreachIds(new Set());
+      setSendConfirmed(false);
+      toast.success(`Processed ${data.stats?.processed || 0} selected rows: ${data.stats?.sent || 0} accepted, ${data.stats?.failed || 0} failed.`);
+      await loadOutreach();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to process selected outreach');
+    } finally {
+      setSendingSelected(false);
+    }
+  };
+
   return (
     <main className="container mx-auto space-y-6 p-6">
       <Card>
@@ -197,16 +234,17 @@ export default function OutreachPage() {
 
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader><TableRow><TableHead>Listing</TableHead><TableHead>Agent</TableHead><TableHead>Status</TableHead><TableHead>Prepared</TableHead><TableHead>Last activity</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Select</TableHead><TableHead>Listing</TableHead><TableHead>Agent</TableHead><TableHead>Status</TableHead><TableHead>Prepared</TableHead><TableHead>Last activity</TableHead></TableRow></TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={5} className="py-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="py-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></TableCell></TableRow>
                 ) : rows.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No outreach records on this page.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No outreach records on this page.</TableCell></TableRow>
                 ) : rows.map((row) => (
                   <TableRow key={row.id}>
+                    <TableCell><Checkbox checked={selectedOutreachIds.has(row.id)} disabled={row.status !== 'queued'} onCheckedChange={(checked) => toggleOutreachSelection(row.id, checked === true)} /></TableCell>
                     <TableCell><div className="font-medium">{row.listings?.title || 'Listing unavailable'}</div><div className="text-xs text-muted-foreground">{row.listings?.district || '—'}</div></TableCell>
-                    <TableCell><div>{row.agents?.name || 'Agent unavailable'}</div><div className="text-xs text-muted-foreground">{row.agents?.agency || '—'}</div></TableCell>
+                    <TableCell><div>{row.agents?.name || 'Agent unavailable'}</div><div className="text-xs text-muted-foreground">{row.agents?.agency || '—'} · {row.agents?.phone || 'No phone'}</div></TableCell>
                     <TableCell><Badge variant="outline">{row.status}</Badge></TableCell>
                     <TableCell>{formatDate(row.created_at)}</TableCell>
                     <TableCell>{formatDate(row.last_message_at || row.first_message_sent_at)}</TableCell>
@@ -215,6 +253,20 @@ export default function OutreachPage() {
               </TableBody>
             </Table>
           </div>
+
+          {selectedOutreachIds.size > 0 && (
+            <div className="space-y-3 rounded-md border p-4">
+              <p className="text-sm text-muted-foreground">Only selected queued rows can be sent. The server rechecks listing ownership and opt-out status, then claims delivery before contacting the provider.</p>
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
+                <Checkbox checked={sendConfirmed} onCheckedChange={(checked) => setSendConfirmed(checked === true)} />
+                I confirm the selected recipients should receive the prepared outreach message.
+              </label>
+              <Button onClick={sendSelected} disabled={!sendConfirmed || sendingSelected}>
+                {sendingSelected && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Send selected outreach ({selectedOutreachIds.size})
+              </Button>
+            </div>
+          )}
 
           <div className="flex items-center justify-between text-sm">
             <span>Page {page} of {Math.max(totalPages, 1)}</span>

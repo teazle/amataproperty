@@ -13,12 +13,12 @@ const { POST: sendManualMessage } = await import('../src/app/api/outreach/send-m
 const { POST: resetOutreach } = await import('../src/app/api/outreach/reset/route');
 
 describe('launch outreach guard', () => {
-  test('does not process queued outreach at launch', async () => {
+  test('does not process queued outreach without selected confirmed rows', async () => {
     const response = await processOutreach(new NextRequest('http://localhost/api/outreach/process', {
       method: 'POST', body: '{}',
     }));
 
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
   });
 
   test('does not allow a manual send bypass at launch', async () => {

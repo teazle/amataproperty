@@ -37,6 +37,7 @@ type MatchingJobOptions = {
   dryRun?: boolean;
   preview?: boolean;
   confirmedListingIds?: string[];
+  selectedOutreachIds?: string[];
 };
 
 type MatchingJobDependencies = {
@@ -180,6 +181,11 @@ export async function processOutreachMessages(
   options: MatchingJobOptions = {},
   dependencies: MatchingJobDependencies = {}
 ): Promise<OutreachProcessStats> {
+  const selectedOutreachIds = Array.from(new Set(options.selectedOutreachIds || []));
+  if (selectedOutreachIds.length === 0) {
+    return { processed: 0, sent: 0, failed: 0, dryRun: options.dryRun || undefined };
+  }
+
   // Ensure limit is within safe range (10-20 recommended by WAHA docs)
   const safeLimit = Math.max(1, Math.min(limit, 20));
   
@@ -193,10 +199,11 @@ export async function processOutreachMessages(
     .select(`
       *,
       agents!inner(name, phone),
-      listings!inner(title, price, district, property_type, url)
+      listings!inner(agent_id, title, price, district, property_type, url)
     `)
     .eq('status', 'queued')
     .eq('channel', 'whatsapp')
+    .in('id', selectedOutreachIds)
     .limit(safeLimit)
     .order('created_at', { ascending: true });
 
@@ -210,9 +217,32 @@ export async function processOutreachMessages(
     return { processed: 0, sent: 0, failed: 0, dryRun: options.dryRun || undefined };
   }
 
+  const selectedOwnerRows = queuedOutreach.filter((outreach) => outreach.listings.agent_id === outreach.agent_id);
+  const selectedAgentIds = Array.from(new Set(selectedOwnerRows.map((outreach) => outreach.agent_id)));
+  const { data: optedOutRows, error: optedOutError } = selectedAgentIds.length === 0
+    ? { data: [], error: null }
+    : await supabase
+      .from('outreach')
+      .select('agent_id')
+      .in('agent_id', selectedAgentIds)
+      .eq('status', 'opted_out')
+      .limit(1000)
+      .order('created_at', { ascending: false });
+
+  if (optedOutError) {
+    throw new Error(`Failed to recheck opted-out agents: ${optedOutError.message}`);
+  }
+
+  const optedOutAgentIds = new Set((optedOutRows || []).map((row) => row.agent_id));
+  const eligibleOutreach = selectedOwnerRows.filter((outreach) => !optedOutAgentIds.has(outreach.agent_id));
+
+  if (eligibleOutreach.length === 0) {
+    return { processed: 0, sent: 0, failed: 0, dryRun: options.dryRun || undefined };
+  }
+
   if (options.dryRun) {
-    console.log(`[dry-run] Would process ${queuedOutreach.length} queued outreach messages`);
-    const previews = queuedOutreach.map((outreach) => ({
+    console.log(`[dry-run] Would process ${eligibleOutreach.length} selected queued outreach messages`);
+    const previews = eligibleOutreach.map((outreach) => ({
       outreachId: outreach.id,
       agentName: outreach.agents.name,
       phone: outreach.agents.phone,
@@ -224,7 +254,7 @@ export async function processOutreachMessages(
     }));
 
     return {
-      processed: queuedOutreach.length,
+      processed: eligibleOutreach.length,
       sent: 0,
       failed: 0,
       dryRun: true,
@@ -240,8 +270,8 @@ export async function processOutreachMessages(
   const reconciliationErrors: string[] = [];
 
   // Process each message with delay between messages to avoid rate limiting
-  for (let i = 0; i < queuedOutreach.length; i++) {
-    const outreach = queuedOutreach[i];
+  for (let i = 0; i < eligibleOutreach.length; i++) {
+    const outreach = eligibleOutreach[i];
     
     // Add delay before sending (except for the first message)
     if (i > 0 && delayBetweenMessages > 0) {
@@ -343,12 +373,12 @@ export async function processOutreachMessages(
       sent++;
       continue;
     }
-    console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${queuedOutreach.length})`);
+    console.log(`✅ WhatsApp message sent successfully to ${outreach.agents.phone} (${i + 1}/${eligibleOutreach.length})`);
     sent++;
   }
 
   return { 
-    processed: queuedOutreach.length, 
+    processed: eligibleOutreach.length,
     sent, 
     failed,
     ...(reconciliationRequired ? { reconciliationRequired, reconciliationErrors } : {}),

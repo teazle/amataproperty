@@ -20,14 +20,33 @@ let defaultCustomerTransport: { sendText: (input: Record<string, string>) => Pro
 function matchDatabase() {
   return {
     from: (table: string) => ({
-      select: () => ({
-        eq() { return this; },
-        gte() { return this; },
-        lte() { return this; },
-        in() { return this; },
-        limit() { return this; },
-        order: async () => ({ data: table === 'outreach' ? matchRows : [], error: null }),
-      }),
+      select: () => {
+        let status: string | undefined;
+        let selectedIds: string[] | undefined;
+        const query = {
+          eq(column: string, value: string) {
+            if (column === 'status') status = value;
+            return query;
+          },
+          gte() { return query; },
+          lte() { return query; },
+          in(column: string, values: string[]) {
+            if (column === 'id') selectedIds = values;
+            return query;
+          },
+          limit() { return query; },
+          order: async () => ({
+            data: table === 'outreach'
+              ? matchRows.filter((row) =>
+                (!status || row.status === status)
+                && (!selectedIds || selectedIds.includes(String(row.id))),
+              )
+              : [],
+            error: null,
+          }),
+        };
+        return query;
+      },
       update: (value: Record<string, unknown>) => ({
         eq: async () => {
           matchUpdates.push({ table, ...value });
@@ -104,8 +123,9 @@ function initialOutreach(id: string) {
     id,
     agent_id: 'agent-1',
     listing_id: 'listing-1',
+    status: 'queued',
     agents: { name: 'Jane Tan', phone: '91234567' },
-    listings: { title: 'The Arcadia', url: 'https://propertyguru.com.sg/listing/1' },
+    listings: { agent_id: 'agent-1', title: 'The Arcadia', url: 'https://propertyguru.com.sg/listing/1' },
   };
 }
 
@@ -180,8 +200,8 @@ describe('customer delivery claims in remaining jobs', () => {
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-initial-1', messageText: 'initial message' }]);
 
     await Promise.all([
-      processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport }),
-      processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport }),
+      processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1', 'outreach-2'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport }),
+      processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1', 'outreach-2'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport }),
     ]);
 
     expect(selected.calls).toEqual([expect.objectContaining({ purpose: 'initial_cobroking', to: '91234567' })]);
@@ -195,13 +215,43 @@ describe('customer delivery claims in remaining jobs', () => {
     const delivery = sharedStore();
     const selected = transport([{ outcome: 'unknown', provider: 'waha', error: 'provider timed out after send began' }]);
 
-    await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
-    await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
     expect(selected.calls).toHaveLength(1);
     expect(delivery.finishes).toEqual([expect.objectContaining({ outcome: 'unknown' })]);
     expect(matchUpdates).toEqual([]);
     expect(legacyCalls).toEqual([]);
+  });
+
+  test('selected outreach is not claimed when the listing agent opted out', async () => {
+    matchRows = [
+      initialOutreach('outreach-1'),
+      { id: 'outreach-opted-out', agent_id: 'agent-1', listing_id: 'older-listing', status: 'opted_out' },
+    ];
+    const delivery = sharedStore();
+    const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-should-not-send', messageText: 'initial message' }]);
+
+    const result = await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+
+    expect(result).toMatchObject({ processed: 0, sent: 0 });
+    expect(delivery.claims).toEqual([]);
+    expect(selected.calls).toEqual([]);
+  });
+
+  test('selected outreach is not claimed when its row does not match the listing owner', async () => {
+    matchRows = [{
+      ...initialOutreach('outreach-1'),
+      listings: { agent_id: 'other-agent', title: 'The Arcadia', url: 'https://propertyguru.com.sg/listing/1' },
+    }];
+    const delivery = sharedStore();
+    const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-should-not-send', messageText: 'initial message' }]);
+
+    const result = await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+
+    expect(result).toMatchObject({ processed: 0, sent: 0 });
+    expect(delivery.claims).toEqual([]);
+    expect(selected.calls).toEqual([]);
   });
 
   test('a failed viewing finalization leaves domain rows pending and prevents resend', async () => {
@@ -296,8 +346,8 @@ describe('customer delivery claims in remaining jobs', () => {
     const delivery = sharedStore();
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-initial-reconcile', messageText: 'initial message' }]);
 
-    const first = await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
-    await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    const first = await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
     expect(first).toMatchObject({ sent: 1, failed: 0, reconciliationRequired: 1 });
     expect(selected.calls).toHaveLength(1);
@@ -353,8 +403,8 @@ describe('customer delivery claims in remaining jobs', () => {
     matchRows = [initialOutreach('outreach-finalize')];
     const delivery = sharedStore({ finish: () => false });
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-finalize', messageText: 'initial message' }]);
-    const first = await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
-    await processOutreachMessages(10, 0, {}, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    const first = await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-finalize'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+    await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-finalize'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
     expect(first).toMatchObject({ sent: 1, failed: 1, reconciliationRequired: 1 });
     expect(selected.calls).toHaveLength(1);
     expect(matchUpdates).toEqual([]);

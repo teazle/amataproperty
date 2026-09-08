@@ -4,6 +4,7 @@ import {
   applyAgentBrowseFilters,
   applyListingBrowseFilters,
   getShowingRange,
+  mapAgentRelationCounts,
   parseAgentBrowseParams,
   parseListingBrowseParams,
 } from '../src/lib/admin-browsing';
@@ -142,5 +143,21 @@ describe('admin browsing query semantics', () => {
     expect(query.count()).toBe(1200);
     expect(query.range((params.page - 1) * params.limit, params.page * params.limit - 1)).toHaveLength(50);
     expect(getShowingRange({ total: 4449, page: 2, limit: 50, received: 50 })).toEqual({ start: 51, end: 100 });
+  });
+
+  test('maps embedded listing counts without inventing activity or outcome metrics', () => {
+    const fixtureAgent = mapAgentRelationCounts({
+      id: '00000000-0000-4000-8000-000000000908',
+      name: 'Fixture Agent',
+      listings: [{ count: 1 }],
+      outreach: [{ count: 1 }],
+      typically_co_brokes: true,
+    });
+
+    expect(fixtureAgent.listing_count).toBe(1);
+    expect(fixtureAgent.outreach_count).toBe(1);
+    expect(fixtureAgent.typically_co_brokes).toBe(true);
+    expect('active_conversations' in fixtureAgent).toBe(false);
+    expect('co_broking_stats' in fixtureAgent).toBe(false);
   });
 });

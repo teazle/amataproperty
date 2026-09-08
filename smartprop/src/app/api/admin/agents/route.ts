@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
-import { applyAgentBrowseFilters, FilterQuery, parseAgentBrowseParams } from '@/lib/admin-browsing';
+import { applyAgentBrowseFilters, FilterQuery, mapAgentRelationCounts, parseAgentBrowseParams } from '@/lib/admin-browsing';
 
 /**
  * GET /api/admin/agents
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     const { count: totalCount } = await countQuery;
 
     return NextResponse.json({ 
-      agents: agents || [], 
+      agents: (agents || []).map(mapAgentRelationCounts),
       pagination: {
         page,
         limit,

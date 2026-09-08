@@ -38,8 +38,8 @@ interface AgentWithStats {
   cea_reg_no?: string;
   source: string;
   last_seen_at: string;
-  total_listings?: number;
-  active_conversations?: number;
+  listing_count: number | null;
+  outreach_count: number | null;
   co_broking_stats?: {
     willing: number;
     not_willing: number;
@@ -107,8 +107,8 @@ export default function EnhancedAgentsPage() {
         agent.email || '',
         agent.agency || '',
         agent.source,
-        (agent.total_listings || 0).toString(),
-        agent.co_broking_stats?.success_rate ? `${(agent.co_broking_stats.success_rate * 100).toFixed(1)}%` : 'N/A',
+        agent.listing_count?.toString() || 'Unavailable',
+        agent.co_broking_stats?.success_rate ? `${(agent.co_broking_stats.success_rate * 100).toFixed(1)}%` : 'Unavailable',
         new Date(agent.last_seen_at).toLocaleDateString(),
       ])
     ].map(row => row.join(',')).join('\n');
@@ -126,7 +126,7 @@ export default function EnhancedAgentsPage() {
 
   const getCoBrokingRate = (agent: AgentWithStats) => {
     if (!agent.co_broking_stats || agent.co_broking_stats.total === 0) {
-      return { rate: 0, color: 'text-gray-500', bgColor: 'bg-gray-100' };
+      return null;
     }
 
     const rate = agent.co_broking_stats.success_rate;
@@ -156,17 +156,19 @@ export default function EnhancedAgentsPage() {
     }
   };
 
-  // Calculate analytics
+  const listingCountsAvailable = agents.every((agent) => agent.listing_count !== null);
+  const coBrokingRates = agents.map(getCoBrokingRate);
+  const averageCoBrokingRate = coBrokingRates.length > 0 && coBrokingRates.every((rate) => rate !== null)
+    ? coBrokingRates.reduce((totalRate, rate) => totalRate + rate!.rate, 0) / coBrokingRates.length
+    : null;
+
+  // Calculate current-page analytics only.
   const analytics = {
     totalAgents: agents.length,
-    withListings: agents.filter(agent => (agent.total_listings || 0) > 0).length,
-    activeConversations: agents.filter(agent => (agent.active_conversations || 0) > 0).length,
+    withListings: listingCountsAvailable ? agents.filter(agent => agent.listing_count! > 0).length : null,
     coBrokingWilling: agents.filter(agent => agent.typically_co_brokes === true).length,
     coBrokingNotWilling: agents.filter(agent => agent.typically_co_brokes === false).length,
-    averageCoBrokingRate: agents.reduce((acc, agent) => {
-      const rate = agent.co_broking_stats?.success_rate || 0;
-      return acc + rate;
-    }, 0) / agents.length || 0,
+    averageCoBrokingRate,
   };
 
   return (
@@ -199,13 +201,14 @@ export default function EnhancedAgentsPage() {
       </div>
 
       {/* Analytics Cards */}
+      <p className="text-sm text-gray-600">Analytics reflect the current page of results.</p>
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center space-x-2">
               <Users className="h-5 w-5 text-blue-500" />
               <div>
-                <p className="text-sm font-medium text-gray-600">Total Agents</p>
+                <p className="text-sm font-medium text-gray-600">Current-page Agents</p>
                 <p className="text-2xl font-bold">{analytics.totalAgents}</p>
               </div>
             </div>
@@ -218,7 +221,7 @@ export default function EnhancedAgentsPage() {
               <Target className="h-5 w-5 text-green-500" />
               <div>
                 <p className="text-sm font-medium text-gray-600">With Listings</p>
-                <p className="text-2xl font-bold">{analytics.withListings}</p>
+                <p className="text-2xl font-bold">{analytics.withListings ?? 'Unavailable'}</p>
               </div>
             </div>
           </CardContent>
@@ -230,7 +233,7 @@ export default function EnhancedAgentsPage() {
               <MessageSquare className="h-5 w-5 text-yellow-500" />
               <div>
                 <p className="text-sm font-medium text-gray-600">Active Chats</p>
-                <p className="text-2xl font-bold">{analytics.activeConversations}</p>
+                <p className="text-2xl font-bold">Unavailable</p>
               </div>
             </div>
           </CardContent>
@@ -255,7 +258,7 @@ export default function EnhancedAgentsPage() {
               <div>
                 <p className="text-sm font-medium text-gray-600">Avg Co-Broking Rate</p>
                 <p className="text-2xl font-bold">
-                  {(analytics.averageCoBrokingRate * 100).toFixed(1)}%
+                  {analytics.averageCoBrokingRate === null ? 'Unavailable' : `${(analytics.averageCoBrokingRate * 100).toFixed(1)}%`}
                 </p>
               </div>
             </div>
@@ -374,8 +377,8 @@ export default function EnhancedAgentsPage() {
                       </TableCell>
                       <TableCell>
                         <div className="text-sm">
-                          <div>Total: {agent.total_listings || 0}</div>
-                          <div className="text-gray-500">Active: {agent.active_conversations || 0}</div>
+                          <div>Total: {agent.listing_count ?? 'Unavailable'}</div>
+                          <div className="text-gray-500">Active: Unavailable</div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -389,7 +392,7 @@ export default function EnhancedAgentsPage() {
                       </TableCell>
                       <TableCell>
                         <div className="space-y-1">
-                          <div className="flex items-center space-x-2">
+                          {coBrokingRate ? <div className="flex items-center space-x-2">
                             <span className={`text-sm font-medium ${coBrokingRate.color}`}>
                               {(coBrokingRate.rate * 100).toFixed(1)}%
                             </span>
@@ -402,7 +405,7 @@ export default function EnhancedAgentsPage() {
                                 style={{ width: `${coBrokingRate.rate * 100}%` }}
                               />
                             </div>
-                          </div>
+                          </div> : <span className="text-sm text-gray-500">Unavailable</span>}
                           {agent.co_broking_stats && (
                             <div className="text-xs text-gray-500">
                               {agent.co_broking_stats.willing}/{agent.co_broking_stats.total} willing

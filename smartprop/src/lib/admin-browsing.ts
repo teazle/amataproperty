@@ -35,6 +35,25 @@ export type AgentBrowseParams = BrowsePagination & {
   sort: 'asc' | 'desc';
 };
 
+export type AgentRelationCounts = {
+  listing_count: number | null;
+  outreach_count: number | null;
+};
+
+function embeddedRelationCount(relation: unknown): number | null {
+  if (!Array.isArray(relation)) return null;
+  const count = relation.find((item): item is { count: unknown } => typeof item === 'object' && item !== null && 'count' in item)?.count;
+  return typeof count === 'number' && Number.isFinite(count) && count >= 0 ? count : null;
+}
+
+export function mapAgentRelationCounts<T extends Record<string, unknown>>(agent: T): T & AgentRelationCounts {
+  return {
+    ...agent,
+    listing_count: embeddedRelationCount(agent.listings),
+    outreach_count: embeddedRelationCount(agent.outreach),
+  };
+}
+
 function boundedInteger(value: string | null, fallback: number, maximum: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;

@@ -50,4 +50,16 @@ describe('matcher API confirmation boundary', () => {
     expect(response.status).toBe(400);
     expect(calls).toEqual([]);
   });
+
+  test('returns a failure status when the matcher reports an unsuccessful job', async () => {
+    const failedPOST = createMatcherPostHandler(async () => ({
+      success: false,
+      message: 'Failed to fetch recently refreshed listings: database unavailable',
+      stats: {},
+    }));
+    const response = await failedPOST(new NextRequest('http://localhost/api/jobs/match', { method: 'POST', body: '{}' }));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({ success: false, message: 'Failed to fetch recently refreshed listings: database unavailable' });
+  });
 });

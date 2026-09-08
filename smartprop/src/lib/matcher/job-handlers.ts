@@ -45,7 +45,10 @@ export function createMatcherPostHandler(runJob: RunMatcherJob = runMatcherJob) 
       }
 
       const result = await runJob(outreachLimit, { confirmedListingIds });
-      return NextResponse.json({ ...result, timestamp: new Date().toISOString() }, { status: 200 });
+      return NextResponse.json(
+        { ...result, timestamp: new Date().toISOString() },
+        { status: result.success ? 200 : 500 },
+      );
     } catch (error) {
       console.error('Error in matcher job endpoint:', error);
       return NextResponse.json(

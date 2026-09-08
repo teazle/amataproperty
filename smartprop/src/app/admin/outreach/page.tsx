@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { reconciliationNotice, type ReconciliationNotice } from '@/lib/matcher/outreach-result';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -30,10 +31,35 @@ type PreviewCandidate = {
   agentName: string;
 };
 
+type MatcherResponse = {
+  success?: boolean;
+  error?: string;
+  message?: string;
+  previews?: PreviewCandidate[];
+  stats?: { outreachCreated?: number };
+};
+
+type OutreachProcessResponse = {
+  success?: boolean;
+  error?: string;
+  message?: string;
+  stats?: {
+    processed?: number;
+    sent?: number;
+    failed?: number;
+    reconciliationRequired?: number;
+    reconciliationErrors?: string[];
+  };
+};
+
 const PAGE_SIZE = 50;
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString('en-SG') : '—';
+}
+
+function responseError(data: { error?: string; message?: string }, fallback: string) {
+  return data.error || data.message || fallback;
 }
 
 export default function OutreachPage() {
@@ -51,6 +77,7 @@ export default function OutreachPage() {
   const [selectedOutreachIds, setSelectedOutreachIds] = useState<Set<string>>(new Set());
   const [sendConfirmed, setSendConfirmed] = useState(false);
   const [sendingSelected, setSendingSelected] = useState(false);
+  const [reconciliation, setReconciliation] = useState<ReconciliationNotice | null>(null);
 
   const loadOutreach = async () => {
     setLoading(true);
@@ -83,9 +110,9 @@ export default function OutreachPage() {
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to preview matcher');
-      const candidates = (data.previews || []) as PreviewCandidate[];
+      const data = await response.json() as MatcherResponse;
+      if (!response.ok || data.success !== true) throw new Error(responseError(data, 'Failed to preview matcher'));
+      const candidates = data.previews || [];
       setPreview(candidates);
       setSelectedListingIds(new Set(candidates.map((candidate) => candidate.listingId)));
       setConfirmed(false);
@@ -118,8 +145,8 @@ export default function OutreachPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confirmed: true, confirmedListingIds }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to prepare outreach');
+      const data = await response.json() as MatcherResponse;
+      if (!response.ok || data.success !== true) throw new Error(responseError(data, 'Failed to prepare outreach'));
       setPreview([]);
       setSelectedListingIds(new Set());
       setConfirmed(false);
@@ -153,11 +180,17 @@ export default function OutreachPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confirmed: true, confirmedOutreachIds }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to process selected outreach');
+      const data = await response.json() as OutreachProcessResponse;
+      if (!response.ok || data.success !== true) throw new Error(responseError(data, 'Failed to process selected outreach'));
+      const notice = reconciliationNotice(data.stats);
       setSelectedOutreachIds(new Set());
       setSendConfirmed(false);
-      toast.success(`Processed ${data.stats?.processed || 0} selected rows: ${data.stats?.sent || 0} accepted, ${data.stats?.failed || 0} failed.`);
+      if (notice) {
+        setReconciliation(notice);
+        toast.error(`Processed ${data.stats?.processed || 0} selected rows; ${notice.count} accepted delivery requires reconciliation.`);
+      } else {
+        toast.success(`Processed ${data.stats?.processed || 0} selected rows: ${data.stats?.sent || 0} accepted, ${data.stats?.failed || 0} failed.`);
+      }
       await loadOutreach();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to process selected outreach');
@@ -217,6 +250,13 @@ export default function OutreachPage() {
           <CardDescription>Browse all outreach records. Total: {total}.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {reconciliation && (
+            <div role="alert" className="rounded-md border border-amber-500/50 bg-amber-50 p-4 text-sm text-amber-950">
+              <p className="font-medium">Delivery needs reconciliation. Do not resend these requests.</p>
+              {reconciliation.outreachIds.length > 0 && <p className="mt-1">Affected outreach: {reconciliation.outreachIds.join(', ')}</p>}
+              {reconciliation.errors.map((error) => <p key={error} className="mt-1">{error}</p>)}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-3">
             <Select value={status} onValueChange={(next) => { setStatus(next); setPage(1); }}>
               <SelectTrigger className="w-[180px]"><SelectValue placeholder="Status" /></SelectTrigger>

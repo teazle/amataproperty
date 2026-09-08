@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '@/workers/supa';
 import { NextRequest,NextResponse } from 'next/server';
-import { applyListingBrowseFilters, FilterQuery, parseListingBrowseParams } from '@/lib/admin-browsing';
+import { ADMIN_LISTING_ROW_SELECT, applyListingBrowseFilters, FilterQuery, parseListingBrowseParams } from '@/lib/admin-browsing';
 
 /**
  * GET /api/admin/listings
@@ -16,16 +16,7 @@ export async function GET(request: NextRequest) {
     
     let query = supabase
       .from('listings')
-      .select(`
-        *,
-        agents (
-          id,
-          name,
-          phone,
-          agency
-        ),
-        matched_agent:agents()
-      `)
+      .select(ADMIN_LISTING_ROW_SELECT)
       .order('scraped_at', { ascending: false });
 
     query = applyListingBrowseFilters(query as unknown as FilterQuery, params) as never;

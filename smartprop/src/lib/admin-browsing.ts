@@ -1,6 +1,31 @@
 export const DEFAULT_BROWSE_PAGE_SIZE = 50;
 export const MAX_BROWSE_PAGE_SIZE = 100;
 
+export const ADMIN_LISTING_ROW_SELECT = `
+  *,
+  agents (
+    id,
+    name,
+    phone,
+    email,
+    agency,
+    cea_reg_no,
+    source,
+    source_url,
+    last_seen_at
+  ),
+  matched_agent:agents(),
+  outreach!left(
+    id,
+    status,
+    conversation_phase,
+    co_broking_status,
+    co_broking_notes,
+    last_message_at,
+    auto_reply_count
+  )
+`;
+
 export type FilterQuery = {
   or: (filters: string) => FilterQuery;
   ilike: (column: string, value: string) => FilterQuery;

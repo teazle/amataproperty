@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
 import { Bath,Bed,Copy,Edit,Home,Mail,MapPin,Phone,Search,Trash2 } from 'lucide-react';
-import React,{ useCallback,useEffect,useState } from 'react';
+import React,{ useCallback,useEffect,useRef,useState } from 'react';
 import { getShowingRange } from '@/lib/admin-browsing';
 // Using API endpoint instead of direct Supabase calls
 
@@ -98,6 +98,8 @@ export default function ListingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
   const pageSize = 50;
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   
@@ -112,8 +114,10 @@ export default function ListingsPage() {
 
   // Fetch listings from API
   const fetchListings = useCallback(async () => {
+    const requestId = ++requestSequence.current;
     try {
       setIsLoading(true);
+      setLoadError(null);
       const priceBand = priceBands.find((band) => band.label === selectedPriceBand);
       const searchParams = new URLSearchParams({
         page: String(page),
@@ -133,11 +137,13 @@ export default function ListingsPage() {
       }
       
       const result = await response.json();
+      if (requestId !== requestSequence.current) return;
       
       if (result.error) {
         console.error('API error:', result.error);
         setListings([]);
-        setIsLoading(false);
+        setTotal(0);
+        setLoadError('Listings could not be loaded.');
         return;
       }
 
@@ -150,10 +156,13 @@ export default function ListingsPage() {
       setListings(transformedData);
       setTotal(result.pagination?.total || 0);
     } catch (error) {
+      if (requestId !== requestSequence.current) return;
       console.error('Error fetching listings:', error);
       setListings([]);
+      setTotal(0);
+      setLoadError('Listings could not be loaded.');
     } finally {
-      setIsLoading(false);
+      if (requestId === requestSequence.current) setIsLoading(false);
     }
   }, [page, selectedDistrict, selectedPriceBand, selectedPortal, selectedBeds, selectedBaths, searchTerm]);
 
@@ -450,7 +459,7 @@ export default function ListingsPage() {
         <CardHeader className="bg-white">
           <CardTitle className="text-black">Property Listings</CardTitle>
           <CardDescription className="text-gray-800">
-            {isLoading ? 'Loading...' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
+            {isLoading ? 'Loading...' : loadError ? 'Listings unavailable' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
           </CardDescription>
         </CardHeader>
         <CardContent className="bg-white">
@@ -661,6 +670,13 @@ export default function ListingsPage() {
                   <TableRow className="bg-white">
                     <TableCell colSpan={10} className="text-center py-8 text-black bg-white">
                       Loading listings...
+                    </TableCell>
+                  </TableRow>
+                ) : loadError ? (
+                  <TableRow className="bg-white">
+                    <TableCell colSpan={10} className="py-8 text-center text-black bg-white">
+                      <p>{loadError}</p>
+                      <Button className="mt-3" size="sm" variant="outline" onClick={fetchListings}>Retry</Button>
                     </TableCell>
                   </TableRow>
                 ) : filteredListings.length === 0 ? (

@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AdminLogoutButton } from '@/components/AdminLogoutButton';
 import { 
@@ -12,8 +11,6 @@ import {
   Zap, 
   BarChart3, 
   Target,
-  Activity,
-  CheckCircle,
   Star,
   ChevronDown
 } from 'lucide-react';
@@ -35,12 +32,8 @@ export default function AdminLayout({
       <nav className="overflow-x-hidden bg-white border-b border-gray-200 px-4 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 items-center space-x-2 lg:space-x-6">
-            <Link href="/admin" className="text-base sm:text-xl font-bold text-gray-900 flex items-center space-x-2 flex-shrink-0">
+            <Link href="/admin" className="text-base sm:text-xl font-bold text-gray-900 flex items-center flex-shrink-0">
               <span>SmartProp Admin</span>
-              <Badge variant="secondary" className="bg-green-100 text-green-800">
-                <Activity className="h-3 w-3 mr-1" />
-                Live
-              </Badge>
             </Link>
             
             {/* Primary Pages Navigation */}
@@ -49,7 +42,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-rose-50">
                   <Target className="h-4 w-4" />
                   <span>CRM</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
 
@@ -57,7 +49,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-green-50">
                   <Home className="h-4 w-4" />
                   <span>Listings</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
               
@@ -65,7 +56,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-purple-50">
                   <Users className="h-4 w-4" />
                   <span>Agents</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
               
@@ -73,7 +63,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-yellow-50">
                   <MessageSquare className="h-4 w-4" />
                   <span>Outreach</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
 
@@ -81,7 +70,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-orange-50">
                   <Zap className="h-4 w-4" />
                   <span>Scraper</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
               
@@ -89,7 +77,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-indigo-50">
                   <BarChart3 className="h-4 w-4" />
                   <span>Articles</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
               
@@ -97,7 +84,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-teal-50">
                   <Target className="h-4 w-4" />
                   <span>Viewings</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
               
@@ -105,7 +91,6 @@ export default function AdminLayout({
                 <Button variant="ghost" size="sm" className="flex items-center space-x-2 px-3 py-2 hover:bg-blue-50">
                   <MessageSquare className="h-4 w-4" />
                   <span>LinkedIn</span>
-                  <CheckCircle className="h-3 w-3 text-green-500" />
                 </Button>
               </Link>
             </div>
@@ -116,7 +101,6 @@ export default function AdminLayout({
             <div className="relative group">
               <Button variant="outline" size="sm" className="flex items-center space-x-1">
                 <span>Primary Pages</span>
-                <CheckCircle className="h-3 w-3 text-green-500" />
                 <ChevronDown className="h-4 w-4" />
               </Button>
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
@@ -124,37 +108,30 @@ export default function AdminLayout({
                   <Link href="/admin/crm" className="block px-4 py-2 text-sm text-gray-700 hover:bg-rose-50 flex items-center space-x-2">
                     <Target className="h-4 w-4" />
                     <span>CRM</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/listings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-green-50 flex items-center space-x-2">
                     <Home className="h-4 w-4" />
                     <span>Listings</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/agents" className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50 flex items-center space-x-2">
                     <Users className="h-4 w-4" />
                     <span>Agents</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/outreach" className="block px-4 py-2 text-sm text-gray-700 hover:bg-yellow-50 flex items-center space-x-2">
                     <MessageSquare className="h-4 w-4" />
                     <span>Outreach</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/scraper" className="block px-4 py-2 text-sm text-gray-700 hover:bg-orange-50 flex items-center space-x-2">
                     <Zap className="h-4 w-4" />
                     <span>Scraper</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/articles" className="block px-4 py-2 text-sm text-gray-700 hover:bg-indigo-50 flex items-center space-x-2">
                     <BarChart3 className="h-4 w-4" />
                     <span>Articles</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                   <Link href="/admin/viewings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-teal-50 flex items-center space-x-2">
                     <Target className="h-4 w-4" />
                     <span>Viewings</span>
-                    <CheckCircle className="h-3 w-3 text-green-500" />
                   </Link>
                 </div>
               </div>
@@ -189,12 +166,10 @@ export default function AdminLayout({
                   <Link href="/admin/outreach-enhanced" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2">
                     <MessageSquare className="h-4 w-4" />
                     <span>Enhanced Conversations</span>
-                    <Activity className="h-3 w-3 text-green-500 animate-pulse" />
                   </Link>
                   <Link href="/admin/scraper-enhanced" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2">
                     <Zap className="h-4 w-4" />
                     <span>Enhanced Scraper</span>
-                    <Activity className="h-3 w-3 text-orange-500 animate-pulse" />
                   </Link>
                   <Link href="/admin/cobroking-analytics" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2">
                     <Target className="h-4 w-4" />
@@ -215,29 +190,6 @@ export default function AdminLayout({
           </div>
         </div>
       </nav>
-
-      {/* Status Bar */}
-      <div className="hidden md:block bg-green-50 border-b border-green-200 px-4 py-2">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center space-x-4 text-sm">
-            <div className="flex items-center space-x-1">
-              <CheckCircle className="h-4 w-4 text-green-500" />
-              <span className="text-green-700">Primary Pages Active</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <CheckCircle className="h-4 w-4 text-blue-500" />
-              <span className="text-blue-700">Co-Broking Status Tracking</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <Star className="h-4 w-4 text-yellow-500" />
-              <span className="text-yellow-700">Enhanced Pages Available</span>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600">
-            Reliable co-broking management system with experimental features
-          </div>
-        </div>
-      </div>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">

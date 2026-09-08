@@ -13,8 +13,8 @@ import { Input } from '@/components/ui/input';
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
 import { Copy,Download,Edit,Home,Mail,MapPin,Phone,RefreshCw,Search } from 'lucide-react';
-import { getShowingRange } from '@/lib/admin-browsing';
-import React,{ useCallback,useEffect,useState } from 'react';
+import { districtAliases,getShowingRange } from '@/lib/admin-browsing';
+import React,{ useCallback,useEffect,useRef,useState } from 'react';
 import { toast } from 'sonner';
 
 // Listing interface (same as original page)
@@ -70,20 +70,7 @@ interface Listing {
 }
 
 // Filter constants (same as original page)
-const districts = [
-  'All',
-  // Standard D01-D28 format (what scrapers will now produce)
-  'D01', 'D02', 'D03', 'D04', 'D05', 'D06', 'D07', 'D08', 'D09', 'D10',
-  'D11', 'D12', 'D13', 'D14', 'D15', 'D16', 'D17', 'D18', 'D19', 'D20',
-  'D21', 'D22', 'D23', 'D24', 'D25', 'D26', 'D27', 'D28',
-  // Legacy formats (for existing data in DB)
-  '01', '02', '03', '04', '05', '06', '07', '08', '09', '10',
-  '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
-  '21', '22', '23', '24', '25', '26', '27', '28',
-  'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9',
-  // For records with null district
-  'No District'
-];
+const districts = ['All', ...Array.from({ length: 28 }, (_value, index) => districtAliases(String(index + 1))[0]), 'No District'];
 const portals = ['All', 'propertyguru', 'edgeprop'];
 const priceBands = [
   { label: 'All', min: 0, max: Infinity },
@@ -110,6 +97,8 @@ export default function EnhancedListingsPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
   const pageSize = 50;
   const filteredListings = listings;
   const showing = getShowingRange({ total, page, limit: pageSize, received: listings.length });
@@ -136,24 +125,28 @@ export default function EnhancedListingsPage() {
   };
 
   const fetchListings = useCallback(async () => {
+    const requestId = ++requestSequence.current;
     const priceBand = priceBands.find((band) => band.label === selectedPriceBand);
     const searchParams = new URLSearchParams({ page: String(page), limit: String(pageSize), district: selectedDistrict, portal: selectedPortal, beds: selectedBeds, baths: selectedBaths, search: searchTerm });
     if (priceBand && priceBand.min > 0) searchParams.set('minPrice', String(priceBand.min));
     if (priceBand && Number.isFinite(priceBand.max)) searchParams.set('maxPrice', String(priceBand.max));
     setLoading(true);
+    setLoadError(null);
     try {
       const response = await fetch(`/api/admin/listings?${searchParams}`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result = await response.json();
+      if (requestId !== requestSequence.current) return;
       setListings((result.listings || []).map((listing: Listing & { agents?: Listing['agents'] | Listing['agents'][] }) => ({ ...listing, agents: Array.isArray(listing.agents) ? listing.agents[0] : listing.agents })));
       setTotal(result.pagination?.total || 0);
     } catch (error) {
+      if (requestId !== requestSequence.current) return;
       console.error('Error fetching listings:', error);
       setListings([]);
       setTotal(0);
-      toast.error('Could not load listings');
+      setLoadError('Listings could not be loaded.');
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
   }, [page, selectedDistrict, selectedPriceBand, selectedPortal, selectedBeds, selectedBaths, searchTerm]);
 
@@ -245,7 +238,7 @@ export default function EnhancedListingsPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Property Listings</h1>
           <p className="text-gray-600 mt-2">
-            {loading ? 'Loading...' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
+            {loading ? 'Loading...' : loadError ? 'Listings unavailable' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
           </p>
         </div>
         <div className="flex items-center space-x-2">
@@ -288,7 +281,7 @@ export default function EnhancedListingsPage() {
         <CardHeader className="bg-white">
           <CardTitle className="text-black">Property Listings</CardTitle>
           <CardDescription className="text-gray-800">
-            {loading ? 'Loading...' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
+            {loading ? 'Loading...' : loadError ? 'Listings unavailable' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
           </CardDescription>
         </CardHeader>
         <CardContent className="bg-white">
@@ -478,6 +471,13 @@ export default function EnhancedListingsPage() {
               <TableRow className="bg-white">
                 <TableCell colSpan={10} className="text-center py-8 text-black bg-white">
                   Loading listings...
+                </TableCell>
+              </TableRow>
+            ) : loadError ? (
+              <TableRow className="bg-white">
+                <TableCell colSpan={10} className="py-8 text-center text-black bg-white">
+                  <p>{loadError}</p>
+                  <Button className="mt-3" size="sm" variant="outline" onClick={fetchListings}>Retry</Button>
                 </TableCell>
               </TableRow>
             ) : filteredListings.length === 0 ? (

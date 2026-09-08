@@ -27,7 +27,7 @@ TrendingUp,
 Users,
 XCircle
 } from 'lucide-react';
-import { useCallback,useEffect,useState } from 'react';
+import { useCallback,useEffect,useRef,useState } from 'react';
 
 interface AgentWithStats {
   id: string;
@@ -60,29 +60,35 @@ export default function EnhancedAgentsPage() {
   const [filters, setFilters] = useState({ searchTerm: '', agency: 'all', source: 'all' });
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
   const [notifications, setNotifications] = useState<Array<{ id: string; type: 'success' | 'error' | 'warning' | 'info'; title: string; message: string }>>([]);
   const pageSize = 50;
   const notify = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, message: string) => {
     setNotifications((current) => [...current, { id: crypto.randomUUID(), type, title, message }].slice(-3));
   }, []);
   const fetchAgents = useCallback(async () => {
+    const requestId = ++requestSequence.current;
     const searchParams = new URLSearchParams({ page: String(page), limit: String(pageSize), search: filters.searchTerm, agency: filters.agency, source: filters.source });
     setLoading(true);
+    setLoadError(null);
     try {
       const response = await fetch(`/api/admin/agents?${searchParams}`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result = await response.json();
+      if (requestId !== requestSequence.current) return;
       setAgents(result.agents || []);
       setTotal(result.pagination?.total || 0);
     } catch (error) {
+      if (requestId !== requestSequence.current) return;
       console.error('Error fetching agents:', error);
       setAgents([]);
       setTotal(0);
-      notify('error', 'Agents unavailable', 'Could not load the agent directory');
+      setLoadError('Agents could not be loaded.');
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [filters.agency, filters.searchTerm, filters.source, notify, page]);
+  }, [filters.agency, filters.searchTerm, filters.source, page]);
 
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
 
@@ -170,7 +176,7 @@ export default function EnhancedAgentsPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Property Agents</h1>
           <p className="text-gray-600 mt-2">
-            {loading ? 'Loading...' : `Showing ${showing.start}-${showing.end} of ${total} agents`}
+            {loading ? 'Loading...' : loadError ? 'Agents unavailable' : `Showing ${showing.start}-${showing.end} of ${total} agents`}
           </p>
         </div>
         <div className="flex items-center space-x-2">
@@ -328,7 +334,13 @@ export default function EnhancedAgentsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {agents.map((agent) => {
+                {loading ? (
+                  <TableRow><TableCell colSpan={8} className="py-8 text-center text-gray-500">Loading agents...</TableCell></TableRow>
+                ) : loadError ? (
+                  <TableRow><TableCell colSpan={8} className="py-8 text-center text-gray-700"><p>{loadError}</p><Button className="mt-3" size="sm" variant="outline" onClick={fetchAgents}>Retry</Button></TableCell></TableRow>
+                ) : agents.length === 0 ? (
+                  <TableRow><TableCell colSpan={8} className="py-8 text-center text-gray-500">No agents found</TableCell></TableRow>
+                ) : agents.map((agent) => {
                   const coBrokingRate = getCoBrokingRate(agent);
                   return (
                     <TableRow key={agent.id}>

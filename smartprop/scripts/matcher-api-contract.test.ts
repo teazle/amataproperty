@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 
 const calls: Array<[number | undefined, Record<string, unknown>]> = [];
 
-const { createMatcherPostHandler } = await import('../src/app/api/jobs/match/route');
+const { createMatcherPostHandler } = await import('../src/lib/matcher/job-handlers');
 const POST = createMatcherPostHandler(async (limit, options) => {
   calls.push([limit, options]);
   return {

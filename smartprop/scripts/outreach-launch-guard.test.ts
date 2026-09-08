@@ -1,12 +1,5 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { NextRequest } from 'next/server';
-
-mock.module('@/jobs/match', () => ({
-  processOutreachMessages: async () => { throw new Error('process must not run'); },
-}));
-mock.module('@/workers/supa', () => ({
-  getSupabaseClient: () => { throw new Error('database must not be reached'); },
-}));
 
 const { POST: processOutreach } = await import('../src/app/api/outreach/process/route');
 const { POST: sendManualMessage } = await import('../src/app/api/outreach/send-message/route');

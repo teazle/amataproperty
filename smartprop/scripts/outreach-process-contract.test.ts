@@ -1,16 +1,13 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { NextRequest } from 'next/server';
 
 const calls: Array<[number | undefined, number | undefined, Record<string, unknown>]> = [];
 
-mock.module('@/jobs/match', () => ({
-  processOutreachMessages: async (limit: number | undefined, delay: number | undefined, options: Record<string, unknown>) => {
-    calls.push([limit, delay, options]);
-    return { processed: 1, sent: 1, failed: 0 };
-  },
-}));
-
-const { POST } = await import('../src/app/api/outreach/process/route');
+const { createOutreachProcessHandler } = await import('../src/lib/matcher/job-handlers');
+const POST = createOutreachProcessHandler(async (limit, delay, options) => {
+  calls.push([limit, delay, options]);
+  return { processed: 1, sent: 1, failed: 0 };
+});
 
 beforeEach(() => calls.splice(0));
 

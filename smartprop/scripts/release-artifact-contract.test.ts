@@ -20,7 +20,6 @@ const requiredFixtureInputs = [
   'bun.lock',
   'ecosystem.config.js',
   'next.config.ts',
-  'package-lock.json',
   'package.json',
   'src/instrumentation-node.ts',
   'src/instrumentation.ts',

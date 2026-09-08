@@ -3,6 +3,10 @@ import {
   type SelectedTransportDependencies,
 } from './selected-transport';
 import { randomUUID } from 'node:crypto';
+import {
+  isCustomerRecipientSuppressed,
+  type CustomerSuppressionLookup,
+} from './customer-suppression';
 
 export type CustomerTextPurpose =
   | 'initial_cobroking'
@@ -38,6 +42,10 @@ export type CustomerTextResult =
 
 export interface CustomerTextTransport {
   sendText: (input: CustomerTextInput) => Promise<CustomerTextResult>;
+}
+
+export interface CustomerTextTransportDependencies extends SelectedTransportDependencies {
+  isCustomerSuppressed?: CustomerSuppressionLookup;
 }
 
 const CUSTOMER_TEXT_PURPOSES = new Set<CustomerTextPurpose>([
@@ -99,12 +107,13 @@ function errorMessage(error: unknown): string {
  * boundary and maps the selected provider's terminal outcome.
  */
 export function createCustomerTextTransport(
-  dependencies: SelectedTransportDependencies = {},
+  dependencies: CustomerTextTransportDependencies = {},
 ): CustomerTextTransport {
   const provider = configuredProvider(
     dependencies.provider ?? process.env.SMARTPROP_WHATSAPP_PROVIDER,
   );
   const selectedTransport = createSelectedWhatsAppCampaignTransport(dependencies);
+  const isSuppressed = dependencies.isCustomerSuppressed || isCustomerRecipientSuppressed;
 
   return {
     sendText: async (input) => {
@@ -115,6 +124,22 @@ export function createCustomerTextTransport(
           outcome: 'blocked',
           provider,
           error: `Unsupported SMARTPROP_WHATSAPP_PROVIDER: ${dependencies.provider ?? process.env.SMARTPROP_WHATSAPP_PROVIDER}`,
+        };
+      }
+
+      try {
+        if (await isSuppressed(validated.recipient)) {
+          return {
+            outcome: 'blocked',
+            provider,
+            error: 'customer recipient is suppressed after a persisted STOP request',
+          };
+        }
+      } catch (error) {
+        return {
+          outcome: 'blocked',
+          provider,
+          error: `customer suppression lookup failed closed: ${errorMessage(error)}`,
         };
       }
 

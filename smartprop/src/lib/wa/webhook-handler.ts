@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { isNewsletterOptOutKeyword, recordNewsletterOptOut, type NewsletterOptOutClient, type RecordNewsletterOptOutInput } from '@/lib/newsletter/whatsapp-opt-out';
+import type { OutreachHistorySyncOptions } from './message-log';
 
 function secureEquals(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -107,6 +108,7 @@ export type WebhookDependencies = {
   }) => Promise<{ duplicate: boolean }>;
   findLatestOutreach: (phone: string) => Promise<{ id: string; agent_id: string | null } | null>;
   normalizePhone: (phone: string) => string;
+  syncOutreachConversationHistory: (outreachId: string, options?: OutreachHistorySyncOptions) => Promise<unknown>;
   getSupabaseClient: () => WebhookSupabaseClient;
   recordOptOut: (input: Omit<RecordNewsletterOptOutInput, 'client'>) => Promise<void>;
 };
@@ -125,10 +127,18 @@ async function resolveMessageLogDependencies(overrides: Partial<WebhookDependenc
     ? null
     : await import('@/lib/wa/message-log');
 
+  const syncOutreachConversationHistory = overrides.syncOutreachConversationHistory
+    || messageLog?.syncOutreachConversationHistory
+    || (async (outreachId: string, options?: OutreachHistorySyncOptions) => {
+      const module = await import('@/lib/wa/message-log');
+      return module.syncOutreachConversationHistory(outreachId, options);
+    });
+
   return {
     normalizePhone: overrides.normalizePhone || messageLog!.normalizeWhatsAppPhone,
     findLatestOutreach: overrides.findLatestOutreach || messageLog!.findLatestOutreachByPhone,
     logMessage: overrides.logMessage || messageLog!.logWhatsAppMessage,
+    syncOutreachConversationHistory,
   };
 }
 
@@ -250,6 +260,9 @@ export function createWebhookHandler(overrides: Partial<WebhookDependencies> = {
             ? new Date(typeof message.timestamp === 'number' ? message.timestamp * 1000 : message.timestamp).toISOString()
             : new Date().toISOString(),
         });
+        if (outreach) {
+          await messageLog.syncOutreachConversationHistory(outreach.id, { status: 'opted_out' });
+        }
 
         return NextResponse.json({
           success: true,

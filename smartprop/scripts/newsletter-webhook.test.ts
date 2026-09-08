@@ -120,6 +120,7 @@ describe('WAHA webhook', () => {
     let aiCalls = 0;
     const optOutCalls: Array<{ recipient: string; messageId: string | null }> = [];
     const logCalls: Array<Record<string, unknown>> = [];
+    const syncCalls: Array<{ outreachId: string; options: { status?: string } | undefined }> = [];
     const order: string[] = [];
     const handler = createWebhookHandler({
       processInboundMessage: async () => { aiCalls += 1; return { success: true }; },
@@ -137,6 +138,11 @@ describe('WAHA webhook', () => {
         logCalls.push(input);
         return { duplicate: false };
       },
+      syncOutreachConversationHistory: async (outreachId, options) => {
+        order.push('sync');
+        syncCalls.push({ outreachId, options });
+        return [];
+      },
     });
 
     const response = await handler(webhookRequest(message({ body: ' STOP ' })));
@@ -144,7 +150,7 @@ describe('WAHA webhook', () => {
     expect(response.status).toBe(200);
     expect(aiCalls).toBe(0);
     expect(optOutCalls).toEqual([{ recipient: '6591051399@c.us', messageId: 'provider-message-1' }]);
-    expect(order).toEqual(['suppress', 'find-outreach', 'log']);
+    expect(order).toEqual(['suppress', 'find-outreach', 'log', 'sync']);
     expect(logCalls).toEqual([expect.objectContaining({
       outreachId: 'outreach-1',
       agentId: 'agent-1',
@@ -154,18 +160,27 @@ describe('WAHA webhook', () => {
       wahaMessageId: 'provider-message-1',
       body: ' STOP ',
     })]);
+    expect(syncCalls).toEqual([{ outreachId: 'outreach-1', options: { status: 'opted_out' } }]);
   });
 
   test('retries STOP suppression and deduplicated logging idempotently', async () => {
     let suppressionCalls = 0;
     let logCalls = 0;
+    let journalWrites = 0;
+    const syncCalls: Array<{ outreachId: string; options: { status?: string } | undefined }> = [];
     const handler = createWebhookHandler({
       recordOptOut: async () => { suppressionCalls += 1; },
       normalizePhone: (value) => value.replace('@c.us', ''),
-      findLatestOutreach: async () => null,
+      findLatestOutreach: async () => ({ id: 'outreach-1', agent_id: 'agent-1' }),
       logMessage: async () => {
         logCalls += 1;
-        return { duplicate: logCalls > 1 };
+        const duplicate = logCalls > 1;
+        if (!duplicate) journalWrites += 1;
+        return { duplicate };
+      },
+      syncOutreachConversationHistory: async (outreachId, options) => {
+        syncCalls.push({ outreachId, options });
+        return [];
       },
     });
 
@@ -176,6 +191,43 @@ describe('WAHA webhook', () => {
     expect(retry.status).toBe(200);
     expect(suppressionCalls).toBe(2);
     expect(logCalls).toBe(2);
+    expect(journalWrites).toBe(1);
+    expect(syncCalls).toEqual([
+      { outreachId: 'outreach-1', options: { status: 'opted_out' } },
+      { outreachId: 'outreach-1', options: { status: 'opted_out' } },
+    ]);
+  });
+
+  test('retries a failed STOP history sync after durable suppression and deduplicated logging', async () => {
+    let suppressionCalls = 0;
+    let journalWrites = 0;
+    let logCalls = 0;
+    let syncCalls = 0;
+    const handler = createWebhookHandler({
+      recordOptOut: async () => { suppressionCalls += 1; },
+      normalizePhone: (value) => value.replace('@c.us', ''),
+      findLatestOutreach: async () => ({ id: 'outreach-1', agent_id: 'agent-1' }),
+      logMessage: async () => {
+        logCalls += 1;
+        const duplicate = logCalls > 1;
+        if (!duplicate) journalWrites += 1;
+        return { duplicate };
+      },
+      syncOutreachConversationHistory: async () => {
+        syncCalls += 1;
+        if (syncCalls === 1) throw new Error('outreach history update failed');
+        return [];
+      },
+    });
+
+    const first = await handler(webhookRequest(message({ body: 'STOP' })));
+    const retry = await handler(webhookRequest(message({ body: 'STOP' })));
+
+    expect(first.status).toBe(503);
+    expect(retry.status).toBe(200);
+    expect(suppressionCalls).toBe(2);
+    expect(journalWrites).toBe(1);
+    expect(syncCalls).toBe(2);
   });
 
   test('returns a retriable failure when STOP persistence fails', async () => {
@@ -199,6 +251,7 @@ describe('WAHA webhook', () => {
       normalizePhone: (value) => value.replace('@c.us', ''),
       findLatestOutreach: async () => null,
       logMessage: async () => { throw new Error('temporary message log failure'); },
+      syncOutreachConversationHistory: async () => [],
     });
 
     const response = await handler(webhookRequest(message({ body: 'STOP' })));

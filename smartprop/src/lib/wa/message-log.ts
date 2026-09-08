@@ -10,6 +10,10 @@ export type ConversationHistoryEntry = {
   messageId?: string;
 };
 
+export type OutreachHistorySyncOptions = {
+  status?: string;
+};
+
 export type WhatsAppMessageLogInput = {
   outreachId?: string | null;
   agentId?: string | null;
@@ -168,15 +172,20 @@ export async function getConversationHistory(outreachId: string): Promise<Conver
   }));
 }
 
-export async function syncOutreachConversationHistory(outreachId: string): Promise<ConversationHistoryEntry[]> {
+export async function syncOutreachConversationHistory(
+  outreachId: string,
+  options: OutreachHistorySyncOptions = {},
+): Promise<ConversationHistoryEntry[]> {
   const supabase = getSupabaseClient();
   const history = await getConversationHistory(outreachId);
-  await supabase
+  const { error } = await supabase
     .from('outreach')
     .update({
       conversation_history: history,
       last_message_at: history.at(-1)?.timestamp || new Date().toISOString(),
+      ...(options.status ? { status: options.status } : {}),
     })
     .eq('id', outreachId);
+  if (error) throw new Error(`Failed to sync outreach conversation history: ${error.message}`);
   return history;
 }

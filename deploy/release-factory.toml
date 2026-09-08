@@ -34,3 +34,36 @@ component_inputs = ["smartprop/src/**", "smartprop/public/**", "smartprop/script
 artifacts = ["application_source"]
 consumers = ["main_app", "scraper_worker"]
 smoke = [["smartprop/scripts/app-readiness-verify.py"]]
+
+# These consumers are observed for preservation and cannot be changed by this route.
+[[rules]]
+id = "daily_report"
+patterns = ["smartprop/scripts/smartprop-daily-report.ts", "smartprop/deploy/daily_report*.py"]
+component_inputs = ["smartprop/scripts/smartprop-daily-report.ts", "smartprop/deploy/daily_report*.py"]
+artifacts = []
+consumers = ["daily_report"]
+smoke = []
+
+[[rules]]
+id = "messaging_gateway"
+patterns = ["smartprop/openclaw/**"]
+component_inputs = ["smartprop/openclaw/**"]
+artifacts = []
+consumers = ["messaging_gateway"]
+smoke = []
+
+[[rules]]
+id = "public_site"
+patterns = ["landing/**"]
+component_inputs = ["landing/**"]
+artifacts = []
+consumers = ["public_site"]
+smoke = []
+
+[[rules]]
+id = "web_edge"
+patterns = ["smartprop/deploy/edge_security*.py"]
+component_inputs = ["smartprop/deploy/edge_security*.py"]
+artifacts = []
+consumers = ["web_edge"]
+smoke = []

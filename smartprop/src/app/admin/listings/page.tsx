@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@/components/ui/select';
 import { Table,TableBody,TableCell,TableHead,TableHeader,TableRow } from '@/components/ui/table';
 import { Bath,Bed,Copy,Edit,Home,Mail,MapPin,Phone,Search,Trash2 } from 'lucide-react';
-import React,{ useEffect,useState } from 'react';
+import React,{ useCallback,useEffect,useState } from 'react';
+import { getShowingRange } from '@/lib/admin-browsing';
 // Using API endpoint instead of direct Supabase calls
 
 interface ViewingSlot {
@@ -95,6 +96,9 @@ export default function ListingsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [listings, setListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const pageSize = 50;
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   
   // Edit functionality state
@@ -107,11 +111,22 @@ export default function ListingsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch listings from API
-  const fetchListings = async () => {
+  const fetchListings = useCallback(async () => {
     try {
-      console.log('Fetching listings from API...');
-      
-      const response = await fetch('/api/listings?limit=1000');
+      setIsLoading(true);
+      const priceBand = priceBands.find((band) => band.label === selectedPriceBand);
+      const searchParams = new URLSearchParams({
+        page: String(page),
+        limit: String(pageSize),
+        district: selectedDistrict,
+        portal: selectedPortal,
+        beds: selectedBeds,
+        baths: selectedBaths,
+        search: searchTerm,
+      });
+      if (priceBand && priceBand.min > 0) searchParams.set('minPrice', String(priceBand.min));
+      if (priceBand && Number.isFinite(priceBand.max)) searchParams.set('maxPrice', String(priceBand.max));
+      const response = await fetch(`/api/admin/listings?${searchParams}`);
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -126,8 +141,6 @@ export default function ListingsPage() {
         return;
       }
 
-      console.log('Successfully fetched listings:', result.listings?.length || 0);
-      
       // Transform the data to handle agents properly
       const transformedData = (result.listings || []).map((listing: Listing & { agents?: Listing['agents'] | Listing['agents'][] }) => ({
         ...listing,
@@ -135,19 +148,20 @@ export default function ListingsPage() {
       }));
       
       setListings(transformedData);
+      setTotal(result.pagination?.total || 0);
     } catch (error) {
       console.error('Error fetching listings:', error);
       setListings([]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page, selectedDistrict, selectedPriceBand, selectedPortal, selectedBeds, selectedBaths, searchTerm]);
 
-  // Fetch listings on component mount
+  // Filters and page are evaluated by the server so a result cannot disappear
+  // merely because it falls beyond the first client-side batch.
   useEffect(() => {
-    console.log('Component mounted, fetching listings...');
     fetchListings();
-  }, []);
+  }, [fetchListings]);
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -228,47 +242,8 @@ export default function ListingsPage() {
     return districtCode;
   };
 
-  const filteredListings = listings.filter(listing => {
-    // Match by district code with support for both legacy and new formats
-    let districtMatch = false;
-    
-    if (selectedDistrict === 'All') {
-      districtMatch = true;
-    } else if (selectedDistrict === 'No District') {
-      districtMatch = listing.district === null || listing.district === undefined;
-    } else {
-      // Handle both legacy and new district formats in database
-      const selectedDistrictNum = selectedDistrict.replace('D', ''); // Extract number from "D10" -> "10"
-      const listingDistrictNum = listing.district?.replace('D', '') || ''; // Extract number from listing district
-      
-      districtMatch = listing.district === selectedDistrict || // Exact match (D10 = D10)
-                     listingDistrictNum === selectedDistrictNum || // Legacy match (10 = 10, or D10 = 10)
-                     listing.district === selectedDistrictNum; // Match legacy format (10) with new format (D10)
-    }
-    const priceBand = priceBands.find(band => band.label === selectedPriceBand);
-    const priceMatch = selectedPriceBand === 'All' || (priceBand && listing.price !== null && listing.price >= priceBand.min && listing.price <= priceBand.max);
-    const portalMatch = selectedPortal === 'All' || listing.portal === selectedPortal;
-    
-    // Beds filter
-    const bedsMatch = selectedBeds === 'All' || 
-      (selectedBeds === '5+' ? (listing.beds !== null && listing.beds !== undefined && listing.beds >= 5) :
-      (listing.beds !== null && listing.beds !== undefined && listing.beds === parseInt(selectedBeds)));
-    
-    // Baths filter
-    const bathsMatch = selectedBaths === 'All' || 
-      (selectedBaths === '5+' ? (listing.baths !== null && listing.baths !== undefined && listing.baths >= 5) :
-      (listing.baths !== null && listing.baths !== undefined && listing.baths === parseInt(selectedBaths)));
-    
-    // Search across multiple fields
-    const searchMatch = searchTerm === '' || 
-      listing.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (listing.address && listing.address.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (listing.agents?.name && listing.agents.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (listing.property_type && listing.property_type.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (listing.district && listing.district.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    return districtMatch && priceMatch && portalMatch && bedsMatch && bathsMatch && searchMatch;
-  });
+  const filteredListings = listings;
+  const showing = getShowingRange({ total, page, limit: pageSize, received: listings.length });
 
   const formatPrice = (price: number | null) => {
     if (!price) return 'N/A';
@@ -475,7 +450,7 @@ export default function ListingsPage() {
         <CardHeader className="bg-white">
           <CardTitle className="text-black">Property Listings</CardTitle>
           <CardDescription className="text-gray-800">
-            {isLoading ? 'Loading...' : `${filteredListings.length} listing${filteredListings.length !== 1 ? 's' : ''} found`}
+            {isLoading ? 'Loading...' : `Showing ${showing.start}-${showing.end} of ${total} listings`}
           </CardDescription>
         </CardHeader>
         <CardContent className="bg-white">
@@ -487,12 +462,12 @@ export default function ListingsPage() {
                 type="text"
                 placeholder="Search by title, address, agent name, property type, or district..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => { setPage(1); setSearchTerm(e.target.value); }}
                 className="pl-10 bg-white border-gray-300 text-black placeholder:text-gray-500"
               />
               {searchTerm && (
                 <button
-                  onClick={() => setSearchTerm('')}
+                  onClick={() => { setPage(1); setSearchTerm(''); }}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
                   title="Clear search"
                 >
@@ -516,7 +491,7 @@ export default function ListingsPage() {
                   <Button
                     variant={selectedDistrict === 'All' ? "default" : "outline"}
                     size="sm"
-                    onClick={() => setSelectedDistrict('All')}
+                    onClick={() => { setPage(1); setSelectedDistrict('All'); }}
                     className={`w-full justify-start ${selectedDistrict === 'All' ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
                   >
                     All Districts
@@ -530,7 +505,7 @@ export default function ListingsPage() {
                           key={district}
                           variant="outline"
                           size="sm"
-                          onClick={() => setSelectedDistrict(district)}
+                          onClick={() => { setPage(1); setSelectedDistrict(district); }}
                           className={`justify-center text-center h-8 ${isSelected 
                             ? 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600' 
                             : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
@@ -558,7 +533,7 @@ export default function ListingsPage() {
                         key={band.label}
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedPriceBand(band.label)}
+                        onClick={() => { setPage(1); setSelectedPriceBand(band.label); }}
                         className={`w-full justify-start ${isSelected 
                           ? 'bg-green-600 hover:bg-green-700 text-white border-green-600' 
                           : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
@@ -576,7 +551,7 @@ export default function ListingsPage() {
                   <Bed className="h-4 w-4 text-indigo-600" />
                   Bedrooms
                 </h3>
-                <Select value={selectedBeds} onValueChange={setSelectedBeds}>
+                <Select value={selectedBeds} onValueChange={(value) => { setPage(1); setSelectedBeds(value); }}>
                   <SelectTrigger className="w-full bg-white border-gray-300 text-gray-900">
                     <SelectValue placeholder="Any beds" />
                   </SelectTrigger>
@@ -593,7 +568,7 @@ export default function ListingsPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setSelectedBeds('All')}
+                    onClick={() => { setPage(1); setSelectedBeds('All'); }}
                     className="w-full mt-2 text-xs text-gray-600 hover:text-gray-900"
                   >
                     Clear filter
@@ -607,7 +582,7 @@ export default function ListingsPage() {
                   <Bath className="h-4 w-4 text-teal-600" />
                   Bathrooms
                 </h3>
-                <Select value={selectedBaths} onValueChange={setSelectedBaths}>
+                <Select value={selectedBaths} onValueChange={(value) => { setPage(1); setSelectedBaths(value); }}>
                   <SelectTrigger className="w-full bg-white border-gray-300 text-gray-900">
                     <SelectValue placeholder="Any baths" />
                   </SelectTrigger>
@@ -624,7 +599,7 @@ export default function ListingsPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setSelectedBaths('All')}
+                    onClick={() => { setPage(1); setSelectedBaths('All'); }}
                     className="w-full mt-2 text-xs text-gray-600 hover:text-gray-900"
                   >
                     Clear filter
@@ -650,7 +625,7 @@ export default function ListingsPage() {
                         key={portal}
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedPortal(portal)}
+                        onClick={() => { setPage(1); setSelectedPortal(portal); }}
                         className={`w-full justify-start ${isSelected 
                           ? `${portalColor} text-white border-transparent` 
                           : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
@@ -1122,6 +1097,16 @@ export default function ListingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {!isLoading && total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-gray-700">
+          <span>Showing {showing.start}-{showing.end} of {total}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button>
+            <Button variant="outline" size="sm" disabled={showing.end >= total} onClick={() => setPage((current) => current + 1)}>Next</Button>
+          </div>
+        </div>
+      )}
 
       {/* Edit Listing Modal */}
       <EditListingModal

@@ -1,5 +1,6 @@
 import { getSupabaseClient } from '@/workers/supa';
 import { NextRequest,NextResponse } from 'next/server';
+import { applyListingBrowseFilters, FilterQuery, parseListingBrowseParams } from '@/lib/admin-browsing';
 
 /**
  * GET /api/admin/listings
@@ -8,10 +9,8 @@ import { NextRequest,NextResponse } from 'next/server';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
-    const search = searchParams.get('search') || '';
-    const status = searchParams.get('status') || '';
+    const params = parseListingBrowseParams(searchParams);
+    const { page, limit } = params;
     
     const supabase = getSupabaseClient();
     
@@ -28,15 +27,7 @@ export async function GET(request: NextRequest) {
       `)
       .order('scraped_at', { ascending: false });
 
-    // Apply search filter
-    if (search) {
-      query = query.or(`title.ilike.%${search}%,address.ilike.%${search}%`);
-    }
-
-    // Apply status filter
-    if (status) {
-      query = query.eq('viewing_status', status);
-    }
+    query = applyListingBrowseFilters(query as unknown as FilterQuery, params) as never;
 
     // Apply pagination
     const from = (page - 1) * limit;
@@ -53,14 +44,7 @@ export async function GET(request: NextRequest) {
     let countQuery = supabase
       .from('listings')
       .select('*', { count: 'exact', head: true });
-
-    if (search) {
-      countQuery = countQuery.or(`title.ilike.%${search}%,address.ilike.%${search}%`);
-    }
-
-    if (status) {
-      countQuery = countQuery.eq('viewing_status', status);
-    }
+    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params) as never;
 
     const { count: totalCount } = await countQuery;
 

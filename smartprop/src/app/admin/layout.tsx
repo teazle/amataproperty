@@ -32,10 +32,10 @@ export default function AdminLayout({
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top Navbar */}
-      <nav className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center space-x-4 lg:space-x-6">
-            <Link href="/admin" className="text-xl font-bold text-gray-900 flex items-center space-x-2 flex-shrink-0">
+      <nav className="overflow-x-hidden bg-white border-b border-gray-200 px-4 py-3">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center space-x-2 lg:space-x-6">
+            <Link href="/admin" className="text-base sm:text-xl font-bold text-gray-900 flex items-center space-x-2 flex-shrink-0">
               <span>SmartProp Admin</span>
               <Badge variant="secondary" className="bg-green-100 text-green-800">
                 <Activity className="h-3 w-3 mr-1" />
@@ -162,7 +162,7 @@ export default function AdminLayout({
           </div>
 
           {/* Enhanced Pages Dropdown */}
-          <div className="flex items-center space-x-4">
+          <div className="ml-auto flex items-center space-x-2 sm:space-x-4">
             <div className="relative group">
               <Button variant="outline" size="sm" className="flex items-center space-x-1">
                 <span>Enhanced Pages</span>
@@ -217,7 +217,7 @@ export default function AdminLayout({
       </nav>
 
       {/* Status Bar */}
-      <div className="bg-green-50 border-b border-green-200 px-4 py-2">
+      <div className="hidden md:block bg-green-50 border-b border-green-200 px-4 py-2">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-4 text-sm">
             <div className="flex items-center space-x-1">

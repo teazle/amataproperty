@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
+import { applyAgentBrowseFilters, FilterQuery, parseAgentBrowseParams } from '@/lib/admin-browsing';
 
 /**
  * GET /api/admin/agents
@@ -8,9 +9,8 @@ import { getSupabaseClient } from '@/workers/supa';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
-    const search = searchParams.get('search') || '';
+    const params = parseAgentBrowseParams(searchParams);
+    const { page, limit } = params;
     
     const supabase = getSupabaseClient();
     
@@ -21,12 +21,9 @@ export async function GET(request: NextRequest) {
         listings:listings(count),
         outreach:outreach(count)
       `)
-      .order('last_seen_at', { ascending: false });
+      .order('name', { ascending: params.sort === 'asc' });
 
-    // Apply search filter
-    if (search) {
-      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,agency.ilike.%${search}%`);
-    }
+    query = applyAgentBrowseFilters(query as unknown as FilterQuery, params) as never;
 
     // Apply pagination
     const from = (page - 1) * limit;
@@ -44,9 +41,7 @@ export async function GET(request: NextRequest) {
       .from('agents')
       .select('*', { count: 'exact', head: true });
 
-    if (search) {
-      countQuery = countQuery.or(`name.ilike.%${search}%,phone.ilike.%${search}%,agency.ilike.%${search}%`);
-    }
+    countQuery = applyAgentBrowseFilters(countQuery as unknown as FilterQuery, params) as never;
 
     const { count: totalCount } = await countQuery;
 

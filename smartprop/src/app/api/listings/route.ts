@@ -1,26 +1,29 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/workers/supa';
+import { applyListingBrowseFilters, FilterQuery, parseListingBrowseParams } from '@/lib/admin-browsing';
 
 const supabase = getSupabaseClient();
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '50');
+    const params = parseListingBrowseParams(searchParams);
+    const { page, limit } = params;
     const offset = (page - 1) * limit;
 
     // Get total count
-    const { count, error: countError } = await supabase
+    let countQuery = supabase
       .from('listings')
       .select('*', { count: 'exact', head: true });
+    countQuery = applyListingBrowseFilters(countQuery as unknown as FilterQuery, params) as never;
+    const { count, error: countError } = await countQuery;
 
     if (countError) {
       console.error('Error counting listings:', countError);
       return NextResponse.json({ error: countError.message }, { status: 500 });
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('listings')
       .select(`
         id,
@@ -65,8 +68,9 @@ export async function GET(request: Request) {
           auto_reply_count
         )
       `)
-      .order('scraped_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .order('scraped_at', { ascending: false });
+    query = applyListingBrowseFilters(query as unknown as FilterQuery, params) as never;
+    const { data, error } = await query.range(offset, offset + limit - 1);
 
     if (error) {
       console.error('Error fetching listings:', error);

@@ -35,11 +35,6 @@ export default function EnhancedOutreachPage() {
   // Real-time sync
   useConversationSync();
 
-  // Fetch conversations on mount
-  useEffect(() => {
-    fetchConversations();
-  }, [fetchConversations]);
-
   // Real-time updates
   useEffect(() => {
     const unsubscribe = subscribeToConversationUpdates((conversations) => {

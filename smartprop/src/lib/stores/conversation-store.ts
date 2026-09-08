@@ -7,6 +7,10 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { useMemo } from 'react';
+import { enableMapSet } from 'immer';
+
+// This store must also work when its page is opened directly.
+enableMapSet();
 
 // Types
 export interface ConversationMessage {

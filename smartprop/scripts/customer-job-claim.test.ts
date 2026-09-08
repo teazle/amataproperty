@@ -231,9 +231,32 @@ describe('customer delivery claims in remaining jobs', () => {
     await sendViewingRequests(1, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
     expect(selected.calls).toHaveLength(2);
+    expect(selected.calls.map(call => call.idempotencyKey)).toEqual([
+      'viewing_request:listing-1',
+      'viewing_request:listing-1',
+    ]);
     expect(delivery.finishes.map(finish => finish.outcome)).toEqual(['blocked', 'accepted']);
     expect(viewingUpdates.filter(update => update.viewing_status === 'requested')).toHaveLength(1);
     expect(legacyCalls).toEqual([]);
+  });
+
+  test('distinct viewing delivery claims use distinct gateway idempotency keys', async () => {
+    viewingRows = [
+      viewingListing(),
+      { ...viewingListing(), id: 'listing-2', agent_id: 'agent-2' },
+    ];
+    const delivery = sharedStore();
+    const selected = transport([
+      { outcome: 'accepted', provider: 'waha', messageId: 'provider-viewing-1', messageText: 'viewing message' },
+      { outcome: 'accepted', provider: 'waha', messageId: 'provider-viewing-2', messageText: 'viewing message' },
+    ]);
+
+    await sendViewingRequests(2, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
+
+    expect(selected.calls.map(call => call.idempotencyKey)).toEqual([
+      'viewing_request:listing-1',
+      'viewing_request:listing-2',
+    ]);
   });
 
   test('concurrent viewing requests claim once before one selected-adapter send', async () => {

@@ -140,7 +140,12 @@ export async function sendViewingRequests(limit: number = 10, dependencies: View
         const message = generateViewingRequestMessage(agentName, propertyTitle);
         let result: Awaited<ReturnType<CustomerTextTransport['sendText']>>;
         try {
-          result = await customerTransport.sendText({ to: agentPhone, text: message, purpose: 'viewing_request' });
+          result = await customerTransport.sendText({
+            to: agentPhone,
+            text: message,
+            purpose: 'viewing_request',
+            idempotencyKey: key,
+          });
         } catch (error) {
           result = { outcome: 'unknown', provider: 'unknown', error: error instanceof Error ? error.message : String(error) };
         }

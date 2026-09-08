@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/admin";
+  const nextPath = searchParams.get("next") || "/admin/dashboard";
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -33,7 +33,7 @@ function LoginForm() {
         return;
       }
 
-      router.replace(nextPath.startsWith("/admin") ? nextPath : "/admin");
+      router.replace(nextPath.startsWith("/admin") ? nextPath : "/admin/dashboard");
       router.refresh();
     } finally {
       setIsSubmitting(false);

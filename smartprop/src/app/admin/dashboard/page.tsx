@@ -67,7 +67,7 @@ export default function AdminDashboard() {
           <CardContent>
             <div className="space-y-4">
               <div className="text-sm text-gray-600">
-                All 209 listings with filtering, expandable rows, and agent details
+                Listings with filtering, expandable rows, and agent details
               </div>
               <Link href="/admin/listings">
                 <Button className="w-full" variant="default">

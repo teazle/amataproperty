@@ -1,0 +1,36 @@
+version = 2
+
+[project]
+id = "propertydemo"
+root = "../.."
+
+[contracts]
+verify = ["smartprop/deploy/edge_security_release.py", "verify"]
+existing_host = ["smartprop/deploy/edge_security_release.py", "release"]
+new_vps_stage = []
+new_vps_activate = []
+
+[policy]
+consumers = ["web_edge", "main_app", "scraper_worker", "daily_report", "public_site"]
+rejected_patterns = ["**/.env*", "**/*.pem", "**/credentials/**", "smartprop/migrations/**"]
+
+[[executors]]
+version = 1
+mode = "existing-host"
+contracts = ["existing_host"]
+plan_schema_versions = [1]
+plan_fields = ["source_identity", "artifact_bindings", "deployment.affected_consumers", "deployment.artifacts", "deployment.preserved_consumers", "deployment.required_smoke", "deployment.policy_sha256"]
+plan_contract = "existing_host"
+artifact_contract = "existing_host"
+preservation_contract = "existing_host"
+cutover_contract = "existing_host"
+rollback_contract = "existing_host"
+smoke_contract = "existing_host"
+
+[[rules]]
+id = "web_edge"
+patterns = ["smartprop/deploy/edge_security_*.py", "smartprop/deploy/test_edge_security.py", "smartprop/deploy/edge-security-release-factory.toml"]
+component_inputs = ["smartprop/deploy/edge_security_*.py", "smartprop/deploy/edge-security-release-factory.toml", "smartprop/deploy/daily_report_release.py"]
+artifacts = ["web_edge_configuration"]
+consumers = ["web_edge"]
+smoke = [["smartprop/deploy/edge_security_release.py", "verify"]]

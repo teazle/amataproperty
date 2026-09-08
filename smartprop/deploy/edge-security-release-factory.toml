@@ -5,7 +5,7 @@ id = "propertydemo"
 root = "../.."
 
 [contracts]
-verify = ["smartprop/deploy/edge_security_release.py", "verify"]
+verify = ["smartprop/deploy/edge_security_verify.py"]
 existing_host = ["smartprop/deploy/edge_security_release.py", "release"]
 new_vps_stage = []
 new_vps_activate = []
@@ -33,4 +33,4 @@ patterns = ["smartprop/deploy/edge_security_*.py", "smartprop/deploy/test_edge_s
 component_inputs = ["smartprop/deploy/edge_security_*.py", "smartprop/deploy/edge-security-release-factory.toml", "smartprop/deploy/daily_report_release.py"]
 artifacts = ["web_edge_configuration"]
 consumers = ["web_edge"]
-smoke = [["smartprop/deploy/edge_security_release.py", "verify"]]
+smoke = [["smartprop/deploy/edge_security_verify.py"]]

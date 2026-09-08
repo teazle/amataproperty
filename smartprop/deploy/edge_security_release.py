@@ -3,7 +3,6 @@
 import argparse
 import base64
 import json
-import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -27,10 +26,7 @@ def remote(request):
 
 
 def verify():
-    subprocess.run(['python3', '-B', '-m', 'unittest', 'discover', '-s', str(DEPLOY),
-                    '-p', 'test_edge_security.py'], check=True)
-    if os.environ.get('ACCEPTANCE_FALSIFY') == '1':
-        raise ValueError('deliberate edge acceptance falsification')
+    subprocess.run(['python3', '-B', str(DEPLOY / 'edge_security_verify.py')], check=True)
     return {'status': 'passed', 'live': False}
 
 

@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { aggregateProjectValuation } from './valuation';
 import { normalizeSingaporeRecipient } from './recipient';
 import { buildOperatorReportRows } from './operator-report';
+import { MAX_LEAD_CODE_CLAIM_ATTEMPTS, generateLeadCode } from './lead-code';
 import type {
   CampaignCandidate,
   CampaignRun,
@@ -57,6 +58,7 @@ export interface CampaignStore {
   recoverStaleReports(runId: string, olderThan: Date): Promise<number>;
   selectCandidates(issue: NewsletterIssue, limit: number, referenceTime?: Date): Promise<CampaignCandidate[]>;
   selectCandidate(issue: NewsletterIssue, leadId: string): Promise<CampaignCandidate | null>;
+  ensureLeadCode(leadId: string, currentCode: string): Promise<string>;
   queueAttempt(
     run: CampaignRun,
     candidate: CampaignCandidate,
@@ -298,14 +300,16 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
         const hasBlockingAttempt = prior.some((send) =>
           ['queued', 'sending', 'sent', 'unknown'].includes(String(send.status)) ||
           (send.status === 'failed' && send.retryable !== true));
+        // A missing lead_code no longer disqualifies an otherwise eligible lead;
+        // send paths must persist one via ensureLeadCode before composing.
         if (!recipientKey || suppressed.has(recipientKey) || lead.opt_out_at || lead.status === 'lost' ||
-            !lead.lead_code || hasBlockingAttempt || attemptCount >= 3) return [];
+            hasBlockingAttempt || attemptCount >= 3) return [];
         return [{
           id: String(lead.id),
           name: String(lead.name),
           recipientKey,
           propertyTitle: String(lead.property_title),
-          leadCode: String(lead.lead_code),
+          leadCode: lead.lead_code ? String(lead.lead_code) : '',
           priority,
           createdAt: String(lead.created_at),
           attemptCount,
@@ -322,6 +326,30 @@ export function createCampaignStore(client: SupabaseClient): CampaignStore {
     async selectCandidate(issue, leadId) {
       const candidates = await this.selectCandidates(issue, Number.MAX_SAFE_INTEGER);
       return candidates.find((candidate) => candidate.id === leadId) || null;
+    },
+
+    async ensureLeadCode(leadId, currentCode) {
+      if (currentCode) return currentCode;
+      for (let attempt = 0; attempt < MAX_LEAD_CODE_CLAIM_ATTEMPTS; attempt += 1) {
+        const code = generateLeadCode();
+        // Conditional claim on a still-missing code only: a lead whose code any
+        // other writer already set matches zero rows and is never overwritten.
+        const update = await client.from('crm_leads')
+          .update({ lead_code: code, updated_at: new Date().toISOString() })
+          .eq('id', leadId)
+          .or('lead_code.is.null,lead_code.eq.""')
+          .select('lead_code');
+        if (update.error?.code === '23505') continue;
+        fail(update.error, 'claim newsletter lead code');
+        const claimed = ((update.data || []) as Record<string, unknown>[])[0];
+        if (claimed?.lead_code) return String(claimed.lead_code);
+        // Zero updated rows: another writer claimed a code after our selection
+        // read. Adopt theirs instead of racing to overwrite it.
+        const reread = await client.from('crm_leads').select('lead_code').eq('id', leadId).maybeSingle();
+        fail(reread.error, 'reread newsletter lead code');
+        if (reread.data?.lead_code) return String(reread.data.lead_code);
+      }
+      throw new Error('claim newsletter lead code: exhausted unique-code retries');
     },
 
     async queueAttempt(run, candidate, claimToken, body) {

@@ -52,12 +52,12 @@ function removeElementContaining(html: string, marker: string): string {
 }
 
 function removeHtmlBlocksByClass(html: string): string {
-  const classToken = '(?:related-news|dfp-ads|ec_billboard_container|adunitContainer|adBox)';
+  const classToken = '(?:related-news|article-reaction-container|dfp-ads|ec_billboard_container|adunitContainer|adBox)';
   const matchingOpenTag = new RegExp(`<div\\b[^>]*\\bclass=(?:"[^"]*${classToken}[^"]*"|'[^']*${classToken}[^']*')[^>]*>`, 'i');
   let cleaned = html;
-  let match = matchingOpenTag.exec(cleaned);
+  let match: RegExpExecArray | null;
 
-  while (match) {
+  while ((match = matchingOpenTag.exec(cleaned))) {
     const end = findMatchingElementEnd(cleaned, match.index, 'div');
     if (end === -1) break;
     cleaned = `${cleaned.slice(0, match.index)}${cleaned.slice(end)}`;
@@ -72,6 +72,47 @@ function removeAdLabelRuns(text: string): string {
     .replace(/Advertisement\s*Advertisement(?=[A-Z\s]|$)/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+// Widget text is spliced out of paragraphs only when the captured html contains
+// the matching widget element; a phrase matching a label by case alone is not
+// evidence of widget content and never justifies removal.
+function reactionWidgetTexts(html: string): string[] {
+  const texts: string[] = [];
+  const openingTag = /<div\b[^>]*\bclass=(?:"([^"]*)"|'([^']*)')[^>]*>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = openingTag.exec(html))) {
+    if (!(match[1] ?? match[2]).split(/\s+/).includes('article-reaction-container')) continue;
+    const end = findMatchingElementEnd(html, match.index, 'div');
+    if (end === -1) continue;
+    const text = html.slice(match.index, end).replace(/<[^>]*>/g, '').trim();
+    if (text) texts.push(text);
+    openingTag.lastIndex = end;
+  }
+
+  return texts;
+}
+
+function joinAtWidgetSeam(before: string, after: string): string {
+  if (!before || !after) return before + after;
+  return `${before.replace(/\s+$/, '')} ${after.replace(/^\s+/, '')}`;
+}
+
+function removeReactionWidgetText(text: string, widgetTexts: string[]): string {
+  let cleaned = text;
+  let spliced = false;
+
+  for (const widgetText of widgetTexts) {
+    let index = cleaned.indexOf(widgetText);
+    while (index !== -1) {
+      cleaned = joinAtWidgetSeam(cleaned.slice(0, index), cleaned.slice(index + widgetText.length));
+      spliced = true;
+      index = cleaned.indexOf(widgetText);
+    }
+  }
+
+  return spliced ? cleaned.replace(/\s{2,}/g, ' ').trim() : text;
 }
 
 function normalizeBundleText(text: string): string {
@@ -104,11 +145,14 @@ function isFooterParagraph(paragraph: string, relatedNewsBundles: Set<string>): 
  * This boundary keeps stored HTML, paragraphs, and text derived from one body.
  */
 export function cleanArticleBody({ html, paragraphs }: ArticleBodyInput): CleanArticleBody {
-  const relatedNewsBundles = relatedNewsBundleTexts(html || '');
-  let cleanedHtml = removeHtmlBlocksByClass(html || '');
+  const sourceHtml = html || '';
+  const relatedNewsBundles = relatedNewsBundleTexts(sourceHtml);
+  const widgetTexts = reactionWidgetTexts(sourceHtml);
+  let cleanedHtml = removeHtmlBlocksByClass(sourceHtml);
   cleanedHtml = removeElementContaining(cleanedHtml, 'For more news and analysis, read our');
   cleanedHtml = removeElementContaining(cleanedHtml, 'Get it delivered to your home every Monday.');
   cleanedHtml = cleanedHtml
+    .replace(/<hr\b[^>]*\brelated-news--hr\b[^>]*>/gi, '')
     .replace(/(>\s*)Advertisement(?=\s*<)/gi, '$1')
     .replace(/Advertisement\s*Advertisement(?=[A-Z\s<]|$)/gi, '')
     .replace(/\n{3,}/g, '\n\n')
@@ -116,6 +160,7 @@ export function cleanArticleBody({ html, paragraphs }: ArticleBodyInput): CleanA
 
   const cleanedParagraphs = (Array.isArray(paragraphs) ? paragraphs : [])
     .map(removeAdLabelRuns)
+    .map((paragraph) => removeReactionWidgetText(paragraph, widgetTexts))
     .filter((paragraph) => paragraph.length > 0 && !isFooterParagraph(paragraph, relatedNewsBundles));
 
   return {

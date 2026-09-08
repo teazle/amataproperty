@@ -94,6 +94,10 @@ class FakeStore implements CampaignStore {
     this.calls.push(`selectCandidate:${leadId}`);
     return this.candidates.find((item) => item.id === leadId) || null;
   }
+  async ensureLeadCode(leadId: string, currentCode: string): Promise<string> {
+    this.calls.push(`ensureLeadCode:${leadId}`);
+    return currentCode;
+  }
   async queueAttempt(
     run: CampaignRun, selected: CampaignCandidate, _claimToken: string, body: string,
   ): Promise<NewsletterAttempt | 'suppressed'> {
@@ -648,6 +652,89 @@ describe('campaign store RPC adapter', () => {
       name: 'recover_stale_newsletter_operator_reports',
       args: { p_run_id: 'run-1', p_before: '2026-07-13T03:55:00.000Z' },
     });
+  });
+});
+
+describe('missing lead_code handling', () => {
+  function withCodelessLeads(store: FakeStore, indexes: number[]): void {
+    store.candidates = store.candidates.map((item, index) =>
+      indexes.includes(index) ? { ...item, leadCode: '' } : item);
+  }
+
+  function claimMissingCodes(store: FakeStore): Map<string, string> {
+    const claimed = new Map<string, string>();
+    store.ensureLeadCode = async (leadId: string, currentCode: string) => {
+      store.calls.push(`ensureLeadCode:${leadId}:${currentCode || 'missing'}`);
+      if (currentCode) return currentCode;
+      const code = `vp${'a'.repeat(5)}${claimed.size + 1}`;
+      claimed.set(leadId, code);
+      return code;
+    };
+    return claimed;
+  }
+
+  test('dry-run reports an otherwise eligible code-less lead without any write or send', async () => {
+    const store = new FakeStore();
+    withCodelessLeads(store, [0, 4]);
+    let posts = 0;
+    const result = await runNewsletterCampaign(dependencies(store, {
+      transport: async () => { posts += 1; return { outcome: 'accepted', messageId: 'x' }; },
+    }), { ...options, dryRun: true });
+
+    expect(result.status).toBe('dry-run');
+    expect(result.selectedCount).toBe(5);
+    expect(posts).toBe(0);
+    expect(store.calls).toEqual(['resolveIssue', 'selectCandidates:5']);
+  });
+
+  test('production run persists a claimed code before composing and submitting', async () => {
+    const store = new FakeStore();
+    withCodelessLeads(store, [0]);
+    const claimed = claimMissingCodes(store);
+    const result = await runNewsletterCampaign(dependencies(store), options);
+
+    expect(result.status).toBe('completed');
+    expect(claimed.get('lead-1')).toBe('vpaaaaa1');
+    expect(store.calls).toContain('ensureLeadCode:lead-1:missing');
+    const first = store.attempts.find((attempt) => attempt.leadId === 'lead-1');
+    expect(first?.renderedBody).toContain('ref=vpaaaaa1');
+    expect(first?.renderedBody).not.toContain('preview-');
+    expect(store.attempts.every((attempt) => !attempt.renderedBody.includes('preview-'))).toBe(true);
+  });
+
+  test('a STOP-suppressed code-less lead is claimed and queued but never transported', async () => {
+    const store = new FakeStore();
+    withCodelessLeads(store, [1]);
+    claimMissingCodes(store);
+    store.suppressed.add('lead-2');
+    const posts: string[] = [];
+    const result = await runNewsletterCampaign(dependencies(store, {
+      transport: async (to: string) => { posts.push(to); return { outcome: 'accepted', messageId: to }; },
+    }), options);
+
+    expect(result.status).toBe('completed');
+    expect(posts).toHaveLength(5);
+    expect(posts).not.toContain(candidate(2).recipientKey);
+    expect(store.calls).toContain('ensureLeadCode:lead-2:missing');
+    expect(store.calls).toContain('queue:lead-6');
+    expect(store.attempts.every((attempt) => !attempt.renderedBody.includes('preview-'))).toBe(true);
+  });
+
+  test('test-send persists a claimed code before composing the test body', async () => {
+    const store = new FakeStore();
+    withCodelessLeads(store, [5]);
+    const claimed = claimMissingCodes(store);
+    const result = await runNewsletterTestSend(dependencies(store), {
+      destination: '+6591051399',
+      configuredDestination: '+6591051399',
+      sourceLeadId: 'lead-6',
+    });
+
+    expect(result.outcome).toBe('accepted');
+    expect(claimed.get('lead-6')).toBe('vpaaaaa1');
+    expect(store.testRows[0]).toMatchObject({ sourceLeadId: 'lead-6', isTest: true });
+    expect(store.testRows[0].renderedBody).toContain('ref=vpaaaaa1');
+    expect(store.testRows[0].renderedBody).not.toContain('preview-');
   });
 });
 

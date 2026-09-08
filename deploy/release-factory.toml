@@ -1,0 +1,36 @@
+version = 2
+
+[project]
+id = "propertydemo"
+root = ".."
+
+[contracts]
+verify = ["smartprop/scripts/app-readiness-verify.py"]
+existing_host = ["smartprop/deploy/app_release.py", "release"]
+new_vps_stage = []
+new_vps_activate = []
+
+[policy]
+consumers = ["main_app", "scraper_worker", "daily_report", "messaging_gateway", "public_site", "web_edge"]
+rejected_patterns = ["**/.env*", "**/*.pem", "**/credentials/**", "smartprop/migrations/**", "smartprop/openclaw/**", "smartprop/package.json", "smartprop/bun.lock"]
+
+[[executors]]
+version = 1
+mode = "existing-host"
+contracts = ["existing_host"]
+plan_schema_versions = [1]
+plan_fields = ["source_identity", "artifact_bindings", "deployment.affected_consumers", "deployment.artifacts", "deployment.preserved_consumers", "deployment.required_smoke", "deployment.policy_sha256"]
+plan_contract = "existing_host"
+artifact_contract = "existing_host"
+preservation_contract = "existing_host"
+cutover_contract = "existing_host"
+rollback_contract = "existing_host"
+smoke_contract = "existing_host"
+
+[[rules]]
+id = "application"
+patterns = ["smartprop/src/lib/newsletter/**", "smartprop/src/lib/scraper/**", "smartprop/scripts/newsletter*.test.ts", "smartprop/scripts/article-body-cleanup.test.ts", "smartprop/scripts/fixtures/article-widgets-20260909.json", "deploy/release-factory.toml", "smartprop/deploy/app_release*.py", "smartprop/deploy/test_app_release.py", "smartprop/scripts/app-readiness-verify.py"]
+component_inputs = ["smartprop/src/**", "smartprop/public/**", "smartprop/scripts/**", "smartprop/deploy/**", "smartprop/openclaw/**", "smartprop/package.json", "smartprop/bun.lock", "smartprop/*.ts", "smartprop/*.js", "smartprop/*.mjs", "smartprop/*.json", "deploy/release-factory.toml"]
+artifacts = ["application_source"]
+consumers = ["main_app", "scraper_worker"]
+smoke = [["smartprop/scripts/app-readiness-verify.py"]]

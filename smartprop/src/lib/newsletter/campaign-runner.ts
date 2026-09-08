@@ -1,6 +1,7 @@
 import { composeNewsletter } from './compose';
 import { normalizeSingaporeRecipient } from './recipient';
 import { validateOperatorRecipients } from './operator-report';
+import { generatePreviewLeadCode } from './lead-code';
 import type {
   CampaignStore,
   FinalizeAttemptInput,
@@ -133,6 +134,18 @@ function compose(issue: NewsletterIssue, candidate: CampaignCandidate, featuredU
   });
 }
 
+/**
+ * Claims a persisted lead code for a candidate selected without one, so every
+ * real send composes from a code that is already durable in crm_leads.
+ */
+async function withPersistedLeadCode(
+  store: CampaignStore,
+  candidate: CampaignCandidate,
+): Promise<CampaignCandidate> {
+  const leadCode = await store.ensureLeadCode(candidate.id, candidate.leadCode);
+  return leadCode === candidate.leadCode ? candidate : { ...candidate, leadCode };
+}
+
 function resultFromRun(run: CampaignRun, status: CampaignRunResult['status'] = 'completed'): CampaignRunResult {
   return {
     status,
@@ -194,7 +207,11 @@ export async function runNewsletterCampaign(
       : (dependencies.now?.() || new Date());
     const candidates = (await dependencies.store.selectCandidates(issue, 5, referenceTime))
       .filter((item) => item.attemptCount < 3);
-    for (const candidate of candidates) compose(issue, candidate, featuredUrlBase);
+    // Read-only preview: a still-missing code is composed with a clearly local
+    // stand-in and never persisted.
+    for (const candidate of candidates) {
+      compose(issue, candidate.leadCode ? candidate : { ...candidate, leadCode: generatePreviewLeadCode() }, featuredUrlBase);
+    }
     return {
       status: 'dry-run', recoverable: false, blocker: null,
       selectedCount: candidates.length, attemptedCount: 0, acceptedCount: 0,
@@ -257,8 +274,9 @@ export async function runNewsletterCampaign(
     for (const candidate of candidates) {
       if (committedCount() >= targetCommittedCount || candidate.attemptCount >= 3 ||
           knownRecipients.has(candidate.recipientKey)) continue;
+      const prepared = await withPersistedLeadCode(dependencies.store, candidate);
       const queued = await dependencies.store.queueAttempt(
-        run, candidate, claimToken, compose(issue, candidate, featuredUrlBase),
+        run, prepared, claimToken, compose(issue, prepared, featuredUrlBase),
       );
       if (queued === 'suppressed') continue;
       if (!attempts.some((attempt) => attempt.id === queued.id)) attempts.push(queued);
@@ -279,8 +297,9 @@ export async function runNewsletterCampaign(
       const replacement = replacements.find((candidate) =>
         candidate.attemptCount < 3 && !knownRecipients.has(candidate.recipientKey));
       if (replacement) {
+        const preparedReplacement = await withPersistedLeadCode(dependencies.store, replacement);
         const queuedReplacement = await dependencies.store.queueAttempt(
-          run, replacement, claimToken, compose(issue, replacement, featuredUrlBase),
+          run, preparedReplacement, claimToken, compose(issue, preparedReplacement, featuredUrlBase),
         );
         if (queuedReplacement !== 'suppressed') {
           if (!attempts.some((attempt) => attempt.id === queuedReplacement.id)) attempts.push(queuedReplacement);
@@ -364,15 +383,16 @@ export async function runNewsletterTestSend(
   const issue = await dependencies.store.resolveIssue();
   const candidate = await dependencies.store.selectCandidate(issue, options.sourceLeadId);
   if (!candidate) throw new CampaignConfigurationError('test-send source lead is not eligible.');
-  const body = compose(issue, candidate, options.featuredUrlBase || 'https://viewproperty.ai/p');
+  const prepared = await withPersistedLeadCode(dependencies.store, candidate);
+  const body = compose(issue, prepared, options.featuredUrlBase || 'https://viewproperty.ai/p');
   const testSendId = await dependencies.store.createTestSend({
     issueId: issue.id,
-    sourceLeadId: candidate.id,
-    sourcePhone: candidate.recipientKey,
+    sourceLeadId: prepared.id,
+    sourcePhone: prepared.recipientKey,
     overridePhone: destination,
-    recipientName: candidate.name,
+    recipientName: prepared.name,
     renderedBody: body,
-    valuation: candidate.valuation,
+    valuation: prepared.valuation,
     isTest: true,
   });
   const result = await dependencies.transport(destination, body);

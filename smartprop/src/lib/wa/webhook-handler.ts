@@ -130,8 +130,8 @@ async function resolveMessageLogDependencies(overrides: Partial<WebhookDependenc
   const syncOutreachConversationHistory = overrides.syncOutreachConversationHistory
     || messageLog?.syncOutreachConversationHistory
     || (async (outreachId: string, options?: OutreachHistorySyncOptions) => {
-      const module = await import('@/lib/wa/message-log');
-      return module.syncOutreachConversationHistory(outreachId, options);
+      const messageLogModule = await import('@/lib/wa/message-log');
+      return messageLogModule.syncOutreachConversationHistory(outreachId, options);
     });
 
   return {

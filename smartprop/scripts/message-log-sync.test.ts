@@ -1,34 +1,23 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
+import { beforeEach, expect, test } from 'bun:test';
 
 let historyRows: Array<Record<string, unknown>> = [];
 let updateError: { message: string } | null = null;
 const updates: Array<Record<string, unknown>> = [];
 
-mock.module('@/workers/supa', () => ({
-  getSupabaseClient: () => ({
-    from: (table: string) => {
-      if (table === 'wa_messages') {
-        const query = {
-          select: () => query,
-          eq: () => query,
-          order: () => query,
-          then: (resolve: (value: unknown) => unknown) => resolve({ data: historyRows, error: null }),
-        };
-        return query;
-      }
-      return {
-        update: (value: Record<string, unknown>) => ({
-          eq: async () => {
-            updates.push(value);
-            return { error: updateError };
-          },
-        }),
-      };
-    },
-  }),
-}));
+const { createOutreachHistorySynchronizer } = await import('../src/lib/wa/message-log.ts?message-log-sync-test');
 
-const { syncOutreachConversationHistory } = await import('../src/lib/wa/message-log');
+const syncOutreachConversationHistory = createOutreachHistorySynchronizer({
+  getConversationHistory: async () => historyRows.map((row) => ({
+    role: row.direction === 'outbound' ? 'user' : 'agent',
+    message: row.body as string,
+    timestamp: row.occurred_at as string,
+    messageId: row.waha_message_id as string,
+  })),
+  updateOutreach: async (_outreachId, update) => {
+    updates.push(update);
+    return { error: updateError };
+  },
+});
 
 beforeEach(() => {
   historyRows = [{ direction: 'inbound', body: 'STOP', occurred_at: '2026-09-08T00:00:00.000Z', waha_message_id: 'stop-1' }];

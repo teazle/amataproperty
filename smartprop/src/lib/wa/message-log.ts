@@ -14,6 +14,19 @@ export type OutreachHistorySyncOptions = {
   status?: string;
 };
 
+export type OutreachHistoryUpdate = {
+  conversation_history: ConversationHistoryEntry[];
+  last_message_at: string;
+  status?: string;
+};
+
+export type OutreachHistorySyncDependencies = {
+  getConversationHistory: (outreachId: string) => Promise<ConversationHistoryEntry[]>;
+  updateOutreach: (outreachId: string, update: OutreachHistoryUpdate) => Promise<{
+    error: { message: string } | null;
+  }>;
+};
+
 export type WhatsAppMessageLogInput = {
   outreachId?: string | null;
   agentId?: string | null;
@@ -172,20 +185,29 @@ export async function getConversationHistory(outreachId: string): Promise<Conver
   }));
 }
 
-export async function syncOutreachConversationHistory(
-  outreachId: string,
-  options: OutreachHistorySyncOptions = {},
-): Promise<ConversationHistoryEntry[]> {
-  const supabase = getSupabaseClient();
-  const history = await getConversationHistory(outreachId);
-  const { error } = await supabase
-    .from('outreach')
-    .update({
+export function createOutreachHistorySynchronizer(
+  overrides: Partial<OutreachHistorySyncDependencies> = {},
+): (outreachId: string, options?: OutreachHistorySyncOptions) => Promise<ConversationHistoryEntry[]> {
+  const loadHistory = overrides.getConversationHistory || getConversationHistory;
+  const updateOutreach = overrides.updateOutreach || (async (outreachId: string, update: OutreachHistoryUpdate) => {
+    const { error } = await getSupabaseClient()
+      .from('outreach')
+      .update(update)
+      .eq('id', outreachId);
+    return { error };
+  });
+
+  return async (outreachId: string, options: OutreachHistorySyncOptions = {}) => {
+    const history = await loadHistory(outreachId);
+    const update: OutreachHistoryUpdate = {
       conversation_history: history,
       last_message_at: history.at(-1)?.timestamp || new Date().toISOString(),
       ...(options.status ? { status: options.status } : {}),
-    })
-    .eq('id', outreachId);
-  if (error) throw new Error(`Failed to sync outreach conversation history: ${error.message}`);
-  return history;
+    };
+    const { error } = await updateOutreach(outreachId, update);
+    if (error) throw new Error(`Failed to sync outreach conversation history: ${error.message}`);
+    return history;
+  };
 }
+
+export const syncOutreachConversationHistory = createOutreachHistorySynchronizer();

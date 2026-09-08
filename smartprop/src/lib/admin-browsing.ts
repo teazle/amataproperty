@@ -30,6 +30,7 @@ export type AgentBrowseParams = BrowsePagination & {
   search: string;
   letter: string;
   source: string;
+  agency: string;
   sort: 'asc' | 'desc';
 };
 
@@ -71,6 +72,7 @@ export function parseAgentBrowseParams(searchParams: URLSearchParams): AgentBrow
     search: safeSearch(searchParams.get('search')),
     letter: searchParams.get('letter') || 'all',
     source: searchParams.get('source') || 'all',
+    agency: searchParams.get('agency') || 'all',
     sort: sort === 'desc' ? 'desc' : 'asc',
   };
 }
@@ -107,6 +109,7 @@ export function applyAgentBrowseFilters(query: FilterQuery, params: AgentBrowseP
     query = query.gte('name', start).lte('name', `${end}\uffff`);
   }
   if (params.source !== 'all') query = query.eq('source', params.source);
+  if (params.agency !== 'all') query = query.eq('agency', params.agency);
   return query;
 }
 

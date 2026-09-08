@@ -77,15 +77,26 @@ export function parseAgentBrowseParams(searchParams: URLSearchParams): AgentBrow
   };
 }
 
-export function applyListingBrowseFilters(query: FilterQuery, params: ListingBrowseParams): FilterQuery {
+export function districtAliases(district: string): string[] {
+  const numeric = district.replace(/^D/i, '').replace(/^0+/, '') || '0';
+  const padded = numeric.padStart(2, '0');
+  return [...new Set([`D${padded}`, padded, `D${numeric}`, numeric])];
+}
+
+function listingSearchFilter(search: string, agentIds: string[]): string {
+  const matchingAgentIds = agentIds.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+  const agentCondition = matchingAgentIds.length > 0 ? `,agent_id.in.(${matchingAgentIds.join(',')})` : '';
+  return `title.ilike.%${search}%,address.ilike.%${search}%,district.ilike.%${search}%,property_type.ilike.%${search}%${agentCondition}`;
+}
+
+export function applyListingBrowseFilters(query: FilterQuery, params: ListingBrowseParams, agentIds: string[] = []): FilterQuery {
   if (params.search) {
-    query = query.or(`title.ilike.%${params.search}%,address.ilike.%${params.search}%,district.ilike.%${params.search}%,property_type.ilike.%${params.search}%`);
+    query = query.or(listingSearchFilter(params.search, agentIds));
   }
   if (params.district === 'No District') {
     query = query.is('district', null);
   } else if (params.district !== 'All') {
-    const legacyDistrict = params.district.replace(/^D/, '');
-    query = query.in('district', [params.district, legacyDistrict]);
+    query = query.in('district', districtAliases(params.district));
   }
   if (params.portal !== 'All') query = query.eq('portal', params.portal);
   if (params.minPrice !== null) query = query.gte('price', params.minPrice);

@@ -676,15 +676,20 @@ export default function CrmPage() {
 
       <Dialog open={Boolean(selectedLeadId)} onOpenChange={(open) => !open && closeLead()}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedLead?.name || 'Lead details'}</DialogTitle>
+            <DialogDescription>
+              {selectedLead
+                ? selectedLead.crm_projects?.title || selectedLead.property_title
+                : selectedLeadLoading
+                  ? 'Loading lead details.'
+                  : error
+                    ? 'Lead details are unavailable.'
+                    : 'Select a lead to view details.'}
+            </DialogDescription>
+          </DialogHeader>
           {selectedLead ? (
             <>
-              <DialogHeader>
-                <DialogTitle>{selectedLead.name}</DialogTitle>
-                <DialogDescription>
-                  {selectedLead.crm_projects?.title || selectedLead.property_title}
-                </DialogDescription>
-              </DialogHeader>
-
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <InfoRow icon={<Phone className="h-4 w-4" />} label="Phone" value={selectedLead.phone} />
                 <InfoRow icon={<Mail className="h-4 w-4" />} label="Email" value={selectedLead.email} />

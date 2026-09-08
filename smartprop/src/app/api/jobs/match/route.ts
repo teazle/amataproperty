@@ -1,12 +1,11 @@
-import { withAdvisoryLock } from '@/jobs/lock';
 import { runMatchingJob } from '@/jobs/match';
 import { NextRequest,NextResponse } from 'next/server';
 
 /**
  * POST /api/jobs/match
- * Runs the property matching job with advisory locking
- * 
- * Uses advisory lock key 10101 to prevent concurrent execution
+ * Runs the property matching job. Preparing rows relies on the database's
+ * unique (agent_id, listing_id) constraint, so concurrent confirmations cannot
+ * create duplicate outreach records.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -35,27 +34,12 @@ export async function POST(request: NextRequest) {
       // Body parsing failed or no body, use defaults
     }
 
-    // Run the matching job with advisory lock (key 10101)
-    const result = await withAdvisoryLock(10101, async () => {
-      return await runMatchingJob(outreachLimit, { confirmedListingIds });
-    });
-
-    if (result === null) {
-      // Lock was not acquired (another process is running)
-      return NextResponse.json(
-        { 
-          message: 'Matching job is already running in another process',
-          status: 'locked'
-        },
-        { status: 409 }
-      );
-    }
+    const result = await runMatchingJob(outreachLimit, { confirmedListingIds });
 
     // Return the job results
     return NextResponse.json({
       ...result,
       timestamp: new Date().toISOString(),
-      lockKey: 10101
     }, { status: 200 });
 
   } catch (error) {

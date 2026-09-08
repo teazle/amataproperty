@@ -6,6 +6,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { generateCoBrokingInquiryMessage } from '@/lib/wa/waha';
 import { logWhatsAppMessage } from '@/lib/wa/message-log';
+import { normalizeNewsletterOptOutRecipient } from '@/lib/newsletter/whatsapp-opt-out';
 import { createCustomerTextTransport, type CustomerTextTransport } from '../lib/wa/customer-transport';
 import { createCustomerDeliveryStore, type CustomerDeliveryStore } from '../lib/wa/customer-delivery-store';
 import {
@@ -22,6 +23,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
 
 // Create a client with service role key for admin operations
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const PAGE_SIZE = 500;
+const IN_FILTER_CHUNK_SIZE = 250;
 
 interface Outreach {
   id: string;
@@ -68,42 +71,59 @@ type OutreachProcessStats = {
  * provide a reliable posted_at value, so this intentionally describes scrape
  * recency rather than publication recency.
  */
+function chunks<T>(values: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+async function paginatedRows<T>(label: string, fetchPage: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) return rows;
+  }
+}
+
 async function fetchRecentlyRefreshedListings(): Promise<MatcherListing[]> {
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
-  
-  const { data, error } = await supabase
-    .from('listings')
-    .select('*')
-    .gte('scraped_at', twentyFourHoursAgo.toISOString())
-    .gte('price', 1000000)
-    .lte('price', 2999000)
-    .in('portal', ['propertyguru', 'edgeprop'])
-    .order('scraped_at', { ascending: false });
-
-  if (error) {
-    console.error('Error fetching listings:', error);
-    throw new Error(`Failed to fetch listings: ${error.message}`);
-  }
-
-  return data || [];
+  return paginatedRows<MatcherListing>('fetch recently refreshed listings', async (from, to) => {
+    return await supabase
+      .from('listings')
+      .select('id, agent_id, price, scraped_at, title, url')
+      .gte('scraped_at', twentyFourHoursAgo.toISOString())
+      .gte('price', 1000000)
+      .lte('price', 2999000)
+      .in('portal', ['propertyguru', 'edgeprop'])
+      .order('scraped_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to);
+  });
 }
 
 /**
- * Fetches all active agents
+ * Fetches only agents that own a candidate listing. Chunking keeps each `in`
+ * filter below the response cap and pagination covers every matching owner.
  */
-async function fetchAgents(): Promise<MatcherAgent[]> {
-  const { data, error } = await supabase
-    .from('agents')
-    .select('*')
-    .order('name');
-
-  if (error) {
-    console.error('Error fetching agents:', error);
-    throw new Error(`Failed to fetch agents: ${error.message}`);
-  }
-
-  return data || [];
+async function fetchAgents(listings: MatcherListing[]): Promise<MatcherAgent[]> {
+  const agentIds = Array.from(new Set(listings.map((listing) => listing.agent_id).filter((id): id is string => Boolean(id))));
+  const agents = await Promise.all(chunks(agentIds, IN_FILTER_CHUNK_SIZE).map((agentIdChunk) =>
+    paginatedRows<MatcherAgent>('fetch candidate listing agents', async (from, to) => {
+      return await supabase
+        .from('agents')
+        .select('id, name, phone')
+        .in('id', agentIdChunk)
+        .order('id', { ascending: true })
+        .range(from, to);
+    }),
+  ));
+  return agents.flat();
 }
 
 /**
@@ -111,41 +131,63 @@ async function fetchAgents(): Promise<MatcherAgent[]> {
  * pair query protects deduplication while the opted-out query suppresses an
  * agent even when their opt-out was recorded on an earlier listing.
  */
-async function fetchOutreachGuards(listings: MatcherListing[]): Promise<{
+async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAgent[]): Promise<{
   existingOutreach: ExistingOutreach[];
   optedOutAgentIds: string[];
+  suppressedRecipientKeys: string[];
 }> {
   const agentIds = Array.from(new Set(listings.map((listing) => listing.agent_id).filter((id): id is string => Boolean(id))));
   const listingIds = listings.map((listing) => listing.id);
   if (agentIds.length === 0 || listingIds.length === 0) {
-    return { existingOutreach: [], optedOutAgentIds: [] };
+    return { existingOutreach: [], optedOutAgentIds: [], suppressedRecipientKeys: [] };
   }
 
-  const { data: existingEntries, error: existingError } = await supabase
-    .from('outreach')
-    .select('agent_id, listing_id, status')
-    .in('agent_id', agentIds)
-    .in('listing_id', listingIds);
+  const ownerByListingId = new Map(listings.map((listing) => [listing.id, listing.agent_id]));
+  const existingPages = await Promise.all(chunks(listingIds, IN_FILTER_CHUNK_SIZE).map((listingIdChunk) =>
+    paginatedRows<ExistingOutreach>('fetch existing outreach guards', async (from, to) => {
+      return await supabase
+        .from('outreach')
+        .select('agent_id, listing_id, status')
+        .in('listing_id', listingIdChunk)
+        .order('listing_id', { ascending: true })
+        .order('agent_id', { ascending: true })
+        .range(from, to);
+    }),
+  ));
+  const optedOutPages = await Promise.all(chunks(agentIds, IN_FILTER_CHUNK_SIZE).map((agentIdChunk) =>
+    paginatedRows<{ agent_id: string | null }>('fetch opted-out agent guards', async (from, to) => {
+      return await supabase
+        .from('outreach')
+        .select('agent_id')
+        .in('agent_id', agentIdChunk)
+        .eq('status', 'opted_out')
+        .order('agent_id', { ascending: true })
+        .range(from, to);
+    }),
+  ));
 
-  if (existingError) {
-    throw new Error(`Failed to check existing outreach: ${existingError.message}`);
-  }
-
-  const { data: optedOutEntries, error: optedOutError } = await supabase
-    .from('outreach')
-    .select('agent_id')
-    .in('agent_id', agentIds)
-    .eq('status', 'opted_out');
-
-  if (optedOutError) {
-    throw new Error(`Failed to check opted-out agents: ${optedOutError.message}`);
-  }
+  const recipientKeys = Array.from(new Set(agents
+    .map((agent) => agent.phone)
+    .filter((phone): phone is string => Boolean(phone))
+    .map((phone) => normalizeNewsletterOptOutRecipient(phone))
+    .filter((recipientKey): recipientKey is string => Boolean(recipientKey))));
+  const suppressionPages = await Promise.all(chunks(recipientKeys, IN_FILTER_CHUNK_SIZE).map((recipientKeyChunk) =>
+    paginatedRows<{ recipient_key: string }>('fetch newsletter suppression guards', async (from, to) => {
+      return await supabase
+        .from('newsletter_suppressions')
+        .select('recipient_key')
+        .in('recipient_key', recipientKeyChunk)
+        .order('recipient_key', { ascending: true })
+        .range(from, to);
+    }),
+  ));
 
   return {
-    existingOutreach: (existingEntries || []) as ExistingOutreach[],
-    optedOutAgentIds: (optedOutEntries || [])
+    existingOutreach: existingPages.flat().filter((entry) => entry.listing_id && entry.agent_id === ownerByListingId.get(entry.listing_id)),
+    optedOutAgentIds: optedOutPages.flat()
       .map((entry) => entry.agent_id)
       .filter((id): id is string => Boolean(id)),
+    suppressedRecipientKeys: suppressionPages.flat().map((entry) => entry.recipient_key),
   };
 }
 
@@ -159,7 +201,7 @@ async function insertPreparedOutreachEntries(candidates: MatcherCandidate[]): Pr
   // Insert new outreach entries
   const { data: insertedEntries, error: insertError } = await supabase
     .from('outreach')
-    .insert(newEntries)
+    .upsert(newEntries, { ignoreDuplicates: true, onConflict: 'agent_id,listing_id' })
     .select();
 
   if (insertError) {
@@ -424,16 +466,17 @@ export async function runMatchingJob(
     console.log(`Found ${listings.length} recently refreshed listings matching criteria`);
 
     // Fetch agents
-    const agents = await fetchAgents();
+    const agents = await fetchAgents(listings);
     console.log(`Found ${agents.length} agents`);
 
-    const guards = await fetchOutreachGuards(listings);
+    const guards = await fetchOutreachGuards(listings, agents);
     const candidates = selectRecentListingAgentOutreach({
       now: new Date(),
       listings,
       agents,
       existingOutreach: guards.existingOutreach,
       optedOutAgentIds: guards.optedOutAgentIds,
+      suppressedRecipientKeys: guards.suppressedRecipientKeys,
       allowedListingIds: options.confirmedListingIds,
     });
     const outreachEntries = plan.writesOutreach
@@ -458,7 +501,7 @@ export async function runMatchingJob(
       stats: {
         listingsFound: listings.length,
         agentsFound: agents.length,
-        outreachCreated: outreachEntries.length,
+        outreachCreated: plan.writesOutreach ? outreachEntries.length : 0,
         messagesProcessed: 0,
         messagesSent: 0,
         messagesFailed: 0,

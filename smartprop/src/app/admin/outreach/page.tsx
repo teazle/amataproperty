@@ -89,7 +89,7 @@ export default function OutreachPage() {
       setPreview(candidates);
       setSelectedListingIds(new Set(candidates.map((candidate) => candidate.listingId)));
       setConfirmed(false);
-      toast.success(`Preview found ${candidates.length} recently refreshed listing-agent pairs. No rows were written or sent.`);
+      toast.success(`Preview found ${candidates.length} recently refreshed listing-agent matches. No requests were prepared or messages sent.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to preview matcher');
     } finally {
@@ -123,7 +123,7 @@ export default function OutreachPage() {
       setPreview([]);
       setSelectedListingIds(new Set());
       setConfirmed(false);
-      toast.success(`Prepared ${data.stats?.outreachCreated || 0} selected outreach rows. No messages were sent.`);
+      toast.success(`Prepared ${data.stats?.outreachCreated || 0} selected requests. No messages were sent.`);
       await loadOutreach();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to prepare outreach');
@@ -172,7 +172,7 @@ export default function OutreachPage() {
         <CardHeader>
           <CardTitle>Recently refreshed matcher</CardTitle>
           <CardDescription>
-            Preview uses the listing&apos;s scrape refresh time, because a reliable publication timestamp is not available. It selects only the listing&apos;s own agent. Sending is disabled.
+            Matches listings refreshed in the last 24 hours with their own listing agent. Prepare selected requests first, then send only selected queued requests after confirmation.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -214,7 +214,7 @@ export default function OutreachPage() {
       <Card>
         <CardHeader>
           <CardTitle>Outreach history</CardTitle>
-          <CardDescription>Showing server-paginated private outreach records. Total: {total}.</CardDescription>
+          <CardDescription>Browse all outreach records. Total: {total}.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -256,7 +256,7 @@ export default function OutreachPage() {
 
           {selectedOutreachIds.size > 0 && (
             <div className="space-y-3 rounded-md border p-4">
-              <p className="text-sm text-muted-foreground">Only selected queued rows can be sent. The server rechecks listing ownership and opt-out status, then claims delivery before contacting the provider.</p>
+              <p className="text-sm text-muted-foreground">Only selected queued requests can be sent. Sending needs confirmation and respects opt-outs.</p>
               <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox checked={sendConfirmed} onCheckedChange={(checked) => setSendConfirmed(checked === true)} />
                 I confirm the selected recipients should receive the prepared outreach message.

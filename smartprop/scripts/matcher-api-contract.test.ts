@@ -20,12 +20,6 @@ mock.module('@/jobs/match', () => ({
     };
   },
 }));
-mock.module('@/jobs/lock', () => ({
-  advisoryUnlock: async () => false,
-  tryAdvisoryLock: async () => true,
-  withAdvisoryLock: async (_key: number, action: () => Promise<unknown>) => action(),
-}));
-
 const { POST } = await import('../src/app/api/jobs/match/route');
 
 beforeEach(() => calls.splice(0));
@@ -35,6 +29,7 @@ describe('matcher API confirmation boundary', () => {
     const response = await POST(new NextRequest('http://localhost/api/jobs/match', { method: 'POST', body: '{}' }));
 
     expect(response.status).toBe(200);
+    expect(await response.json()).not.toHaveProperty('lockKey');
     expect(calls).toEqual([[undefined, { confirmedListingIds: undefined }]]);
   });
 

@@ -1,3 +1,5 @@
+import { normalizeNewsletterOptOutRecipient } from '@/lib/newsletter/whatsapp-opt-out';
+
 export type MatcherListing = {
   id: string;
   agent_id: string | null;
@@ -45,10 +47,12 @@ export function selectRecentListingAgentOutreach(input: {
   agents: MatcherAgent[];
   existingOutreach: ExistingOutreach[];
   optedOutAgentIds: string[];
+  suppressedRecipientKeys?: string[];
   allowedListingIds?: string[];
 }): MatcherCandidate[] {
   const agentById = new Map(input.agents.map((agent) => [agent.id, agent]));
   const optedOut = new Set(input.optedOutAgentIds);
+  const suppressedRecipientKeys = new Set(input.suppressedRecipientKeys || []);
   const existingPairs = new Set(
     input.existingOutreach
       .filter((outreach) => outreach.agent_id && outreach.listing_id)
@@ -63,6 +67,8 @@ export function selectRecentListingAgentOutreach(input: {
 
     const agent = agentById.get(listing.agent_id);
     if (!agent || !agent.phone || optedOut.has(agent.id)) return [];
+    const recipientKey = normalizeNewsletterOptOutRecipient(agent.phone);
+    if (!recipientKey || suppressedRecipientKeys.has(recipientKey)) return [];
     if (existingPairs.has(`${agent.id}:${listing.id}`)) return [];
 
     return [{

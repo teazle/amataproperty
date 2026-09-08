@@ -50,6 +50,35 @@ describe('recently refreshed matcher selection', () => {
     expect(selected).toEqual([]);
   });
 
+  test('excludes a phone recorded in newsletter suppressions', () => {
+    expect(matcher).not.toBeNull();
+    const { selectRecentListingAgentOutreach } = matcher!;
+    const selected = selectRecentListingAgentOutreach({
+      now: NOW,
+      listings: [{ id: 'suppressed', agent_id: 'agent-1', price: 1_850_000, scraped_at: '2026-09-08T03:30:00.000Z', title: 'Suppressed phone', url: 'https://example.test/suppressed' }],
+      agents: [{ id: 'agent-1', name: 'Suppressed Agent', phone: '92345678' }],
+      existingOutreach: [],
+      optedOutAgentIds: [],
+      suppressedRecipientKeys: ['+6592345678'],
+    });
+
+    expect(selected).toEqual([]);
+  });
+
+  test('excludes a listing agent without a valid Singapore mobile recipient', () => {
+    expect(matcher).not.toBeNull();
+    const { selectRecentListingAgentOutreach } = matcher!;
+    const selected = selectRecentListingAgentOutreach({
+      now: NOW,
+      listings: [{ id: 'landline', agent_id: 'agent-1', price: 1_850_000, scraped_at: '2026-09-08T03:30:00.000Z', title: 'Landline listing', url: 'https://example.test/landline' }],
+      agents: [{ id: 'agent-1', name: 'Landline Agent', phone: '61234567' }],
+      existingOutreach: [],
+      optedOutAgentIds: [],
+    });
+
+    expect(selected).toEqual([]);
+  });
+
   test('uses preview as the default and makes no rows or sends until a selected confirmation', () => {
     expect(matcher).not.toBeNull();
     const { matcherExecutionPlan } = matcher!;

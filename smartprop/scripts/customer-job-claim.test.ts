@@ -35,7 +35,8 @@ function matchDatabase() {
             return query;
           },
           limit() { return query; },
-          order: async () => ({
+          order() {
+            const result = {
             data: table === 'outreach'
               ? matchRows.filter((row) =>
                 (!status || row.status === status)
@@ -43,7 +44,13 @@ function matchDatabase() {
               )
               : [],
             error: null,
-          }),
+            };
+            const ordered = {
+              range: async () => result,
+              then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
+            };
+            return { ...ordered, order: () => ordered };
+          },
         };
         return query;
       },

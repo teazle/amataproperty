@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 result = subprocess.run(['python3', '-B', '-m', 'unittest', 'discover', '-s',
-                         str(Path(__file__).resolve().parent), '-p', 'test_edge_security.py'])
+                         str(Path(__file__).resolve().parents[1] / 'deploy'), '-p', 'test_edge_security.py'])
 if result.returncode:
     sys.exit(result.returncode)
 if os.environ.get('ACCEPTANCE_FALSIFY') == '1':

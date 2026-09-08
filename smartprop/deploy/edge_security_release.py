@@ -26,7 +26,7 @@ def remote(request):
 
 
 def verify():
-    subprocess.run(['python3', '-B', str(DEPLOY / 'edge_security_verify.py')], check=True)
+    subprocess.run(['python3', '-B', str(ROOT / 'smartprop/scripts/edge-security-verify.py')], check=True)
     return {'status': 'passed', 'live': False}
 
 

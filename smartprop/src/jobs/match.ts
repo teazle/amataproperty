@@ -66,6 +66,7 @@ type OutreachProcessStats = {
   wahaError?: string;
   reconciliationRequired?: number;
   reconciliationErrors?: string[];
+  reconciliationOutreachIds?: string[];
 };
 
 /**
@@ -312,6 +313,7 @@ export async function processOutreachMessages(
   let failed = 0;
   let reconciliationRequired = 0;
   const reconciliationErrors: string[] = [];
+  const reconciliationOutreachIds: string[] = [];
 
   // Process each message with delay between messages to avoid rate limiting
   for (let i = 0; i < eligibleOutreach.length; i++) {
@@ -367,6 +369,7 @@ export async function processOutreachMessages(
     if (!finalized) {
       failed++;
       reconciliationRequired++;
+      reconciliationOutreachIds.push(outreach.id);
       reconciliationErrors.push(`Outreach ${outreach.id} requires reconciliation: delivery finalization was not confirmed`);
       if (result.outcome === 'accepted' && result.messageId.trim()) sent++;
       continue;
@@ -394,6 +397,7 @@ export async function processOutreachMessages(
       const message = `Accepted outreach ${outreach.id} requires reconciliation: ${error instanceof Error ? error.message : String(error)}`;
       console.error(message);
       reconciliationRequired++;
+      reconciliationOutreachIds.push(outreach.id);
       reconciliationErrors.push(message);
       sent++;
       continue;
@@ -413,6 +417,7 @@ export async function processOutreachMessages(
       const message = `Accepted outreach ${outreach.id} requires reconciliation: conversation log persistence failed: ${error instanceof Error ? error.message : String(error)}`;
       console.error(message);
       reconciliationRequired++;
+      reconciliationOutreachIds.push(outreach.id);
       reconciliationErrors.push(message);
       sent++;
       continue;
@@ -425,7 +430,11 @@ export async function processOutreachMessages(
     processed: eligibleOutreach.length,
     sent, 
     failed,
-    ...(reconciliationRequired ? { reconciliationRequired, reconciliationErrors } : {}),
+    ...(reconciliationRequired ? {
+      reconciliationRequired,
+      reconciliationErrors,
+      reconciliationOutreachIds: Array.from(new Set(reconciliationOutreachIds)),
+    } : {}),
   };
 }
 

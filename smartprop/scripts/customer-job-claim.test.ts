@@ -356,7 +356,12 @@ describe('customer delivery claims in remaining jobs', () => {
     const first = await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
     await processOutreachMessages(10, 0, { selectedOutreachIds: ['outreach-1'] }, { deliveryStore: delivery.store, customerTransport: selected.customerTransport });
 
-    expect(first).toMatchObject({ sent: 1, failed: 0, reconciliationRequired: 1 });
+    expect(first).toMatchObject({
+      sent: 1,
+      failed: 0,
+      reconciliationRequired: 1,
+      reconciliationOutreachIds: ['outreach-1'],
+    });
     expect(selected.calls).toHaveLength(1);
     expect(delivery.finishes).toEqual([expect.objectContaining({ outcome: 'accepted', messageId: 'provider-initial-reconcile' })]);
   });

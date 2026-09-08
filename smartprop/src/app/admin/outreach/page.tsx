@@ -49,6 +49,7 @@ type OutreachProcessResponse = {
     failed?: number;
     reconciliationRequired?: number;
     reconciliationErrors?: string[];
+    reconciliationOutreachIds?: string[];
   };
 };
 

@@ -5,11 +5,12 @@ describe('outreach reconciliation result', () => {
   test('keeps accepted-send persistence failures visible with their outreach ids', () => {
     expect(reconciliationNotice({
       reconciliationRequired: 1,
-      reconciliationErrors: ['Outreach outreach-1 requires reconciliation: match domain write failed'],
+      reconciliationOutreachIds: ['outreach-1'],
+      reconciliationErrors: ['Accepted outreach outreach-1 requires reconciliation: match domain write failed'],
     })).toEqual({
       count: 1,
       outreachIds: ['outreach-1'],
-      errors: ['Outreach outreach-1 requires reconciliation: match domain write failed'],
+      errors: ['Accepted outreach outreach-1 requires reconciliation: match domain write failed'],
     });
   });
 

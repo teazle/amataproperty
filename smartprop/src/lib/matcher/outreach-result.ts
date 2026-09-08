@@ -1,6 +1,7 @@
 type OutreachProcessStats = {
   reconciliationRequired?: unknown;
   reconciliationErrors?: unknown;
+  reconciliationOutreachIds?: unknown;
 };
 
 export type ReconciliationNotice = {
@@ -18,10 +19,9 @@ export function reconciliationNotice(stats: OutreachProcessStats | undefined): R
   const errors = Array.isArray(stats?.reconciliationErrors)
     ? stats.reconciliationErrors.filter((error): error is string => typeof error === 'string')
     : [];
-  const outreachIds = Array.from(new Set(errors.flatMap((error) => {
-    const match = /^Outreach\s+([^\s]+)\s+requires reconciliation:/.exec(error);
-    return match ? [match[1]] : [];
-  })));
+  const outreachIds = Array.isArray(stats?.reconciliationOutreachIds)
+    ? Array.from(new Set(stats.reconciliationOutreachIds.filter((id): id is string => typeof id === 'string' && id.length > 0)))
+    : [];
 
   return { count, outreachIds, errors };
 }

@@ -6,6 +6,7 @@
 import * as db from '@/lib/db/articles';
 import { upsertArticleContent } from '@/lib/db/article-content';
 import type { ArticleContent } from '@/lib/scraper/edgeprop-content-scraper';
+import { extractEdgePropArticleMetadata } from '@/lib/scraper/edgeprop-article-metadata';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA, createFlaresolverrSession } from '@/workers/flaresolverr';
 import type { ConsoleMessage } from 'playwright';
 import path from 'path';
@@ -1076,6 +1077,7 @@ export async function scrapeEdgePropMCP(
               throw new Error('Page closed or timed out before extraction');
             }
 
+            const trustedMetadata = await articlePage.evaluate(extractEdgePropArticleMetadata);
             const articleData = await articlePage.evaluate<ArticleExtractionData, string>((articleTitle: string) => {
               // FIRST: EdgeProp's JavaScript tries to call __name() as a function, so provide a no-op function
               try {
@@ -1558,7 +1560,9 @@ export async function scrapeEdgePropMCP(
               console.log(`Final author determined: ${author}`);
 
               // Try to find published date
-              const dateElement = document.querySelector('time, [class*="date"], [class*="published"], meta[property="article:published_time"]');
+              const dateElement = document.querySelector('#article-detail-otherinfo time[datetime]') ||
+                                  document.querySelector('meta[property="article:published_time"]') ||
+                                  document.querySelector('time[datetime]');
               if (dateElement) {
                 publishedDate = dateElement.getAttribute('datetime') ||
                                 dateElement.getAttribute('content') ||
@@ -2249,8 +2253,8 @@ export async function scrapeEdgePropMCP(
               console.log(`✅ Extraction successful! Creating fullArticle object...`);
               const fullArticle: MCPArticle = {
                 ...article,
-                author: articleData.author || article.author,
-                created: articleData.created || article.created,
+                author: trustedMetadata.author || (articleData.author !== 'EdgeProp Staff' ? articleData.author : '') || article.author,
+                created: trustedMetadata.created || articleData.created || article.created,
                 category: articleData.category || article.category,
                 description: articleData.description || article.description,
                 html_content: articleData.html_content,
@@ -2267,7 +2271,7 @@ export async function scrapeEdgePropMCP(
               };
 
               allArticles.push(fullArticle);
-              console.log(`✅ Scraped: ${article.title} by ${articleData.author}`);
+              console.log(`✅ Scraped: ${article.title} by ${fullArticle.author}`);
 
               // Save immediately if requested
               if (saveImmediately && sessionId) {
@@ -2522,6 +2526,7 @@ export async function scrapeSingleArticleMCP(
     }
 
     // Extract article data using the same logic as scrapeEdgePropMCP
+    const trustedMetadata = await page.evaluate(extractEdgePropArticleMetadata);
     const articleData = await page.evaluate<ArticleExtractionData>(() => {
       try {
         if (typeof (window as unknown as Window & Record<string, unknown>).__name === 'undefined') {
@@ -2855,7 +2860,9 @@ export async function scrapeSingleArticleMCP(
           console.log(`Final author determined: ${author}`);
 
           // Try to find published date
-          const dateElement = document.querySelector('time, [class*="date"], [class*="published"], meta[property="article:published_time"]');
+          const dateElement = document.querySelector('#article-detail-otherinfo time[datetime]') ||
+                              document.querySelector('meta[property="article:published_time"]') ||
+                              document.querySelector('time[datetime]');
           if (dateElement) {
             publishedDate = dateElement.getAttribute('datetime') ||
                             dateElement.getAttribute('content') ||
@@ -3301,8 +3308,8 @@ export async function scrapeSingleArticleMCP(
       title: articleData.title || 'Untitled',
       path: path,
       thumbnail: articleData.main_image_url || '',
-      author: articleData.author || 'Unknown',
-      created: articleData.created || new Date().toISOString(),
+      author: trustedMetadata.author || (articleData.author !== 'EdgeProp Staff' ? articleData.author : '') || 'Unknown',
+      created: trustedMetadata.created || articleData.created || new Date().toISOString(),
       category: articleData.category || ['Property News'],
       description: articleData.description || articleData.text_content?.substring(0, 200) || '',
       created_on: new Date().toISOString(),

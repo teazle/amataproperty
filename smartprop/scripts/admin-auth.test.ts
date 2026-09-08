@@ -88,9 +88,23 @@ describe("admin authentication", () => {
     setConfiguration("configured-admin-password", "configured-session-secret");
 
     const token = await createAdminSessionToken(1_000_000);
-    const tampered = `${token!.slice(0, -1)}${token!.endsWith("a") ? "b" : "a"}`;
+    const [payload, signature] = token!.split(".");
+    const tamperedSignature = `${signature!.startsWith("A") ? "B" : "A"}${signature!.slice(1)}`;
 
-    expect(await isValidAdminSession(tampered, 1_000_000)).toBe(false);
+    expect(await isValidAdminSession(`${payload}.${tamperedSignature}`, 1_000_000)).toBe(false);
+  });
+
+  test("rejects a noncanonical Base64url signature encoding", async () => {
+    setConfiguration("configured-admin-password", "configured-session-secret");
+
+    const token = await createAdminSessionToken(1_000_000);
+    const [payload, signature] = token!.split(".");
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const lastCharacter = signature!.at(-1)!;
+    const canonicalIndex = alphabet.indexOf(lastCharacter);
+    const equivalentNoncanonicalCharacter = alphabet[(canonicalIndex & 0b111100) | 0b000001];
+
+    expect(await isValidAdminSession(`${payload}.${signature!.slice(0, -1)}${equivalentNoncanonicalCharacter}`, 1_000_000)).toBe(false);
   });
 
   test("issues a fresh session nonce for each successful login", async () => {

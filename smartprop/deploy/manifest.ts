@@ -31,7 +31,6 @@ export const SMARTPROP_REQUIRED_APP_INPUTS = [
   'bun.lock',
   'ecosystem.config.js',
   'next.config.ts',
-  'package-lock.json',
   'package.json',
   'src/instrumentation-node.ts',
   'src/instrumentation.ts',

@@ -172,14 +172,14 @@ export default function EnhancedAgentsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Property Agents</h1>
           <p className="text-gray-600 mt-2">
             {loading ? 'Loading...' : loadError ? 'Agents unavailable' : `Showing ${showing.start}-${showing.end} of ${total} agents`}
           </p>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <Button
             onClick={() => setViewMode(viewMode === 'list' ? 'analytics' : 'list')}
             variant="outline"
@@ -193,7 +193,7 @@ export default function EnhancedAgentsPage() {
           </Button>
           <Button onClick={handleExport} variant="outline">
             <Download className="h-4 w-4 mr-2" />
-            Export CSV
+            Export page
           </Button>
         </div>
       </div>

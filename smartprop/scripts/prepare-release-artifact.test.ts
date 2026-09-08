@@ -138,8 +138,31 @@ afterEach(() => {
 });
 
 describe('prepare-release-artifact CLI', () => {
+  test('omits historical browser profiles, local secrets and unrelated evidence from the application source', () => {
+    const { root, commit } = makeRepository({
+      '.playwright/linkedin-profile/Default/Cookies': 'synthetic historical cookie bytes',
+      'browser-data-nopecha/Default/Network Persistent State': 'synthetic browser state',
+      'storage/pg.state.json': '{"synthetic":true}',
+      '.env.production': 'SECRET=synthetic-fixture',
+      'old-key.pem': 'synthetic private key fixture',
+      'output/customer-export.csv': 'synthetic historical export',
+      'public/logo.svg': '<svg/>',
+      'scripts/runtime-task.ts': 'export const runtime = true;',
+    });
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
+    temporaryDirectories.push(output);
+    const buildArtifact = join(output, 'next-build.zip');
+    writeRuntimePayload(buildArtifact);
+    const sourceArchive = join(output, 'source.zip');
+    const result = invoke({ repository: root, sourceCommit: commit, sourceArchive,
+      manifest: join(output, 'manifest.json'), buildArtifact, rollback: rollbackSha256 });
+    expect(result.exitCode).toBe(0);
+    const paths = new AdmZip(sourceArchive).getEntries().filter((entry) => !entry.isDirectory).map((entry) => entry.entryName).sort();
+    expect(paths).toEqual([...requiredInputs, 'public/logo.svg', 'scripts/runtime-task.ts'].sort());
+  });
+
   test('packages committed source only and writes a private revalidated manifest', () => {
-    const { root, commit } = makeRepository({ 'committed-marker.txt': 'from commit\n' });
+    const { root, commit } = makeRepository({ 'src/committed-marker.txt': 'from commit\n' });
     writeFileSync(join(root, 'dirty-local.txt'), 'must not be archived\n');
     const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
     temporaryDirectories.push(output);
@@ -159,7 +182,7 @@ describe('prepare-release-artifact CLI', () => {
 
     expect(result.exitCode).toBe(0);
     expect(new AdmZip(sourceArchive).getEntries().filter((entry) => !entry.isDirectory).map((entry) => entry.entryName).sort())
-      .toEqual([...requiredInputs, 'committed-marker.txt'].sort());
+      .toEqual([...requiredInputs, 'src/committed-marker.txt'].sort());
     expect(JSON.parse(readFileSync(manifest, 'utf8'))).toMatchObject({
       source_identity: { kind: 'git', value: commit },
       rollback_identity: { kind: 'sha256', value: rollbackSha256 },
@@ -191,7 +214,7 @@ describe('prepare-release-artifact CLI', () => {
   });
 
   test('never clobbers a source archive destination created after preflight', async () => {
-    const { root, commit } = makeRepository({ 'large-committed-input.txt': 'x'.repeat(8_000_000) });
+    const { root, commit } = makeRepository({ 'src/large-committed-input.txt': 'x'.repeat(8_000_000) });
     const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
     temporaryDirectories.push(output);
     const buildArtifact = join(output, 'next-build.tar');
@@ -220,7 +243,7 @@ describe('prepare-release-artifact CLI', () => {
   });
 
   test('rejects committed secret and symlink entries before publishing either output', () => {
-    const secretRepository = makeRepository({ '.env.production': 'SECRET=fixture\n' });
+    const secretRepository = makeRepository({ 'src/.env.production': 'SECRET=fixture\n' });
     const output = mkdtempSync(join(tmpdir(), 'smartprop-release-output-'));
     temporaryDirectories.push(output);
     const buildArtifact = join(output, 'next-build.tar');
@@ -242,8 +265,8 @@ describe('prepare-release-artifact CLI', () => {
     expect(() => lstatSync(manifest)).toThrow();
 
     const symlinkRepository = makeRepository();
-    symlinkSync('package.json', join(symlinkRepository.root, 'linked-package.json'));
-    run(['git', 'add', 'linked-package.json'], symlinkRepository.root);
+    symlinkSync('../package.json', join(symlinkRepository.root, 'src/linked-package.json'));
+    run(['git', 'add', 'src/linked-package.json'], symlinkRepository.root);
     run(['git', 'commit', '--quiet', '-m', 'symlink fixture'], symlinkRepository.root);
     const symlinkCommit = Bun.spawnSync({ cmd: ['git', 'rev-parse', 'HEAD'], cwd: symlinkRepository.root, stdout: 'pipe' })
       .stdout.toString().trim();

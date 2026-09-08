@@ -10,6 +10,14 @@ import {
 
 const GIT_COMMIT = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+// Browser profiles and historical environment/diagnostic files are tracked in
+// this repository. Only application source/assets belong in a release archive.
+const SOURCE_ROOTS = new Set([
+  'src', 'public', 'scripts', 'deploy', 'openclaw',
+  'bun.lock', 'package.json', 'ecosystem.config.js', 'next.config.ts',
+  'postcss.config.mjs', 'tsconfig.json', 'next-env.d.ts',
+  'components.json', 'eslint.config.mjs',
+]);
 
 export class PrepareReleaseArtifactError extends Error {
   constructor(message: string) {
@@ -168,7 +176,10 @@ export function prepareReleaseArtifact(options: PrepareReleaseArtifactOptions): 
   const stagedArchive = join(staging, 'source.zip');
   try {
     try {
-      execFileSync('git', ['-C', repository, 'archive', '--format=zip', `--output=${stagedArchive}`, tree], {
+      const sourceRoots = git(repository, ['ls-tree', '--name-only', '-z', tree])
+        .split('\0').filter((entry) => SOURCE_ROOTS.has(entry));
+      if (sourceRoots.length === 0) fail('committed tree has no application source inputs');
+      execFileSync('git', ['-C', repository, 'archive', '--format=zip', `--output=${stagedArchive}`, tree, '--', ...sourceRoots], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       chmodSync(stagedArchive, 0o600);

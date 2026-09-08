@@ -84,6 +84,8 @@ const FORBIDDEN_DIRECTORIES = new Set([
   '.auth',
   '.aws',
   '.openclaw',
+  '.playwright',
+  '.playwright-cli',
   '.ssh',
   'auth-state',
   'credentials',
@@ -157,7 +159,7 @@ function assertSafeArchivePath(path: string): void {
     || fileName.startsWith('.env.')
     || /\.(?:key|p12|pem|pfx)$/.test(fileName)
     || FORBIDDEN_FILE_NAMES.has(fileName)
-    || lowerParts.some((part) => FORBIDDEN_DIRECTORIES.has(part))
+    || lowerParts.some((part) => FORBIDDEN_DIRECTORIES.has(part) || part.startsWith('browser-data'))
   ) {
     fail(`archive contains an environment or authentication artifact: ${path}`);
   }

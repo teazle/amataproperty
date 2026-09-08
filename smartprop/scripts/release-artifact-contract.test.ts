@@ -102,6 +102,14 @@ afterEach(() => {
 });
 
 describe('SmartProp release artifact contract', () => {
+  test.each(['.playwright/linkedin-profile/Default/Cookies', 'browser-data-nopecha/Default/Cookies'])(
+    'rejects a browser profile even when its cookie filename is not JSON: %s', (profilePath) => {
+      expect(() => validManifest(makeArchive({
+        ...validEntries(), [profilePath]: 'synthetic cookie database',
+      }))).toThrow('environment or authentication artifact');
+    },
+  );
+
   test('binds required app inputs and the archive to exact content hashes', () => {
     const archivePath = makeArchive({
       ...validEntries(),

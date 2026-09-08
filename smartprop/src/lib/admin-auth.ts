@@ -1,14 +1,25 @@
 export const ADMIN_SESSION_COOKIE = "viewproperty_admin_session";
 
-const DEFAULT_ADMIN_PASSWORD = "amataadmin";
 const SESSION_SALT = "viewproperty-admin-v1";
 
-function getAdminPassword() {
-  return process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
+type AdminAuthConfig = {
+  password: string;
+  secret: string;
+};
+
+function getAdminAuthConfig(): AdminAuthConfig | null {
+  const password = process.env.ADMIN_PASSWORD;
+  const secret = process.env.ADMIN_AUTH_SECRET;
+
+  if (!password || !secret) {
+    return null;
+  }
+
+  return { password, secret };
 }
 
-function getAdminSecret() {
-  return process.env.ADMIN_AUTH_SECRET || getAdminPassword();
+export function isAdminAuthConfigured() {
+  return getAdminAuthConfig() !== null;
 }
 
 function toHex(buffer: ArrayBuffer) {
@@ -18,11 +29,17 @@ function toHex(buffer: ArrayBuffer) {
 }
 
 export function isAdminPassword(password: string) {
-  return password === getAdminPassword();
+  const config = getAdminAuthConfig();
+  return config !== null && password === config.password;
 }
 
 export async function createAdminSessionToken() {
-  const payload = `${SESSION_SALT}:${getAdminPassword()}:${getAdminSecret()}`;
+  const config = getAdminAuthConfig();
+  if (!config) {
+    return null;
+  }
+
+  const payload = `${SESSION_SALT}:${config.password}:${config.secret}`;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(payload)
@@ -36,5 +53,6 @@ export async function isValidAdminSession(token?: string | null) {
     return false;
   }
 
-  return token === await createAdminSessionToken();
+  const expectedToken = await createAdminSessionToken();
+  return expectedToken !== null && token === expectedToken;
 }

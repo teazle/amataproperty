@@ -24,10 +24,12 @@ describe('customer text transport', () => {
     const adapter = createCustomerTextTransport({
       provider: 'openclaw',
       openClawCommand: 'openclaw-test',
+      openClawAgentId: 'customer-service',
+      openClawAccount: 'customer-default',
       openClawRun: async (_command, args) => {
         calls.push(args);
-        if (args[0] === 'channels') return { stdout: openClawStatus(readyDefaultAccount()), stderr: '' };
-        return { stdout: '{"messageId":"openclaw-customer-1"}', stderr: '' };
+        if (args[0] === 'channels') return { stdout: openClawStatus({ ...readyDefaultAccount(), accountId: 'customer-default' }), stderr: '' };
+        return { stdout: '{"runId":"customer:signing-1","channel":"whatsapp","messageId":"openclaw-customer-1"}', stderr: '' };
       },
     });
 
@@ -35,6 +37,7 @@ describe('customer text transport', () => {
       to: '8123 4567@s.whatsapp.net',
       text: 'STOP is part of this signed confirmation.',
       purpose: 'signing_confirmation',
+      idempotencyKey: 'customer:signing-1',
     });
 
     expect(result).toEqual({
@@ -43,18 +46,46 @@ describe('customer text transport', () => {
       messageId: 'openclaw-customer-1',
       messageText: 'STOP is part of this signed confirmation.',
     });
-    const sendArgs = calls.find((args) => args[0] === 'message')!;
+    const sendArgs = calls.find((args) => args[0] === 'gateway')!;
+    const sendParams = JSON.parse(sendArgs[sendArgs.indexOf('--params') + 1]);
     expect(sendArgs).toEqual([
-      'message', 'send', '--channel', 'whatsapp', '--account', 'default',
-      '--target', '+6581234567', '--message', 'STOP is part of this signed confirmation.', '--json',
+      'gateway', 'call', 'send', '--params', JSON.stringify({
+        agentId: 'customer-service', accountId: 'customer-default', channel: 'whatsapp',
+        to: '+6581234567', message: 'STOP is part of this signed confirmation.', idempotencyKey: 'customer:signing-1',
+      }), '--timeout', '50000', '--json',
     ]);
-    expect(sendArgs.filter((argument) => argument === '--account')).toEqual(['--account']);
+    expect(sendParams).toEqual({
+      agentId: 'customer-service', accountId: 'customer-default', channel: 'whatsapp',
+      to: '+6581234567', message: 'STOP is part of this signed confirmation.', idempotencyKey: 'customer:signing-1',
+    });
+  });
+
+  test('blocks configured OpenClaw customer sending when no customer agent is configured', async () => {
+    const calls: string[][] = [];
+    const adapter = createCustomerTextTransport({
+      provider: 'openclaw',
+      openClawAccount: 'customer-default',
+      openClawRun: async (_command, args) => {
+        calls.push(args);
+        return { stdout: openClawStatus(readyDefaultAccount()), stderr: '' };
+      },
+    });
+
+    const result = await adapter.sendText({
+      to: '81234567', text: 'Hello', purpose: 'api_text', idempotencyKey: 'customer:api-1',
+    });
+
+    expect(result).toMatchObject({ outcome: 'blocked', provider: 'openclaw' });
+    expect(result.error).toContain('AGENT');
+    expect(calls).toEqual([]);
   });
 
   test('rejects group, LID, malformed recipient, blank text, and unsupported purpose before readiness or send', async () => {
     const calls: string[][] = [];
     const adapter = createCustomerTextTransport({
       provider: 'openclaw',
+      openClawAgentId: 'customer-service',
+      openClawAccount: 'default',
       openClawRun: async (_command, args) => {
         calls.push(args);
         return { stdout: openClawStatus(readyDefaultAccount()), stderr: '' };
@@ -78,6 +109,8 @@ describe('customer text transport', () => {
     const calls: string[][] = [];
     const adapter = createCustomerTextTransport({
       provider: 'openclaw',
+      openClawAgentId: 'customer-service',
+      openClawAccount: 'default',
       openClawRun: async (_command, args) => {
         calls.push(args);
         return { stdout: openClawStatus({ ...readyDefaultAccount(), connected: false }), stderr: '' };
@@ -97,6 +130,8 @@ describe('customer text transport', () => {
   ])('never accepts an OpenClaw %s', async (_name, sendOutput) => {
     const adapter = createCustomerTextTransport({
       provider: 'openclaw',
+      openClawAgentId: 'customer-service',
+      openClawAccount: 'default',
       openClawRun: async (_command, args) => {
         if (args[0] === 'channels') return { stdout: openClawStatus(readyDefaultAccount()), stderr: '' };
         if (sendOutput === null) throw new DOMException('timed out', 'AbortError');

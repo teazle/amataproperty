@@ -2,6 +2,7 @@ import {
   createSelectedWhatsAppCampaignTransport,
   type SelectedTransportDependencies,
 } from './selected-transport';
+import { randomUUID } from 'node:crypto';
 
 export type CustomerTextPurpose =
   | 'initial_cobroking'
@@ -16,6 +17,8 @@ export interface CustomerTextInput {
   to: string;
   text: string;
   purpose: CustomerTextPurpose;
+  /** A durable delivery claim key when the caller has one. */
+  idempotencyKey?: string;
 }
 
 export type CustomerTransportProvider = 'waha' | 'openclaw' | 'unknown';
@@ -129,7 +132,14 @@ export function createCustomerTextTransport(
       }
 
       try {
-        const result = await selectedTransport.transport(validated.recipient, validated.text);
+        const idempotencyKey = typeof input.idempotencyKey === 'string' && input.idempotencyKey.trim()
+          ? input.idempotencyKey.trim()
+          : `customer:${randomUUID()}`;
+        const result = await selectedTransport.transport(
+          validated.recipient,
+          validated.text,
+          idempotencyKey,
+        );
         if (result.outcome === 'accepted') {
           const messageId = typeof result.messageId === 'string' ? result.messageId.trim() : '';
           if (messageId) {

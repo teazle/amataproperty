@@ -24,6 +24,9 @@ export type OpenClawRunner = (
 export interface OpenClawSendOptions {
   command?: string;
   run?: OpenClawRunner;
+  agentId?: string;
+  accountId?: string;
+  idempotencyKey?: string;
 }
 
 const defaultRun: OpenClawRunner = async (command, args) => {
@@ -49,17 +52,20 @@ export function normalizeOpenClawWhatsAppTarget(value: string): string {
   return value.trim().startsWith('+') ? value.trim() : `+${digits}`;
 }
 
-export function buildOpenClawMessageArgs(target: string, message: string): string[] {
+export function buildOpenClawMessageArgs(
+  target: string,
+  message: string,
+  input: Required<Pick<OpenClawSendOptions, 'agentId' | 'accountId' | 'idempotencyKey'>>,
+): string[] {
   return [
-    'message',
-    'send',
-    '--channel',
-    'whatsapp',
-    '--target',
-    target,
-    '--message',
-    message,
-    '--json',
+    'gateway', 'call', 'send', '--params', JSON.stringify({
+      agentId: input.agentId,
+      accountId: input.accountId,
+      channel: 'whatsapp',
+      to: target,
+      message,
+      idempotencyKey: input.idempotencyKey,
+    }), '--timeout', '50000', '--json',
   ];
 }
 
@@ -76,6 +82,24 @@ export function parseOpenClawMessageId(stdout: string): string | undefined {
   return parsed.messageId || parsed.payload?.result?.messageId;
 }
 
+function isMatchingOpenClawReceipt(
+  stdout: string,
+  idempotencyKey: string,
+): boolean {
+  try {
+    const parsed = JSON.parse(stdout || '{}') as {
+      runId?: unknown;
+      channel?: unknown;
+      messageId?: unknown;
+    };
+    return parsed.runId === idempotencyKey &&
+      parsed.channel === 'whatsapp' &&
+      typeof parsed.messageId === 'string' && parsed.messageId.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function sendOpenClawWhatsAppMessage(
   to: string,
   text: string,
@@ -84,16 +108,25 @@ export async function sendOpenClawWhatsAppMessage(
   const command = options.command || process.env.OPENCLAW_BIN || 'openclaw';
   const run = options.run || defaultRun;
   const target = normalizeOpenClawWhatsAppTarget(to);
-  const args = buildOpenClawMessageArgs(target, text);
+  const agentId = options.agentId?.trim();
+  const accountId = options.accountId?.trim();
+  const idempotencyKey = options.idempotencyKey?.trim();
+  if (!agentId || !accountId || !idempotencyKey) {
+    return {
+      success: false,
+      error: 'OpenClaw send requires configured agentId, accountId, and idempotencyKey',
+    };
+  }
+  const args = buildOpenClawMessageArgs(target, text, { agentId, accountId, idempotencyKey });
 
   try {
     const { stdout, stderr } = await run(command, args);
-    const messageId = parseOpenClawMessageId(stdout);
+    const messageId = parseOpenClawMessageId(stdout)?.trim();
 
-    if (!messageId) {
+    if (!messageId || !isMatchingOpenClawReceipt(stdout, idempotencyKey)) {
       return {
         success: false,
-        error: stderr || 'OpenClaw send completed without a message id',
+        error: stderr || 'OpenClaw send outcome is unconfirmed; do not retry automatically',
         rawOutput: stdout,
       };
     }

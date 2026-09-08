@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 
 export interface SelectedTransportDependencies {
   provider?: string;
+  openClawAgentId?: string;
   openClawAccount?: string;
   openClawCommand?: string;
   openClawRun?: OpenClawRunner;
@@ -22,7 +23,7 @@ export interface SelectedTransportDependencies {
 
 export interface SelectedWhatsAppCampaignTransport {
   preflight: () => Promise<{ ready: boolean; error?: string }>;
-  transport: (to: string, text: string) => Promise<CampaignTransportResult>;
+  transport: (to: string, text: string, idempotencyKey?: unknown) => Promise<CampaignTransportResult>;
 }
 
 type SelectedProvider = 'waha' | 'openclaw' | 'unknown';
@@ -39,21 +40,6 @@ function selectProvider(value: string | undefined): SelectedProvider {
   const normalized = (value || 'waha').trim().toLowerCase();
   if (normalized === 'waha' || normalized === 'openclaw') return normalized;
   return 'unknown';
-}
-
-function selectedAccount(value: string | undefined): string {
-  return value?.trim() || 'default';
-}
-
-function withOpenClawAccount(args: string[], account: string): string[] {
-  const targetIndex = args.indexOf('--target');
-  if (targetIndex === -1) return [...args, '--account', account];
-  return [
-    ...args.slice(0, targetIndex),
-    '--account',
-    account,
-    ...args.slice(targetIndex),
-  ];
 }
 
 export function createSelectedWhatsAppCampaignTransport(
@@ -78,23 +64,31 @@ export function createSelectedWhatsAppCampaignTransport(
         const result = await readiness();
         return { ready: result.ready, error: result.error };
       },
-      transport,
+      transport: async (to, text) => transport(to, text),
     };
   }
 
-  const account = selectedAccount(
-    dependencies.openClawAccount ?? process.env.SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT,
-  );
+  const agentId = (
+    dependencies.openClawAgentId ?? process.env.SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID
+  )?.trim();
+  const account = (
+    dependencies.openClawAccount ?? process.env.SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT
+  )?.trim();
   const command = dependencies.openClawCommand || process.env.OPENCLAW_BIN || 'openclaw';
   const run = dependencies.openClawRun || defaultOpenClawRun;
-  const readiness = async () => getOpenClawWhatsAppReadiness({ account, command, run });
+  const configurationError = !agentId || !account
+    ? 'OpenClaw customer sending requires configured SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID and SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT'
+    : undefined;
+  const readiness = async () => configurationError
+    ? { ready: false, error: configurationError }
+    : getOpenClawWhatsAppReadiness({ account, command, run });
 
   return {
     preflight: async () => {
       const result = await readiness();
       return { ready: result.ready, error: result.error };
     },
-    transport: async (to, text) => {
+    transport: async (to, text, idempotencyKey) => {
       const ready = await readiness();
       if (!ready.ready) {
         return {
@@ -105,10 +99,10 @@ export function createSelectedWhatsAppCampaignTransport(
 
       const result = await sendOpenClawWhatsAppMessage(to, text, {
         command,
-        run: (selectedCommand, args) => run(
-          selectedCommand,
-          withOpenClawAccount(args, account),
-        ),
+        agentId,
+        accountId: account,
+        idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : undefined,
+        run,
       });
       const messageId = typeof result.messageId === 'string' ? result.messageId.trim() : '';
       if (result.success && messageId) {

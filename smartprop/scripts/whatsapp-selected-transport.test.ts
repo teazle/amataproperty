@@ -7,6 +7,7 @@ import {
 } from '../src/lib/wa/selected-transport';
 
 const originalProvider = process.env.SMARTPROP_WHATSAPP_PROVIDER;
+const originalAgent = process.env.SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID;
 const originalAccount = process.env.SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT;
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -33,11 +34,13 @@ function readyAccount(accountId: string): Record<string, unknown> {
 describe('provider-selected newsletter transport', () => {
   beforeEach(() => {
     delete process.env.SMARTPROP_WHATSAPP_PROVIDER;
+    delete process.env.SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID;
     delete process.env.SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT;
   });
 
   afterEach(() => {
     restoreEnv('SMARTPROP_WHATSAPP_PROVIDER', originalProvider);
+    restoreEnv('SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID', originalAgent);
     restoreEnv('SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT', originalAccount);
   });
 
@@ -68,6 +71,7 @@ describe('provider-selected newsletter transport', () => {
 
   test('the callable CLI messaging factory selects OpenClaw and propagates one account to readiness and send', async () => {
     process.env.SMARTPROP_WHATSAPP_PROVIDER = 'openclaw';
+    process.env.SMARTPROP_OPENCLAW_WHATSAPP_AGENT_ID = 'customer-service';
     process.env.SMARTPROP_OPENCLAW_WHATSAPP_ACCOUNT = 'primary';
     const calls: Array<{ command: string; args: string[] }> = [];
     const dependencies = createCampaignMessagingDependencies({
@@ -83,7 +87,8 @@ describe('provider-selected newsletter transport', () => {
             stderr: '',
           };
         }
-        return { stdout: '{"messageId":"openclaw-1"}', stderr: '' };
+        const params = JSON.parse(args[args.indexOf('--params') + 1]);
+        return { stdout: JSON.stringify({ runId: params.idempotencyKey, channel: 'whatsapp', messageId: 'openclaw-1' }), stderr: '' };
       },
       getWAHAReadiness: async () => {
         throw new Error('WAHA must not be selected');
@@ -94,7 +99,7 @@ describe('provider-selected newsletter transport', () => {
     });
 
     expect(await dependencies.preflight()).toEqual({ ready: true, error: undefined });
-    expect(await dependencies.transport('8123 4567', 'hello')).toEqual({
+    expect(await dependencies.transport('8123 4567', 'hello', 'campaign:run-1')).toEqual({
       outcome: 'accepted',
       messageId: 'openclaw-1',
     });
@@ -104,8 +109,9 @@ describe('provider-selected newsletter transport', () => {
       {
         command: 'openclaw-test',
         args: [
-          'message', 'send', '--channel', 'whatsapp', '--account', 'primary',
-          '--target', '+6581234567', '--message', 'hello', '--json',
+          'gateway', 'call', 'send', '--params',
+          '{"agentId":"customer-service","accountId":"primary","channel":"whatsapp","to":"+6581234567","message":"hello","idempotencyKey":"campaign:run-1"}',
+          '--timeout', '50000', '--json',
         ],
       },
     ]);
@@ -115,6 +121,7 @@ describe('provider-selected newsletter transport', () => {
     const calls: string[][] = [];
     const adapter = createSelectedWhatsAppCampaignTransport({
       provider: 'openclaw',
+      openClawAgentId: 'customer-service',
       openClawAccount: 'primary',
       openClawRun: async (_command, args) => {
         calls.push(args);
@@ -197,6 +204,7 @@ function openClawAdapter(
 ) {
   return createSelectedWhatsAppCampaignTransport({
     provider: 'openclaw',
+    openClawAgentId: 'customer-service',
     openClawAccount: 'primary',
     openClawCommand: 'openclaw-test',
     openClawRun,

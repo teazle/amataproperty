@@ -41,15 +41,15 @@ def package(base, baseline, output):
         inputs = directory / 'inputs'; inputs.mkdir(mode=0o700)
         outputs = directory / 'outputs'; outputs.mkdir(mode=0o700)
         raw_binding = canonical(binding)
-        (inputs / 'binding.json').write_bytes(raw_binding)
-        (inputs / 'binding.json').chmod(0o600)
+        (inputs / 'release-factory-binding.json').write_bytes(raw_binding)
+        (inputs / 'release-factory-binding.json').chmod(0o600)
         (outputs / 'smartprop.conf').write_bytes(config)
         (outputs / 'smartprop.conf').chmod(0o600)
         request = {
             'schema_version': 1, 'environment_sha256': sha(b'nginx-smartprop-vmi3201429-http-edge'),
             'toolchain_sha256': sha(sys.version.encode()),
             'recipe_sha256': sha((DEPLOY / 'edge_security_host.py').read_bytes()),
-            'inputs': [{'mode': 0o600, 'path': 'binding.json', 'sha256': sha(raw_binding), 'size': len(raw_binding)}],
+            'inputs': [{'mode': 0o600, 'path': 'release-factory-binding.json', 'sha256': sha(raw_binding), 'size': len(raw_binding)}],
             'outputs': [{'mode': 0o600, 'name': 'smartprop.conf', 'path': 'smartprop.conf'}],
         }
         request_file = directory / 'request.json'

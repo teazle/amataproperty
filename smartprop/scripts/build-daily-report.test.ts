@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe('daily report bundle builder', () => {
-  test('builds a Bun bundle with a source, lock, and output hash manifest', async () => {
+  test('builds a hashed Bun bundle whose entry executes but imports do not run main', async () => {
     const outputDirectory = join(temporaryDirectory(), 'bundle');
     const result = await buildDailyReportBundle({ outputDirectory, projectRoot });
 
@@ -43,11 +43,6 @@ describe('daily report bundle builder', () => {
     expect(result.manifest.outputs).toEqual([{ path: 'report.js', sha256: sha256(result.bundlePath) }]);
     expect(result.manifest.externals.every((specifier) => specifier === 'bun' || specifier.startsWith('node:'))).toBeTrue();
     expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toEqual(result.manifest);
-  });
-
-  test('retains the entrypoint main boundary while imports do not run it', async () => {
-    const result = await buildDailyReportBundle({ outputDirectory: join(temporaryDirectory(), 'bundle'), projectRoot });
-
     const unknownFlag = Bun.spawnSync(['bun', result.bundlePath, '--unknown-flag'], { stdout: 'pipe', stderr: 'pipe' });
     expect(unknownFlag.exitCode).toBe(1);
     expect(unknownFlag.stderr.toString()).toContain('Unknown argument: --unknown-flag');

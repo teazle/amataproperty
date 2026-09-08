@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
@@ -583,33 +584,32 @@ function formatReport(report: Awaited<ReturnType<typeof buildReport>>): string {
   return lines.join('\n');
 }
 
-function sendViaOpenClaw(text: string, recipients: string[], dryRun: boolean) {
+export function sendViaOpenClaw(text: string, recipients: string[], dryRun: boolean, run: typeof runCommand = runCommand) {
   if (recipients.length === 0) {
     throw new Error('SMARTPROP_DAILY_REPORT_TO or DAILY_REPORT_TO must be set before sending');
   }
 
+  const receipts: Array<{ target: string; messageId: string }> = [];
   for (const target of recipients) {
     if (dryRun) {
       console.log(`[dry-run] would send report to ${target}`);
       continue;
     }
-    const output = runCommand('openclaw', [
-      'message',
-      'send',
-      '--channel',
-      OPENCLAW_CHANNEL,
-      '--account',
-      OPENCLAW_ACCOUNT,
-      '--target',
-      target,
-      '--message',
-      text,
-      '--json',
+    const idempotencyKey = `smartprop-report:${createHash('sha256').update(JSON.stringify([target, text])).digest('hex')}`;
+    const output = run('openclaw', [
+      'gateway', 'call', 'send', '--params', JSON.stringify({
+        agentId: 'main', accountId: OPENCLAW_ACCOUNT, channel: OPENCLAW_CHANNEL,
+        to: target, message: text, idempotencyKey,
+      }), '--timeout', '50000', '--json',
     ], 60000);
-    if (!output) {
-      throw new Error(`OpenClaw delivery failed for ${target}`);
+    const result = safeJson<Record<string, unknown>>(output || '');
+    if (result?.runId !== idempotencyKey || result?.channel !== OPENCLAW_CHANNEL
+      || typeof result?.messageId !== 'string' || !result.messageId.trim()) {
+      throw new Error(`OpenClaw report delivery unconfirmed for ${target}; do not retry automatically`);
     }
+    receipts.push({ target, messageId: result.messageId });
   }
+  return receipts;
 }
 
 async function main() {

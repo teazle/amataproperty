@@ -322,9 +322,8 @@ describe('customer delivery claims in remaining jobs', () => {
     expect(selected.calls).toHaveLength(1);
   });
 
-  test('matching-job caller exposes a reconciliation-required delivery as unsuccessful', async () => {
+  test('matching-job preview never claims or sends queued outreach rows', async () => {
     matchRows = [initialOutreach('outreach-1')];
-    matchUpdateThrows = true;
     const delivery = sharedStore();
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-matching-reconcile', messageText: 'initial message' }]);
     defaultDeliveryStore = delivery.store;
@@ -332,21 +331,22 @@ describe('customer delivery claims in remaining jobs', () => {
 
     const result = await runMatchingJob(10);
 
-    expect(result).toMatchObject({ success: false, stats: { messagesSent: 1, messagesReconciliationRequired: 1 } });
-    expect(selected.calls).toHaveLength(1);
+    expect(result).toMatchObject({ success: true, dryRun: true, stats: { messagesSent: 0, messagesProcessed: 0 } });
+    expect(delivery.claims).toEqual([]);
+    expect(selected.calls).toEqual([]);
   });
 
-  test('matching-job caller exposes a failed conversation log and never resends accepted delivery', async () => {
+  test('matching-job preview remains read-only when repeated', async () => {
     matchRows = [initialOutreach('outreach-log')];
-    messageLogThrows = true;
     const delivery = sharedStore();
     const selected = transport([{ outcome: 'accepted', provider: 'waha', messageId: 'provider-log', messageText: 'initial message' }]);
     defaultDeliveryStore = delivery.store;
     defaultCustomerTransport = selected.customerTransport;
     const first = await runMatchingJob(10);
     await runMatchingJob(10);
-    expect(first).toMatchObject({ success: false, stats: { messagesSent: 1, messagesReconciliationRequired: 1 } });
-    expect(selected.calls).toHaveLength(1);
+    expect(first).toMatchObject({ success: true, dryRun: true, stats: { messagesSent: 0, messagesProcessed: 0 } });
+    expect(delivery.claims).toEqual([]);
+    expect(selected.calls).toEqual([]);
   });
 
   test('initial accepted delivery with failed finalization is visibly reconciliation-required', async () => {

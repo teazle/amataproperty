@@ -8,34 +8,20 @@ import { generateCoBrokingInquiryMessage } from '@/lib/wa/waha';
 import { logWhatsAppMessage } from '@/lib/wa/message-log';
 import { createCustomerTextTransport, type CustomerTextTransport } from '../lib/wa/customer-transport';
 import { createCustomerDeliveryStore, type CustomerDeliveryStore } from '../lib/wa/customer-delivery-store';
+import {
+  matcherExecutionPlan,
+  selectRecentListingAgentOutreach,
+  type ExistingOutreach,
+  type MatcherAgent,
+  type MatcherCandidate,
+  type MatcherListing,
+} from './matcher-selection';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
 
 // Create a client with service role key for admin operations
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-interface Listing {
-  id: string;
-  portal: string;
-  url: string;
-  title: string;
-  price: number;
-  district: string;
-  property_type: string;
-  agent_id: string;
-  posted_at: string;
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  phone: string;
-  email: string;
-  agency: string;
-  cea_reg_no: string;
-  source: string;
-}
 
 interface Outreach {
   id: string;
@@ -50,6 +36,7 @@ interface Outreach {
 type MatchingJobOptions = {
   dryRun?: boolean;
   preview?: boolean;
+  confirmedListingIds?: string[];
 };
 
 type MatchingJobDependencies = {
@@ -76,20 +63,22 @@ type OutreachProcessStats = {
 };
 
 /**
- * Fetches new listings from the last 24 hours matching criteria
+ * Fetches listings refreshed within the last 24 hours. Listing sources do not
+ * provide a reliable posted_at value, so this intentionally describes scrape
+ * recency rather than publication recency.
  */
-async function fetchNewListings(): Promise<Listing[]> {
+async function fetchRecentlyRefreshedListings(): Promise<MatcherListing[]> {
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
   
   const { data, error } = await supabase
     .from('listings')
     .select('*')
-    .gte('posted_at', twentyFourHoursAgo.toISOString())
+    .gte('scraped_at', twentyFourHoursAgo.toISOString())
     .gte('price', 1000000)
     .lte('price', 2999000)
     .in('portal', ['propertyguru', 'edgeprop'])
-    .order('posted_at', { ascending: false });
+    .order('scraped_at', { ascending: false });
 
   if (error) {
     console.error('Error fetching listings:', error);
@@ -102,7 +91,7 @@ async function fetchNewListings(): Promise<Listing[]> {
 /**
  * Fetches all active agents
  */
-async function fetchAgents(): Promise<Agent[]> {
+async function fetchAgents(): Promise<MatcherAgent[]> {
   const { data, error } = await supabase
     .from('agents')
     .select('*')
@@ -117,66 +106,53 @@ async function fetchAgents(): Promise<Agent[]> {
 }
 
 /**
- * Creates outreach entries for agent-listing combinations that don't exist
+ * Collects all rows that could suppress a selected listing-agent pair. The
+ * pair query protects deduplication while the opted-out query suppresses an
+ * agent even when their opt-out was recorded on an earlier listing.
  */
-async function upsertOutreachEntries(
-  listings: Listing[],
-  agents: Agent[],
-  options: MatchingJobOptions = {}
-): Promise<Partial<Outreach>[]> {
-  const outreachEntries: Partial<Outreach>[] = [];
-  
-  // Create all possible agent-listing combinations
-  for (const listing of listings) {
-    for (const agent of agents) {
-      // Skip if this is the listing's own agent
-      if (listing.agent_id === agent.id) {
-        continue;
-      }
-      
-      outreachEntries.push({
-        agent_id: agent.id,
-        listing_id: listing.id,
-        channel: 'whatsapp',
-        template_name: 'new_property_alert',
-        status: 'queued'
-      });
-    }
+async function fetchOutreachGuards(listings: MatcherListing[]): Promise<{
+  existingOutreach: ExistingOutreach[];
+  optedOutAgentIds: string[];
+}> {
+  const agentIds = Array.from(new Set(listings.map((listing) => listing.agent_id).filter((id): id is string => Boolean(id))));
+  const listingIds = listings.map((listing) => listing.id);
+  if (agentIds.length === 0 || listingIds.length === 0) {
+    return { existingOutreach: [], optedOutAgentIds: [] };
   }
 
-  if (outreachEntries.length === 0) {
-    return [];
-  }
-
-  // Check for existing outreach entries to avoid duplicates
-  const { data: existingEntries, error: checkError } = await supabase
+  const { data: existingEntries, error: existingError } = await supabase
     .from('outreach')
-    .select('agent_id, listing_id')
-    .in('agent_id', outreachEntries.map(e => e.agent_id))
-    .in('listing_id', outreachEntries.map(e => e.listing_id));
+    .select('agent_id, listing_id, status')
+    .in('agent_id', agentIds)
+    .in('listing_id', listingIds);
 
-  if (checkError) {
-    console.error('Error checking existing outreach:', checkError);
-    throw new Error(`Failed to check existing outreach: ${checkError.message}`);
+  if (existingError) {
+    throw new Error(`Failed to check existing outreach: ${existingError.message}`);
   }
 
-  // Filter out combinations that already exist
-  const existingCombinations = new Set(
-    (existingEntries || []).map(e => `${e.agent_id}-${e.listing_id}`)
-  );
-  
-  const newEntries = outreachEntries.filter(entry => 
-    !existingCombinations.has(`${entry.agent_id}-${entry.listing_id}`)
-  );
+  const { data: optedOutEntries, error: optedOutError } = await supabase
+    .from('outreach')
+    .select('agent_id')
+    .in('agent_id', agentIds)
+    .eq('status', 'opted_out');
+
+  if (optedOutError) {
+    throw new Error(`Failed to check opted-out agents: ${optedOutError.message}`);
+  }
+
+  return {
+    existingOutreach: (existingEntries || []) as ExistingOutreach[],
+    optedOutAgentIds: (optedOutEntries || [])
+      .map((entry) => entry.agent_id)
+      .filter((id): id is string => Boolean(id)),
+  };
+}
+
+async function insertPreparedOutreachEntries(candidates: MatcherCandidate[]): Promise<Partial<Outreach>[]> {
+  const newEntries = candidates.map(({ listing: _listing, agent: _agent, ...entry }) => entry);
 
   if (newEntries.length === 0) {
-    console.log('No new outreach entries to create');
     return [];
-  }
-
-  if (options.dryRun) {
-    console.log(`[dry-run] Would create ${newEntries.length} outreach entries`);
-    return newEntries;
   }
 
   // Insert new outreach entries
@@ -190,7 +166,6 @@ async function upsertOutreachEntries(
     throw new Error(`Failed to insert outreach entries: ${insertError.message}`);
   }
 
-  console.log(`Created ${insertedEntries?.length || 0} new outreach entries`);
   return insertedEntries || [];
 }
 
@@ -292,7 +267,13 @@ export async function processOutreachMessages(
     );
     let result: Awaited<ReturnType<CustomerTextTransport['sendText']>>;
     try {
-      result = await customerTransport.sendText({ to: outreach.agents.phone, text: message, purpose: 'initial_cobroking' });
+      const deliveryInput = {
+        to: outreach.agents.phone,
+        text: message,
+        purpose: 'initial_cobroking' as const,
+        idempotencyKey: key,
+      };
+      result = await customerTransport.sendText(deliveryInput);
     } catch (error) {
       result = { outcome: 'unknown', provider: 'unknown', error: error instanceof Error ? error.message : String(error) };
     }
@@ -381,11 +362,18 @@ export async function processOutreachMessages(
 export async function runMatchingJob(
   outreachLimit?: number,
   options: MatchingJobOptions = {},
-  dependencies: MatchingJobDependencies = {},
+  _dependencies: MatchingJobDependencies = {},
 ): Promise<{
   success: boolean;
   message: string;
   dryRun?: boolean;
+  previews?: Array<{
+    listingId: string;
+    title: string | null;
+    scrapedAt: string | null;
+    agentId: string;
+    agentName: string;
+  }>;
   stats: {
     listingsFound: number;
     agentsFound: number;
@@ -399,44 +387,53 @@ export async function runMatchingJob(
   };
 }> {
   try {
-    console.log(`Starting property matching job${options.dryRun ? ' (dry-run)' : ''}...`);
+    const plan = matcherExecutionPlan(options);
+    console.log(`Starting recently refreshed property matcher (${plan.mode})...`);
 
-    // Fetch new listings
-    const listings = await fetchNewListings();
-    console.log(`Found ${listings.length} new listings matching criteria`);
+    const listings = await fetchRecentlyRefreshedListings();
+    console.log(`Found ${listings.length} recently refreshed listings matching criteria`);
 
     // Fetch agents
     const agents = await fetchAgents();
     console.log(`Found ${agents.length} agents`);
 
-    // Create outreach entries
-    const outreachEntries = await upsertOutreachEntries(listings, agents, options);
-    console.log(`${options.dryRun ? 'Would create' : 'Created'} ${outreachEntries.length} new outreach entries`);
-
-    // Process queued messages (use provided limit or default)
-    const messageStats = await processOutreachMessages(outreachLimit, undefined, options, dependencies);
-    console.log(`${options.dryRun ? 'Would process' : 'Processed'} ${messageStats.processed} messages: ${messageStats.sent} sent, ${messageStats.failed} failed`);
-    const reconciliationRequired = messageStats.reconciliationRequired || 0;
-    const deliveryFailed = messageStats.failed > 0;
+    const guards = await fetchOutreachGuards(listings);
+    const candidates = selectRecentListingAgentOutreach({
+      now: new Date(),
+      listings,
+      agents,
+      existingOutreach: guards.existingOutreach,
+      optedOutAgentIds: guards.optedOutAgentIds,
+      allowedListingIds: options.confirmedListingIds,
+    });
+    const outreachEntries = plan.writesOutreach
+      ? await insertPreparedOutreachEntries(candidates)
+      : candidates;
 
     return {
-      success: !deliveryFailed && reconciliationRequired === 0,
-      message: reconciliationRequired > 0
-        ? 'Matching job completed with reconciliation required'
-        : deliveryFailed
-          ? 'Matching job completed with delivery failures'
-        : options.dryRun ? 'Matching job dry-run completed successfully' : 'Matching job completed successfully',
-      dryRun: options.dryRun || undefined,
+      success: true,
+      message: plan.mode === 'preview'
+        ? 'Recently refreshed matcher preview completed; no outreach was prepared or sent'
+        : 'Selected outreach prepared; no messages were sent',
+      dryRun: plan.mode === 'preview' || undefined,
+      previews: plan.mode === 'preview'
+        ? candidates.map((candidate) => ({
+            listingId: candidate.listing_id,
+            title: candidate.listing.title,
+            scrapedAt: candidate.listing.scraped_at,
+            agentId: candidate.agent_id,
+            agentName: candidate.agent.name,
+          }))
+        : undefined,
       stats: {
         listingsFound: listings.length,
         agentsFound: agents.length,
         outreachCreated: outreachEntries.length,
-        messagesProcessed: messageStats.processed,
-        messagesSent: messageStats.sent,
-        messagesFailed: messageStats.failed,
-        messagesQueued: messageStats.queued,
-        previewMessages: messageStats.previews?.length,
-        ...(reconciliationRequired ? { messagesReconciliationRequired: reconciliationRequired } : {}),
+        messagesProcessed: 0,
+        messagesSent: 0,
+        messagesFailed: 0,
+        messagesQueued: plan.mode === 'prepare_selected' ? outreachEntries.length : undefined,
+        previewMessages: plan.mode === 'preview' ? candidates.length : undefined,
       }
     };
   } catch (error) {

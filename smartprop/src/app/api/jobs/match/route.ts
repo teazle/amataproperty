@@ -1,4 +1,4 @@
-import { advisoryUnlock,withAdvisoryLock } from '@/jobs/lock';
+import { withAdvisoryLock } from '@/jobs/lock';
 import { runMatchingJob } from '@/jobs/match';
 import { NextRequest,NextResponse } from 'next/server';
 
@@ -12,22 +12,24 @@ export async function POST(request: NextRequest) {
   try {
     console.log('Received request to run matching job');
 
-    // Parse optional limit and dry-run mode from request body
+    // Preview is the only default. Preparing outreach rows requires both an
+    // explicit confirmation and selected listing ids; this endpoint never
+    // processes or sends those rows.
     let outreachLimit: number | undefined;
-    let dryRun = false;
-    let preview = true;
+    let confirmedListingIds: string[] | undefined;
     try {
       const body = await request.json().catch(() => ({}));
       if (typeof body.limit === 'number') {
         outreachLimit = body.limit;
-        console.log(`Using custom outreach limit: ${outreachLimit}`);
       }
-      if (body.dryRun === true) {
-        dryRun = true;
-        console.log('Running matching job in dry-run mode');
-      }
-      if (body.preview === false) {
-        preview = false;
+      if (body.confirmed === true) {
+        if (!Array.isArray(body.confirmedListingIds) || body.confirmedListingIds.length === 0 || !body.confirmedListingIds.every((id: unknown) => typeof id === 'string' && id.trim())) {
+          return NextResponse.json(
+            { error: 'Confirmation requires one or more selected listing ids' },
+            { status: 400 },
+          );
+        }
+        confirmedListingIds = Array.from(new Set(body.confirmedListingIds.map((id: string) => id.trim())));
       }
     } catch {
       // Body parsing failed or no body, use defaults
@@ -35,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     // Run the matching job with advisory lock (key 10101)
     const result = await withAdvisoryLock(10101, async () => {
-      return await runMatchingJob(outreachLimit, { dryRun, preview });
+      return await runMatchingJob(outreachLimit, { confirmedListingIds });
     });
 
     if (result === null) {
@@ -69,42 +71,12 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * DELETE /api/jobs/match
- * Stops the matching job by releasing the advisory lock
- * 
- * Releases advisory lock key 10101 to allow new jobs to run
+ * Matcher runs are synchronous. There is no cancellation API because releasing
+ * an advisory lock cannot cancel a running process.
  */
 export async function DELETE(_request: NextRequest) {
-  try {
-    console.log('Received request to stop matching job');
-
-    // Release the advisory lock (key 10101)
-    const unlocked = await advisoryUnlock(10101);
-
-    if (unlocked) {
-      return NextResponse.json({
-        success: true,
-        message: 'Matching job lock released successfully',
-        lockKey: 10101,
-        timestamp: new Date().toISOString()
-      }, { status: 200 });
-    } else {
-      return NextResponse.json({
-        success: false,
-        message: 'No matching job lock found to release (may not be running)',
-        lockKey: 10101,
-        timestamp: new Date().toISOString()
-      }, { status: 200 });
-    }
-
-  } catch (error) {
-    console.error('Error stopping matcher job:', error);
-    return NextResponse.json(
-      { 
-        error: 'Failed to stop matcher job',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    { error: 'Matcher cancellation is not supported' },
+    { status: 405 },
+  );
 }

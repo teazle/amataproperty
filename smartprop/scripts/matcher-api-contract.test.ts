@@ -1,26 +1,24 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { NextRequest } from 'next/server';
 
 const calls: Array<[number | undefined, Record<string, unknown>]> = [];
 
-mock.module('@/jobs/match', () => ({
-  runMatchingJob: async (limit: number | undefined, options: Record<string, unknown>) => {
-    calls.push([limit, options]);
-    return {
-      success: true,
-      message: 'ok',
-      stats: {
-        listingsFound: 0,
-        agentsFound: 0,
-        outreachCreated: 0,
-        messagesProcessed: 0,
-        messagesSent: 0,
-        messagesFailed: 0,
-      },
-    };
-  },
-}));
-const { POST } = await import('../src/app/api/jobs/match/route');
+const { createMatcherPostHandler } = await import('../src/app/api/jobs/match/route');
+const POST = createMatcherPostHandler(async (limit, options) => {
+  calls.push([limit, options]);
+  return {
+    success: true,
+    message: 'ok',
+    stats: {
+      listingsFound: 0,
+      agentsFound: 0,
+      outreachCreated: 0,
+      messagesProcessed: 0,
+      messagesSent: 0,
+      messagesFailed: 0,
+    },
+  };
+});
 
 beforeEach(() => calls.splice(0));
 

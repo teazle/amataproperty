@@ -25,6 +25,7 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 const PAGE_SIZE = 500;
 const IN_FILTER_CHUNK_SIZE = 250;
+type MatcherDatabase = Pick<typeof supabase, 'from'>;
 
 interface Outreach {
   id: string;
@@ -46,6 +47,7 @@ type MatchingJobOptions = {
 type MatchingJobDependencies = {
   deliveryStore?: CustomerDeliveryStore;
   customerTransport?: CustomerTextTransport;
+  matcherDatabase?: MatcherDatabase;
 };
 
 type OutreachProcessStats = {
@@ -90,11 +92,11 @@ async function paginatedRows<T>(label: string, fetchPage: (from: number, to: num
   }
 }
 
-async function fetchRecentlyRefreshedListings(): Promise<MatcherListing[]> {
+async function fetchRecentlyRefreshedListings(database: MatcherDatabase): Promise<MatcherListing[]> {
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
   return paginatedRows<MatcherListing>('fetch recently refreshed listings', async (from, to) => {
-    return await supabase
+    return await database
       .from('listings')
       .select('id, agent_id, price, scraped_at, title, url')
       .gte('scraped_at', twentyFourHoursAgo.toISOString())
@@ -111,11 +113,11 @@ async function fetchRecentlyRefreshedListings(): Promise<MatcherListing[]> {
  * Fetches only agents that own a candidate listing. Chunking keeps each `in`
  * filter below the response cap and pagination covers every matching owner.
  */
-async function fetchAgents(listings: MatcherListing[]): Promise<MatcherAgent[]> {
+async function fetchAgents(database: MatcherDatabase, listings: MatcherListing[]): Promise<MatcherAgent[]> {
   const agentIds = Array.from(new Set(listings.map((listing) => listing.agent_id).filter((id): id is string => Boolean(id))));
   const agents = await Promise.all(chunks(agentIds, IN_FILTER_CHUNK_SIZE).map((agentIdChunk) =>
     paginatedRows<MatcherAgent>('fetch candidate listing agents', async (from, to) => {
-      return await supabase
+      return await database
         .from('agents')
         .select('id, name, phone')
         .in('id', agentIdChunk)
@@ -131,7 +133,7 @@ async function fetchAgents(listings: MatcherListing[]): Promise<MatcherAgent[]> 
  * pair query protects deduplication while the opted-out query suppresses an
  * agent even when their opt-out was recorded on an earlier listing.
  */
-async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAgent[]): Promise<{
+async function fetchOutreachGuards(database: MatcherDatabase, listings: MatcherListing[], agents: MatcherAgent[]): Promise<{
   existingOutreach: ExistingOutreach[];
   optedOutAgentIds: string[];
   suppressedRecipientKeys: string[];
@@ -145,7 +147,7 @@ async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAg
   const ownerByListingId = new Map(listings.map((listing) => [listing.id, listing.agent_id]));
   const existingPages = await Promise.all(chunks(listingIds, IN_FILTER_CHUNK_SIZE).map((listingIdChunk) =>
     paginatedRows<ExistingOutreach>('fetch existing outreach guards', async (from, to) => {
-      return await supabase
+      return await database
         .from('outreach')
         .select('agent_id, listing_id, status')
         .in('listing_id', listingIdChunk)
@@ -156,7 +158,7 @@ async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAg
   ));
   const optedOutPages = await Promise.all(chunks(agentIds, IN_FILTER_CHUNK_SIZE).map((agentIdChunk) =>
     paginatedRows<{ agent_id: string | null }>('fetch opted-out agent guards', async (from, to) => {
-      return await supabase
+      return await database
         .from('outreach')
         .select('agent_id')
         .in('agent_id', agentIdChunk)
@@ -173,7 +175,7 @@ async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAg
     .filter((recipientKey): recipientKey is string => Boolean(recipientKey))));
   const suppressionPages = await Promise.all(chunks(recipientKeys, IN_FILTER_CHUNK_SIZE).map((recipientKeyChunk) =>
     paginatedRows<{ recipient_key: string }>('fetch newsletter suppression guards', async (from, to) => {
-      return await supabase
+      return await database
         .from('newsletter_suppressions')
         .select('recipient_key')
         .in('recipient_key', recipientKeyChunk)
@@ -191,7 +193,7 @@ async function fetchOutreachGuards(listings: MatcherListing[], agents: MatcherAg
   };
 }
 
-async function insertPreparedOutreachEntries(candidates: MatcherCandidate[]): Promise<Partial<Outreach>[]> {
+async function insertPreparedOutreachEntries(database: MatcherDatabase, candidates: MatcherCandidate[]): Promise<Partial<Outreach>[]> {
   const newEntries = candidates.map(({ listing: _listing, agent: _agent, ...entry }) => entry);
 
   if (newEntries.length === 0) {
@@ -199,7 +201,7 @@ async function insertPreparedOutreachEntries(candidates: MatcherCandidate[]): Pr
   }
 
   // Insert new outreach entries
-  const { data: insertedEntries, error: insertError } = await supabase
+  const { data: insertedEntries, error: insertError } = await database
     .from('outreach')
     .upsert(newEntries, { ignoreDuplicates: true, onConflict: 'agent_id,listing_id' })
     .select();
@@ -434,7 +436,7 @@ export async function processOutreachMessages(
 export async function runMatchingJob(
   outreachLimit?: number,
   options: MatchingJobOptions = {},
-  _dependencies: MatchingJobDependencies = {},
+  dependencies: MatchingJobDependencies = {},
 ): Promise<{
   success: boolean;
   message: string;
@@ -460,16 +462,17 @@ export async function runMatchingJob(
 }> {
   try {
     const plan = matcherExecutionPlan(options);
+    const database = dependencies.matcherDatabase || supabase;
     console.log(`Starting recently refreshed property matcher (${plan.mode})...`);
 
-    const listings = await fetchRecentlyRefreshedListings();
+    const listings = await fetchRecentlyRefreshedListings(database);
     console.log(`Found ${listings.length} recently refreshed listings matching criteria`);
 
     // Fetch agents
-    const agents = await fetchAgents(listings);
+    const agents = await fetchAgents(database, listings);
     console.log(`Found ${agents.length} agents`);
 
-    const guards = await fetchOutreachGuards(listings, agents);
+    const guards = await fetchOutreachGuards(database, listings, agents);
     const candidates = selectRecentListingAgentOutreach({
       now: new Date(),
       listings,
@@ -480,7 +483,7 @@ export async function runMatchingJob(
       allowedListingIds: options.confirmedListingIds,
     });
     const outreachEntries = plan.writesOutreach
-      ? await insertPreparedOutreachEntries(candidates)
+      ? await insertPreparedOutreachEntries(database, candidates)
       : candidates;
 
     return {

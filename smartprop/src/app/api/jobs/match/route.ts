@@ -1,5 +1,18 @@
-import { runMatchingJob } from '@/jobs/match';
 import { NextRequest,NextResponse } from 'next/server';
+
+type MatcherJobResult = {
+  success: boolean;
+  message: string;
+  stats: object;
+  dryRun?: boolean;
+  previews?: unknown[];
+};
+type RunMatcherJob = (outreachLimit?: number, options?: { confirmedListingIds?: string[] }) => Promise<MatcherJobResult>;
+
+async function runMatcherJob(outreachLimit?: number, options?: { confirmedListingIds?: string[] }): Promise<MatcherJobResult> {
+  const { runMatchingJob } = await import('@/jobs/match');
+  return runMatchingJob(outreachLimit, options);
+}
 
 /**
  * POST /api/jobs/match
@@ -7,7 +20,8 @@ import { NextRequest,NextResponse } from 'next/server';
  * unique (agent_id, listing_id) constraint, so concurrent confirmations cannot
  * create duplicate outreach records.
  */
-export async function POST(request: NextRequest) {
+export function createMatcherPostHandler(runJob: RunMatcherJob = runMatcherJob) {
+  return async function POST(request: NextRequest) {
   try {
     console.log('Received request to run matching job');
 
@@ -34,7 +48,7 @@ export async function POST(request: NextRequest) {
       // Body parsing failed or no body, use defaults
     }
 
-    const result = await runMatchingJob(outreachLimit, { confirmedListingIds });
+    const result = await runJob(outreachLimit, { confirmedListingIds });
 
     // Return the job results
     return NextResponse.json({
@@ -52,7 +66,10 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+  };
 }
+
+export const POST = createMatcherPostHandler();
 
 /**
  * Matcher runs are synchronous. There is no cancellation API because releasing

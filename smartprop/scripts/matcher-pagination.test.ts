@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 
 const now = new Date().toISOString();
 const listings = Array.from({ length: 1001 }, (_, index) => ({
@@ -74,22 +74,11 @@ function database() {
   };
 }
 
-mock.module('@supabase/supabase-js', () => ({ createClient: () => database() }));
-mock.module('@/lib/wa/message-log', () => ({ logWhatsAppMessage: async () => ({ inserted: true, duplicate: false }) }));
-mock.module('@/lib/wa/waha', () => ({
-  generateCoBrokingInquiryMessage: () => 'message',
-  generateViewingRequestMessage: () => 'message',
-  getWAHAReadiness: async () => ({ ready: true }),
-  sendCampaignWhatsApp: async () => { throw new Error('must not send'); },
-  sendCoBrokingInquiry: async () => { throw new Error('must not send'); },
-  sendViewingRequest: async () => { throw new Error('must not send'); },
-}));
-
 const { runMatchingJob } = await import('../src/jobs/match');
 
 describe('matcher pagination', () => {
   test('keeps an owner beyond the first agent page while reading a duplicate guard beyond the first outreach page', async () => {
-    const result = await runMatchingJob();
+    const result = await runMatchingJob(undefined, {}, { matcherDatabase: database() as never });
 
     expect(result).toMatchObject({ success: true, stats: { listingsFound: 1001, agentsFound: 1001, outreachCreated: 0, previewMessages: 999 } });
     expect(result.previews).not.toContainEqual(expect.objectContaining({ listingId: 'listing-1000' }));
@@ -98,7 +87,7 @@ describe('matcher pagination', () => {
 
   test('prepares selected rows through the database uniqueness contract', async () => {
     upsertCalls.splice(0);
-    const result = await runMatchingJob(undefined, { confirmedListingIds: ['listing-1'] });
+    const result = await runMatchingJob(undefined, { confirmedListingIds: ['listing-1'] }, { matcherDatabase: database() as never });
 
     expect(result.stats).toMatchObject({ outreachCreated: 1, messagesQueued: 1, previewMessages: undefined });
     expect(upsertCalls).toEqual([{

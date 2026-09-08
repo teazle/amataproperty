@@ -69,7 +69,13 @@ export interface ReleaseArtifactManifest {
   rollback_identity: { kind: 'sha256'; value: string };
 }
 
-type ArchiveEntry = ReleaseArtifactManifest['artifact']['entries'][number];
+export interface SourceArchiveInspection {
+  sha256: string;
+  size: number;
+  entries: Array<{ path: string; sha256: string; size: number }>;
+}
+
+type ArchiveEntry = SourceArchiveInspection['entries'][number];
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_COMMIT = /^[0-9a-f]{40}$/;
@@ -165,11 +171,7 @@ function assertSafeArchivePath(path: string): void {
   }
 }
 
-function inspectArchive(archivePath: string): {
-  sha256: string;
-  size: number;
-  entries: ArchiveEntry[];
-} {
+export function inspectSourceArchive(archivePath: string): SourceArchiveInspection {
   let stat;
   let archiveBytes: Buffer;
   try {
@@ -250,7 +252,7 @@ export function createReleaseArtifactManifest(options: {
   assertGitCommit(options.sourceCommit, 'source identity');
   assertSha256Identity({ kind: 'sha256', value: options.rollbackIdentity }, 'rollback identity');
   assertExactTarget(options.target, SMARTPROP_RELEASE_TARGET);
-  const artifact = inspectArchive(options.archivePath);
+  const artifact = inspectSourceArchive(options.archivePath);
   assertSeparateArtifactFiles(options.archivePath, options.buildArtifactPath);
   const buildArtifact = inspectBuildArtifact(options.buildArtifactPath);
 
@@ -298,7 +300,7 @@ export function validateReleaseArtifactManifest(
   assertSha256Identity(manifest.build_identity, 'build identity');
   assertSha256Identity(manifest.rollback_identity, 'rollback identity');
 
-  const inspected = inspectArchive(options.archivePath);
+  const inspected = inspectSourceArchive(options.archivePath);
   if (manifest.artifact?.name !== 'smartprop-source-archive') {
     fail('release artifact name is invalid');
   }

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import AdmZip from 'adm-zip';
+import * as packager from './prepare-release-artifact';
 
 const scriptPath = join(import.meta.dir, 'prepare-release-artifact.ts');
 const temporaryDirectories: string[] = [];
@@ -67,13 +68,18 @@ function makeRepository(extraFiles: Record<string, string> = {}): { root: string
   return { root, commit };
 }
 
-function makeNestedSourceRepository(): { root: string; commit: string } {
+function makeNestedSourceRepository(extraFiles: Record<string, string> = {}): { root: string; commit: string } {
   const root = mkdtempSync(join(tmpdir(), 'smartprop-release-packager-nested-'));
   temporaryDirectories.push(root);
   for (const file of requiredInputs) {
     const path = join(root, 'smartprop', file);
     mkdirSync(join(path, '..'), { recursive: true });
     writeFileSync(path, `committed:${file}\n`);
+  }
+  for (const [file, content] of Object.entries(extraFiles)) {
+    const path = join(root, file);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, content);
   }
   writeFileSync(join(root, 'README.md'), 'outer repository content\n');
   run(['git', 'init', '--quiet'], root);
@@ -84,6 +90,30 @@ function makeNestedSourceRepository(): { root: string; commit: string } {
   const commit = Bun.spawnSync({ cmd: ['git', 'rev-parse', 'HEAD'], cwd: root, stdout: 'pipe' })
     .stdout.toString().trim();
   return { root, commit };
+}
+
+type PrepareSourceArchive = (options: {
+  repository: string;
+  sourceDirectory: string;
+  sourceCommit: string;
+  sourceArchive: string;
+}) => {
+  sourceArchive: string;
+  sourceIdentity: { kind: 'git'; value: string };
+  inspection: {
+    sha256: string;
+    size: number;
+    entries: Array<{ path: string; sha256: string; size: number }>;
+  };
+};
+
+const prepareSourceArchive = (packager as typeof packager & {
+  prepareSourceArchive?: PrepareSourceArchive;
+}).prepareSourceArchive;
+
+function sourceArchiveApi(): PrepareSourceArchive {
+  expect(prepareSourceArchive).toBeTypeOf('function');
+  return prepareSourceArchive!;
 }
 
 function invoke(options: {
@@ -156,6 +186,62 @@ afterEach(() => {
   while (temporaryDirectories.length > 0) {
     rmSync(temporaryDirectories.pop()!, { recursive: true, force: true });
   }
+});
+
+describe('prepareSourceArchive', () => {
+  test('creates a private source-only archive from a nested committed tree', () => {
+    const { root, commit } = makeNestedSourceRepository();
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-source-only-output-'));
+    temporaryDirectories.push(output);
+    const sourceArchive = join(output, 'smartprop-source.zip');
+
+    const result = sourceArchiveApi()({
+      repository: root,
+      sourceDirectory: 'smartprop',
+      sourceCommit: commit,
+      sourceArchive,
+    });
+
+    expect(Object.keys(result).sort()).toEqual(['inspection', 'sourceArchive', 'sourceIdentity']);
+    expect(result.sourceArchive).toBe(sourceArchive);
+    expect(result.sourceIdentity).toEqual({ kind: 'git', value: commit });
+    expect(result.inspection.entries.map((entry) => entry.path).sort()).toEqual(requiredInputs.slice().sort());
+    expect(lstatSync(sourceArchive).mode & 0o777).toBe(0o600);
+  });
+
+  test('rejects an embedded secret in the committed nested source tree', () => {
+    const { root, commit } = makeNestedSourceRepository({
+      'smartprop/src/.env.staging': 'SECRET=synthetic-fixture\n',
+    });
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-source-only-output-'));
+    temporaryDirectories.push(output);
+    const sourceArchive = join(output, 'smartprop-source.zip');
+
+    expect(() => sourceArchiveApi()({
+      repository: root,
+      sourceDirectory: 'smartprop',
+      sourceCommit: commit,
+      sourceArchive,
+    })).toThrow('environment or authentication artifact');
+    expect(existsSync(sourceArchive)).toBeFalse();
+  });
+
+  test('never clobbers an existing source-only archive destination', () => {
+    const { root, commit } = makeNestedSourceRepository();
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-source-only-output-'));
+    temporaryDirectories.push(output);
+    const sourceArchive = join(output, 'smartprop-source.zip');
+    const original = 'existing source-only candidate\n';
+    writeFileSync(sourceArchive, original);
+
+    expect(() => sourceArchiveApi()({
+      repository: root,
+      sourceDirectory: 'smartprop',
+      sourceCommit: commit,
+      sourceArchive,
+    })).toThrow('must not already exist');
+    expect(readFileSync(sourceArchive, 'utf8')).toBe(original);
+  });
 });
 
 describe('prepare-release-artifact CLI', () => {

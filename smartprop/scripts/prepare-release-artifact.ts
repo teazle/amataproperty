@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import {
   SMARTPROP_RELEASE_TARGET,
   createReleaseArtifactManifest,
+  inspectSourceArchive,
+  type SourceArchiveInspection,
   validateReleaseArtifactManifest,
 } from '../deploy/manifest';
 
@@ -40,6 +42,19 @@ export interface PreparedReleaseArtifact {
   sourceArchive: string;
   manifest: string;
   sourceCommit: string;
+}
+
+export interface PrepareSourceArchiveOptions {
+  repository: string;
+  sourceDirectory: string;
+  sourceCommit: string;
+  sourceArchive: string;
+}
+
+export interface PreparedSourceArchive {
+  sourceArchive: string;
+  sourceIdentity: { kind: 'git'; value: string };
+  inspection: SourceArchiveInspection;
 }
 
 function fail(message: string): never {
@@ -157,6 +172,63 @@ function writePrivateManifestAtomically(path: string, content: string): void {
   }
 }
 
+function stageSourceArchive(options: {
+  repository: string;
+  sourceDirectory: string;
+  sourceCommit: string;
+  sourceArchive: string;
+}): { staging: string; stagedArchive: string } {
+  const tree = assertCommittedTree(options.repository, options.sourceCommit, options.sourceDirectory);
+  const staging = mkdtempSync(join(dirname(options.sourceArchive), '.release-source-'));
+  const stagedArchive = join(staging, 'source.zip');
+  try {
+    const sourceRoots = git(options.repository, ['ls-tree', '--name-only', '-z', tree])
+      .split('\0').filter((entry) => SOURCE_ROOTS.has(entry));
+    if (sourceRoots.length === 0) fail('committed tree has no application source inputs');
+    execFileSync('git', ['-C', options.repository, 'archive', '--format=zip', `--output=${stagedArchive}`, tree, '--', ...sourceRoots], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    chmodSync(stagedArchive, 0o600);
+    return { staging, stagedArchive };
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    const detail = error instanceof Error && 'stderr' in error
+      ? String((error as { stderr?: unknown }).stderr).trim()
+      : String(error);
+    fail(`Git archive creation failed: ${detail || tree}`);
+  }
+}
+
+/**
+ * Creates and validates a private source-only ZIP from an exact committed Git
+ * tree. It intentionally makes no build, rollback, deployment, or release
+ * manifest claim.
+ */
+export function prepareSourceArchive(options: PrepareSourceArchiveOptions): PreparedSourceArchive {
+  requireExactCommit(options.sourceCommit);
+  const repositoryInput = resolveExistingDirectory(options.repository, '--repo');
+  const repository = gitRoot(repositoryInput);
+  const sourceDirectory = sourceTree(repository, options.sourceDirectory);
+  const sourceArchive = resolveNewOutput(options.sourceArchive, '--source-archive');
+  const { staging, stagedArchive } = stageSourceArchive({
+    repository,
+    sourceDirectory,
+    sourceCommit: options.sourceCommit,
+    sourceArchive,
+  });
+  try {
+    inspectSourceArchive(stagedArchive);
+    publishNoClobber(stagedArchive, sourceArchive, '--source-archive');
+    return {
+      sourceArchive,
+      sourceIdentity: { kind: 'git', value: options.sourceCommit },
+      inspection: inspectSourceArchive(sourceArchive),
+    };
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 /**
  * Creates a source ZIP from one already-committed Git tree and binds it to a
  * separately supplied build artifact and controller-provided rollback digest.
@@ -175,25 +247,13 @@ export function prepareReleaseArtifact(options: PrepareReleaseArtifactOptions): 
     fail('build artifact must be separate from release outputs');
   }
 
-  const tree = assertCommittedTree(repository, options.sourceCommit, sourceDirectory);
-  const staging = mkdtempSync(join(dirname(sourceArchive), '.release-source-'));
-  const stagedArchive = join(staging, 'source.zip');
+  const { staging, stagedArchive } = stageSourceArchive({
+    repository,
+    sourceDirectory,
+    sourceCommit: options.sourceCommit,
+    sourceArchive,
+  });
   try {
-    try {
-      const sourceRoots = git(repository, ['ls-tree', '--name-only', '-z', tree])
-        .split('\0').filter((entry) => SOURCE_ROOTS.has(entry));
-      if (sourceRoots.length === 0) fail('committed tree has no application source inputs');
-      execFileSync('git', ['-C', repository, 'archive', '--format=zip', `--output=${stagedArchive}`, tree, '--', ...sourceRoots], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      chmodSync(stagedArchive, 0o600);
-    } catch (error) {
-      const detail = error instanceof Error && 'stderr' in error
-        ? String((error as { stderr?: unknown }).stderr).trim()
-        : String(error);
-      fail(`Git archive creation failed: ${detail || tree}`);
-    }
-
     const releaseManifest = createReleaseArtifactManifest({
       archivePath: stagedArchive,
       buildArtifactPath: options.buildArtifact,

@@ -10,6 +10,10 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticate
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
 
 -- Cover future objects created by this application's migration owner too.
+-- PostgreSQL grants new functions EXECUTE to PUBLIC globally by default.
+-- A schema-specific REVOKE cannot remove that inherited global grant.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, anon, authenticated;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public

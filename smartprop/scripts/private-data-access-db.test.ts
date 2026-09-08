@@ -23,3 +23,12 @@ integration('the authenticated server service role retains application reads and
   expect(Number(sql('SET ROLE service_role; SELECT count(*) FROM public.listings'))).toBeGreaterThan(1000);
   expect(sql("SELECT has_function_privilege('service_role','public.claim_customer_delivery(text,text,text)','EXECUTE')")).toBe('t');
 });
+
+integration('future functions remain private while the server role can execute them', () => {
+  expect(sql(`BEGIN;
+    CREATE FUNCTION public.smartprop_future_access_test() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+    SELECT has_function_privilege('anon','public.smartprop_future_access_test()','EXECUTE'),
+           has_function_privilege('authenticated','public.smartprop_future_access_test()','EXECUTE'),
+           has_function_privilege('service_role','public.smartprop_future_access_test()','EXECUTE');
+    ROLLBACK;`)).toBe('f|f|t');
+});

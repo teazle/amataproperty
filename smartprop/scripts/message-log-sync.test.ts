@@ -1,10 +1,9 @@
 import { beforeEach, expect, test } from 'bun:test';
+import { createOutreachHistorySynchronizer } from '../src/lib/wa/outreach-history-sync';
 
 let historyRows: Array<Record<string, unknown>> = [];
 let updateError: { message: string } | null = null;
 const updates: Array<Record<string, unknown>> = [];
-
-const { createOutreachHistorySynchronizer } = await import('../src/lib/wa/message-log.ts?message-log-sync-test');
 
 const syncOutreachConversationHistory = createOutreachHistorySynchronizer({
   getConversationHistory: async () => historyRows.map((row) => ({

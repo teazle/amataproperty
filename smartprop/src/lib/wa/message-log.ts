@@ -1,31 +1,20 @@
 import { createHash } from 'crypto';
 import { getSupabaseClient } from '@/workers/supa';
+import { createOutreachHistorySynchronizer } from './outreach-history-sync';
+import type {
+  ConversationHistoryEntry,
+  OutreachHistorySyncDependencies,
+  OutreachHistoryUpdate,
+} from './outreach-history-sync';
+
+export type {
+  ConversationHistoryEntry,
+  OutreachHistorySyncOptions,
+  OutreachHistorySyncDependencies,
+  OutreachHistoryUpdate,
+} from './outreach-history-sync';
 
 export type WhatsAppDirection = 'inbound' | 'outbound';
-
-export type ConversationHistoryEntry = {
-  role: 'user' | 'agent';
-  message: string;
-  timestamp: string;
-  messageId?: string;
-};
-
-export type OutreachHistorySyncOptions = {
-  status?: string;
-};
-
-export type OutreachHistoryUpdate = {
-  conversation_history: ConversationHistoryEntry[];
-  last_message_at: string;
-  status?: string;
-};
-
-export type OutreachHistorySyncDependencies = {
-  getConversationHistory: (outreachId: string) => Promise<ConversationHistoryEntry[]>;
-  updateOutreach: (outreachId: string, update: OutreachHistoryUpdate) => Promise<{
-    error: { message: string } | null;
-  }>;
-};
 
 export type WhatsAppMessageLogInput = {
   outreachId?: string | null;
@@ -185,29 +174,15 @@ export async function getConversationHistory(outreachId: string): Promise<Conver
   }));
 }
 
-export function createOutreachHistorySynchronizer(
-  overrides: Partial<OutreachHistorySyncDependencies> = {},
-): (outreachId: string, options?: OutreachHistorySyncOptions) => Promise<ConversationHistoryEntry[]> {
-  const loadHistory = overrides.getConversationHistory || getConversationHistory;
-  const updateOutreach = overrides.updateOutreach || (async (outreachId: string, update: OutreachHistoryUpdate) => {
+const outreachHistorySyncDependencies: OutreachHistorySyncDependencies = {
+  getConversationHistory,
+  updateOutreach: async (outreachId: string, update: OutreachHistoryUpdate) => {
     const { error } = await getSupabaseClient()
       .from('outreach')
       .update(update)
       .eq('id', outreachId);
     return { error };
-  });
+  },
+};
 
-  return async (outreachId: string, options: OutreachHistorySyncOptions = {}) => {
-    const history = await loadHistory(outreachId);
-    const update: OutreachHistoryUpdate = {
-      conversation_history: history,
-      last_message_at: history.at(-1)?.timestamp || new Date().toISOString(),
-      ...(options.status ? { status: options.status } : {}),
-    };
-    const { error } = await updateOutreach(outreachId, update);
-    if (error) throw new Error(`Failed to sync outreach conversation history: ${error.message}`);
-    return history;
-  };
-}
-
-export const syncOutreachConversationHistory = createOutreachHistorySynchronizer();
+export const syncOutreachConversationHistory = createOutreachHistorySynchronizer(outreachHistorySyncDependencies);

@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
 import { config } from 'dotenv';
-import puppeteer, { type Browser, type Page } from 'puppeteer-core';
+import { type Page } from 'puppeteer-core';
 import {
   type LinkedInNewsletterRecipientInput,
 } from '../src/lib/linkedin/newsletter';
+import { acquireScanBrowser, resolveExplicitScanCdpUrl } from '../src/lib/linkedin/scan-browser';
 import {
   collectLinkedInResultCards,
   countVisibleResultProfileLinks,
@@ -23,16 +24,8 @@ config({ path: '/root/.openclaw/workspace/linkedin.env', override: false, quiet:
 config({ path: '.env.local', override: false, quiet: true });
 config({ path: '.env', override: false, quiet: true });
 
-const BROWSER_USE_API = 'https://api.browser-use.com/api/v3';
-const DEFAULT_OPENCLAW_CDP_URL = 'http://127.0.0.1:18800';
 const DEFAULT_SEARCH_URL =
   'https://www.linkedin.com/search/results/people/?keywords=Singapore&network=%5B%22F%22%5D&origin=GLOBAL_SEARCH_HEADER';
-
-type BrowserSession = {
-  browser: Browser;
-  page: Page;
-  stop: () => Promise<void>;
-};
 
 function argValue(name: string, fallback?: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -42,93 +35,6 @@ function argValue(name: string, fallback?: string): string | undefined {
 
 function hasFlag(name: string): boolean {
   return process.argv.includes(name);
-}
-
-async function browserUseFetch<T>(pathName: string, method: string, body?: unknown): Promise<T> {
-  if (!process.env.BROWSER_USE_API_KEY) {
-    throw new Error('BROWSER_USE_API_KEY is required when LINKEDIN_BROWSER_CDP_URL is not set');
-  }
-
-  const response = await fetch(`${BROWSER_USE_API}${pathName}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Browser-Use-API-Key': process.env.BROWSER_USE_API_KEY,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Browser Use API ${method} ${pathName} failed: ${response.status} ${text.slice(0, 500)}`);
-  }
-
-  return (text ? JSON.parse(text) : {}) as T;
-}
-
-async function connectLinkedInBrowser(): Promise<BrowserSession> {
-  const configuredCdp =
-    argValue('--cdp-url') ||
-    process.env.LINKEDIN_NEWSLETTER_CDP_URL ||
-    process.env.OPENCLAW_BROWSER_CDP_URL ||
-    process.env.LINKEDIN_BROWSER_CDP_URL ||
-    DEFAULT_OPENCLAW_CDP_URL;
-  const explicitCdp = Boolean(
-    argValue('--cdp-url') ||
-    process.env.LINKEDIN_NEWSLETTER_CDP_URL ||
-    process.env.OPENCLAW_BROWSER_CDP_URL ||
-    process.env.LINKEDIN_BROWSER_CDP_URL,
-  );
-
-  try {
-    const browser = await connectOverCdp(configuredCdp);
-    const pages = await browser.pages();
-    const page = pages.find((candidate) => /linkedin\.com/i.test(candidate.url())) || pages[0] || await browser.newPage();
-    return {
-      browser,
-      page,
-      stop: async () => {
-        await browser.disconnect();
-      },
-    };
-  } catch (error) {
-    if (explicitCdp) {
-      throw error;
-    }
-    console.warn(`[scan] local OpenClaw CDP unavailable at ${configuredCdp}; falling back to Browser Use cloud`);
-  }
-
-  const profileId = process.env.LINKEDIN_BROWSER_USE_PROFILE_ID || process.env.BROWSER_USE_PROFILE_ID;
-  const profileName = process.env.LINKEDIN_BROWSER_USE_PROFILE_NAME || process.env.BROWSER_USE_PROFILE_NAME || 'smartprop-linkedin';
-  const cloud = await browserUseFetch<{ id: string; cdpUrl: string }>('/browsers', 'POST', {
-    profileId,
-    profileName: profileId ? undefined : profileName,
-    proxyCountryCode: process.env.LINKEDIN_BROWSER_USE_PROXY_COUNTRY || 'sg',
-    browserScreenWidth: Number(process.env.LINKEDIN_BROWSER_USE_SCREEN_WIDTH || 1280),
-    browserScreenHeight: Number(process.env.LINKEDIN_BROWSER_USE_SCREEN_HEIGHT || 900),
-    timeout: Number(process.env.LINKEDIN_BROWSER_USE_TIMEOUT_MINUTES || 45),
-    allowResizing: true,
-  });
-
-  const browser = await connectOverCdp(cloud.cdpUrl);
-  const pages = await browser.pages();
-  const page = pages.find((candidate) => /linkedin\.com/i.test(candidate.url())) || pages[0] || await browser.newPage();
-
-  return {
-    browser,
-    page,
-    stop: async () => {
-      browser.disconnect?.();
-      await browserUseFetch(`/browsers/${cloud.id}`, 'PATCH', { action: 'stop' }).catch(() => undefined);
-    },
-  };
-}
-
-async function connectOverCdp(cdpUrl: string): Promise<Browser> {
-  if (/^wss?:\/\//i.test(cdpUrl)) {
-    return puppeteer.connect({ browserWSEndpoint: cdpUrl, protocolTimeout: 60000 });
-  }
-  return puppeteer.connect({ browserURL: cdpUrl, protocolTimeout: 60000 });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -185,7 +91,9 @@ async function main() {
   const dryRun = hasFlag('--dry-run');
   const maxPages = Number(argValue('--max-pages', process.env.LINKEDIN_NEWSLETTER_SCAN_MAX_PAGES || '5'));
   const searchUrl = argValue('--search-url', process.env.LINKEDIN_NEWSLETTER_SEARCH_URL || DEFAULT_SEARCH_URL)!;
-  const session = await connectLinkedInBrowser();
+  const session = await acquireScanBrowser({
+    explicitCdpUrl: argValue('--cdp-url') || resolveExplicitScanCdpUrl(process.env),
+  });
   const candidates = new Map<string, LinkedInNewsletterRecipientInput>();
 
   try {

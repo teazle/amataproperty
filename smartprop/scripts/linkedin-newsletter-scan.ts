@@ -3,9 +3,17 @@
 import { config } from 'dotenv';
 import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 import {
-  isSingaporeLinkedInLocation,
   type LinkedInNewsletterRecipientInput,
 } from '../src/lib/linkedin/newsletter';
+import {
+  collectLinkedInResultCards,
+  countVisibleResultProfileLinks,
+  dedupeSingaporeResultCards,
+  extractionMismatchDiagnostic,
+  identifiableProfileCount,
+  linkedInResultsReady,
+  type LinkedInResultCardSnapshot,
+} from '../src/lib/linkedin/scan-extraction';
 import {
   upsertLinkedInNewsletterDraftCampaign,
   upsertLinkedInNewsletterRecipients,
@@ -146,49 +154,12 @@ async function assertLinkedInAuthenticated(page: Page): Promise<void> {
   }
 }
 
-function normalizeProfileUrl(rawUrl: string): string {
-  const url = new URL(rawUrl, 'https://www.linkedin.com');
-  url.search = '';
-  url.hash = '';
-  return url.toString().replace(/\/$/, '/');
-}
-
-async function extractSingaporeCandidates(page: Page): Promise<LinkedInNewsletterRecipientInput[]> {
-  const raw = await page.evaluate(() => {
-    const cards = Array.from(document.querySelectorAll<HTMLElement>('main li, .reusable-search__result-container'));
-    return cards.map((card) => {
-      const profileLink = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href*="/in/"]'))
-        .find((link) => link.href && !link.href.includes('/search/results/people'));
-      const lines = (card.innerText || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const name = profileLink?.innerText?.split('\n')[0]?.trim() || lines[0] || '';
-      const location = lines.find((line) => /singapore/i.test(line)) || null;
-      const headline = lines.find((line) => line !== name && line !== location) || null;
-      return {
-        name,
-        profileUrl: profileLink?.href || '',
-        location,
-        headline,
-      };
-    });
-  });
-
-  const deduped = new Map<string, LinkedInNewsletterRecipientInput>();
-  for (const candidate of raw) {
-    if (!candidate.profileUrl || !candidate.name) continue;
-    if (!isSingaporeLinkedInLocation(candidate.location)) continue;
-    const profileUrl = normalizeProfileUrl(candidate.profileUrl);
-    deduped.set(profileUrl, {
-      name: candidate.name,
-      profileUrl,
-      location: candidate.location,
-      headline: candidate.headline,
-    });
-  }
-
-  return Array.from(deduped.values());
+async function extractSingaporeCandidates(page: Page): Promise<{
+  candidates: LinkedInNewsletterRecipientInput[];
+  snapshots: LinkedInResultCardSnapshot[];
+}> {
+  const snapshots = await page.evaluate(collectLinkedInResultCards);
+  return { candidates: dedupeSingaporeResultCards(snapshots), snapshots };
 }
 
 async function goToNextResultsPage(page: Page): Promise<boolean> {
@@ -221,14 +192,26 @@ async function main() {
     await session.page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await sleep(3500);
     await assertLinkedInAuthenticated(session.page);
+    await session.page
+      .waitForFunction(linkedInResultsReady, { polling: 500, timeout: 20000 })
+      .catch(() => console.warn('[scan] results readiness check timed out; continuing with extraction'));
 
     for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
       await assertLinkedInAuthenticated(session.page);
-      const pageCandidates = await extractSingaporeCandidates(session.page);
+      const { candidates: pageCandidates, snapshots } = await extractSingaporeCandidates(session.page);
       for (const candidate of pageCandidates) {
         candidates.set(candidate.profileUrl, candidate);
       }
       console.log(`[scan] page=${pageNumber} singaporeCandidates=${pageCandidates.length} total=${candidates.size}`);
+
+      // Diagnose selector drift on raw identifiable profiles, before Singapore
+      // filtering: an all-non-Singapore page legitimately yields zero candidates.
+      const extractedProfileCount = identifiableProfileCount(snapshots);
+      if (extractedProfileCount === 0) {
+        const visibleProfileCount = await session.page.evaluate(countVisibleResultProfileLinks);
+        const mismatch = extractionMismatchDiagnostic({ pageNumber, extractedProfileCount, visibleProfileCount });
+        if (mismatch) throw new Error(mismatch);
+      }
 
       if (pageNumber === maxPages) break;
       if (!(await goToNextResultsPage(session.page))) break;

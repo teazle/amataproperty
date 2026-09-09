@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { config } from 'dotenv';
 import path from 'path';
-import { chromium } from 'playwright-core';
+import type { Page } from 'playwright-core';
+import {
+  acquireReauthBrowser,
+  collectAuthSignals,
+  hasAuthenticatedNav,
+  persistVerifiedStorageState,
+  verifyReauthAuthentication,
+  type ReauthLease,
+} from '../src/lib/linkedin/reauth-browser';
 import { writeLockFile, deleteLockFile, getStorageStatePath, type LinkedInLockData } from '../src/lib/linkedin/storage';
 
 config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
@@ -74,24 +82,13 @@ async function stopCloudBrowser(id: string | undefined) {
   await browserUseFetch(`/browsers/${id}`, 'PATCH', { action: 'stop' }).catch(() => {});
 }
 
-async function isAuthenticatedLinkedInPage(page: unknown): Promise<boolean> {
+async function looksAuthenticated(page: Page): Promise<boolean> {
   const url = page.url();
-  const loginFormCount = await page
-    .locator('input[name="session_key"], input[name="session_password"], .login-form, form[action*="login"]')
-    .count()
-    .catch(() => 0);
-  const loginUrl = /linkedin\.com\/(login|uas\/login|checkpoint|challenge|authwall)/i.test(url);
-  const hasShell = await page
-    .locator('nav[role="navigation"], nav.global-nav, header[role="banner"], main')
-    .count()
-    .catch(() => 0);
-  return !loginUrl && loginFormCount === 0 && hasShell > 0;
-}
-
-async function verifyUrl(page: unknown, url: string): Promise<boolean> {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(2500);
-  return isAuthenticatedLinkedInPage(page);
+  if (!/^https:\/\/www\.linkedin\.com\//i.test(url)) return false;
+  if (/linkedin\.com\/(login|uas\/login|checkpoint|challenge|authwall)/i.test(url)) return false;
+  const signals = await page.evaluate(collectAuthSignals).catch(() => null);
+  if (!signals || signals.visibleLoginInputs > 0) return false;
+  return hasAuthenticatedNav(signals);
 }
 
 async function getPageSummary(page: unknown): Promise<{ url: string; title: string; text: string; hasLoginForm: boolean }> {
@@ -110,20 +107,24 @@ async function getPageSummary(page: unknown): Promise<{ url: string; title: stri
   }));
 }
 
-async function fillVisibleInput(page: unknown, selector: string, value: string): Promise<boolean> {
-  const locator = page.locator(selector).first();
+export async function fillVisibleInput(page: unknown, selector: string, value: string): Promise<boolean> {
+  const locator = page.locator(selector);
   const count = await locator.count().catch(() => 0);
-  if (count === 0) return false;
+  // LinkedIn's login renders duplicated responsive fields whose first DOM match
+  // can be hidden; only a visible field can accept the credential fill.
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    const visible = await candidate.isVisible().catch(() => false);
+    if (!visible) continue;
 
-  const visible = await locator.isVisible().catch(() => false);
-  if (!visible) return false;
-
-  await locator.fill(value, { timeout: 10000 });
-  return true;
+    await candidate.fill(value, { timeout: 10000 });
+    return true;
+  }
+  return false;
 }
 
-async function tryCredentialLogin(page: unknown): Promise<'already_authenticated' | 'submitted' | 'missing_credentials' | 'no_form'> {
-  if (await isAuthenticatedLinkedInPage(page)) {
+export async function tryCredentialLogin(page: Page): Promise<'already_authenticated' | 'submitted' | 'missing_credentials' | 'no_form'> {
+  if (await looksAuthenticated(page)) {
     return 'already_authenticated';
   }
 
@@ -155,23 +156,28 @@ async function tryCredentialLogin(page: unknown): Promise<'already_authenticated
   ];
 
   for (const selector of buttonSelectors) {
-    const button = page.locator(selector).first();
-    const count = await button.count().catch(() => 0);
-    if (count === 0) continue;
+    const locator = page.locator(selector);
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const button = locator.nth(index);
+      const visible = await button.isVisible().catch(() => false);
+      if (!visible) continue;
 
-    const visible = await button.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    await button.click({ timeout: 10000 }).catch(async () => {
-      await button.dispatchEvent('click').catch(() => {});
-    });
-    await page.waitForTimeout(5000);
-    return 'submitted';
+      await button.click({ timeout: 10000 }).catch(async () => {
+        await button.dispatchEvent('click').catch(() => {});
+      });
+      await page.waitForTimeout(5000);
+      return 'submitted';
+    }
   }
 
-  const namedButton = page.getByRole('button', { name: /^Sign in$/ }).last();
-  const namedCount = await namedButton.count().catch(() => 0);
-  if (namedCount > 0 && await namedButton.isVisible().catch(() => false)) {
+  const namedButtons = page.getByRole('button', { name: /^Sign in$/ });
+  const namedCount = await namedButtons.count().catch(() => 0);
+  for (let index = 0; index < namedCount; index += 1) {
+    const namedButton = namedButtons.nth(index);
+    const visible = await namedButton.isVisible().catch(() => false);
+    if (!visible) continue;
+
     await namedButton.click({ timeout: 10000 }).catch(async () => {
       await namedButton.dispatchEvent('click').catch(() => {});
     });
@@ -187,7 +193,7 @@ async function tryCredentialLogin(page: unknown): Promise<'already_authenticated
 async function main() {
   const startedAt = new Date();
   const deadlineAt = new Date(startedAt.getTime() + WAIT_MS);
-  let cloud: BrowserUseBrowser | null = null;
+  let lease: ReauthLease | null = null;
   let lock: LinkedInLockData = {
     pid: process.pid,
     status: 'reauth_required',
@@ -203,22 +209,21 @@ async function main() {
   };
 
   try {
-    cloud = await createCloudBrowser();
+    lease = await acquireReauthBrowser({ env: process.env, createCloudBrowser, stopCloudBrowser });
     lock = {
       ...lock,
-      reauthLiveUrl: cloud.liveUrl || null,
-      reauthBrowserId: cloud.id,
+      reauthLiveUrl: lease.liveUrl,
+      reauthBrowserId: lease.cloudBrowserId ?? null,
     };
     writeLockFile(lock);
 
-    console.log(`BROWSER_USE_LIVE_URL=${cloud.liveUrl || ''}`);
-    console.log(`BROWSER_ID=${cloud.id}`);
+    console.log(`REAUTH_MODE=${lease.mode}`);
+    console.log(`BROWSER_USE_LIVE_URL=${lease.liveUrl || ''}`);
+    console.log(`BROWSER_ID=${lease.cloudBrowserId || ''}`);
     console.log(`REAUTH_DEADLINE=${deadlineAt.toISOString()}`);
-    console.log(`REAUTH_PROXY=${DISABLE_PROXY ? 'disabled' : 'enabled'}`);
+    console.log(`REAUTH_PROXY=${lease.mode === 'explicit-cdp' ? 'external-browser' : DISABLE_PROXY ? 'disabled' : 'enabled'}`);
 
-    const browser = await chromium.connectOverCDP(cloud.cdpUrl, { timeout: 120000 });
-    const context = browser.contexts()[0] || await browser.newContext();
-    const page = context.pages()[0] || await context.newPage();
+    const { context, page } = lease;
     await page.setViewportSize({ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }).catch(() => {});
 
     await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
@@ -236,28 +241,12 @@ async function main() {
     }
     console.log('WAITING_FOR_MANUAL_LINKEDIN_LOGIN=true');
 
-    let verified = false;
+    let verified: Awaited<ReturnType<typeof verifyReauthAuthentication>> | null = null;
     let lastVerifyAttemptAt = 0;
     while (Date.now() < deadlineAt.getTime()) {
       await page.waitForTimeout(5000);
       lock.lastHeartbeatAt = new Date().toISOString();
       writeLockFile(lock);
-
-      if (await isAuthenticatedLinkedInPage(page)) {
-        const catchUp = await verifyUrl(page, 'https://www.linkedin.com/mynetwork/catch-up/all/');
-        lock.authCheck = {
-          feed: true,
-          catchUp,
-          currentUrl: page.url(),
-          reason: catchUp ? 'authenticated' : 'catch-up did not authenticate',
-        };
-        writeLockFile(lock);
-
-        if (catchUp) {
-          verified = true;
-          break;
-        }
-      }
 
       const summary = await getPageSummary(page);
       const lowerText = summary.text.toLowerCase();
@@ -268,6 +257,8 @@ async function main() {
 
       console.log(`AUTH_WAIT url=${summary.url} loginForm=${summary.hasLoginForm} challenge=${waitingForChallenge} error=${loginError} text="${summary.text.slice(0, 180)}"`);
 
+      // While a challenge or login form is visible, verifying would navigate this
+      // page away from the in-progress login, so keep waiting instead.
       if (waitingForChallenge || summary.hasLoginForm || loginError) {
         continue;
       }
@@ -278,26 +269,20 @@ async function main() {
       }
       lastVerifyAttemptAt = now;
 
-      const feed = await verifyUrl(page, 'https://www.linkedin.com/feed/');
-      if (!feed) {
-        console.log(`AUTH_CHECK feed=false currentUrl=${page.url()}`);
-        continue;
-      }
-
-      const catchUp = await verifyUrl(page, 'https://www.linkedin.com/mynetwork/catch-up/all/');
+      const outcome = await verifyReauthAuthentication(page);
       lock.authCheck = {
-        feed,
-        catchUp,
+        feed: outcome.feed.ok,
+        catchUp: outcome.catchUp ? outcome.catchUp.ok : false,
         currentUrl: page.url(),
-        reason: catchUp ? 'authenticated' : 'catch-up did not authenticate',
+        reason: outcome.ok ? 'authenticated' : outcome.catchUp ? outcome.catchUp.reason : outcome.feed.reason,
       };
       writeLockFile(lock);
 
-      if (catchUp) {
-        verified = true;
+      if (outcome.ok) {
+        verified = outcome;
         break;
       }
-      console.log(`AUTH_CHECK feed=${feed} catchUp=${catchUp} currentUrl=${page.url()}`);
+      console.log(`AUTH_CHECK feed=${outcome.feed.ok} catchUp=${outcome.catchUp ? outcome.catchUp.ok : false} reason="${lock.authCheck.reason}"`);
     }
 
     if (!verified) {
@@ -308,7 +293,9 @@ async function main() {
       throw new Error(lock.error);
     }
 
-    await context.storageState({ path: getStorageStatePath() }).catch(() => {});
+    // Storage is only persisted after real feed + Catch Up verification; a save
+    // failure must fail the run instead of being swallowed behind a success print.
+    await persistVerifiedStorageState(context, getStorageStatePath());
     lock.status = 'stopped';
     lock.error = undefined;
     lock.authVerifiedAt = new Date().toISOString();
@@ -322,8 +309,7 @@ async function main() {
     writeLockFile(lock);
     console.log('LINKEDIN_REAUTH_VERIFIED=true');
 
-    await browser.close().catch(() => {});
-    await stopCloudBrowser(cloud?.id);
+    await lease.release();
     deleteLockFile();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -331,10 +317,14 @@ async function main() {
     lock.error = message;
     lock.stoppedAt = new Date().toISOString();
     writeLockFile(lock);
-    await stopCloudBrowser(cloud?.id);
+    await lease?.release();
     console.error(`LINKEDIN_REAUTH_FAILED=${message}`);
     process.exit(1);
   }
 }
 
-main();
+// Run only as an entry point: bun test imports (import.meta.main === false) must
+// not start a reauth run; tsx has no import.meta.main (undefined) and still runs.
+if (import.meta.main !== false) {
+  main();
+}

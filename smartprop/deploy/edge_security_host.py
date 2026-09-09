@@ -3,11 +3,14 @@
 import base64
 import fcntl
 import hashlib
+from http.client import HTTPSConnection
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -18,6 +21,13 @@ MACHINE = 'bfb5b1b8859546f9aac39a4c5bafa616'
 CONFIG = Path('/etc/nginx/conf.d/smartprop.conf')
 RELEASES = Path('/etc/nginx/smartprop-security-releases')
 BASE_SHA = '9ac5e29ff8626476926597a811af057f134a85f6c43cca31f60248e68039c6d4'
+TLS_BASE_SHA = '6051f211c1feaeb9d3370953727b0880984361e98b84097cbdff8a5026ebfd11'
+TLS_DIRECTORY = Path('/root/smartprop-origin-tls-20260909')
+TLS_DIRECTIVES = '''    listen 443 ssl;
+    ssl_certificate /root/smartprop-origin-tls-20260909/origin.pem;
+    ssl_certificate_key /root/smartprop-origin-tls-20260909/origin.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+'''
 ZONE = 'limit_req_zone $binary_remote_addr zone=smartprop_login:10m rate=5r/m;\n'
 LOCATIONS = '''
     # Contain diagnostic disclosure and disabled signing independently of app rollout.
@@ -42,6 +52,12 @@ def digest(data):
 
 
 def harden(before):
+    if digest(before) == TLS_BASE_SHA:
+        marker = '    listen 80;\n'
+        text = before.decode()
+        if text.count(marker) != 1:
+            raise ValueError('ambiguous HTTP listener')
+        return text.replace(marker, marker + TLS_DIRECTIVES, 1).encode()
     if digest(before) != BASE_SHA:
         raise ValueError('Nginx baseline changed; reconcile before release')
     text = before.decode()
@@ -118,6 +134,29 @@ def smoke(public_sha):
     return result
 
 
+def tls_smoke(public_sha, port=443):
+    context = ssl.create_default_context(cafile=str(TLS_DIRECTORY / 'origin-ca.pem'))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    expected = digest(ssl.PEM_cert_to_DER_cert((TLS_DIRECTORY / 'origin.pem').read_text()))
+    rows = []
+    for hostname in ['viewproperty.ai', 'www.viewproperty.ai']:
+        for path, expected_status in [('/', 200), ('/login', 200), ('/api/admin/listings', 401)]:
+            connection = HTTPSConnection(hostname, timeout=15, context=context)
+            try:
+                connection.sock = context.wrap_socket(socket.create_connection(('127.0.0.1', port), timeout=15), server_hostname=hostname)
+                protocol = connection.sock.version()
+                fingerprint = digest(connection.sock.getpeercert(binary_form=True))
+                connection.request('GET', path, headers={'Host': hostname})
+                response = connection.getresponse()
+                body = response.read()
+                if response.status != expected_status or fingerprint != expected or (path == '/' and digest(body) != public_sha):
+                    raise ValueError('origin TLS content or certificate verification failed')
+                rows.append({'hostname': hostname, 'path': path, 'status': response.status, 'protocol': protocol, 'certificate_sha256': fingerprint})
+            finally:
+                connection.close()
+    return {'status': 'passed', 'certificate_and_hostname_verified': True, 'requests': rows}
+
+
 def activate(request):
     if set(request) != {'head', 'config', 'sha256'} or not re.fullmatch('[0-9a-f]{40}', request['head']):
         raise ValueError('invalid release request')
@@ -126,6 +165,7 @@ def activate(request):
         raise ValueError('artifact hash mismatch')
     identity = target()
     before = CONFIG.read_bytes()
+    baseline_sha = digest(before)
     if raw != harden(before):
         raise ValueError('artifact differs from exact allowed containment change')
     keep = preserved()
@@ -134,7 +174,7 @@ def activate(request):
         raise ValueError('public site preflight failed')
     public_sha = digest(body)
     RELEASES.mkdir(mode=0o700, parents=True, exist_ok=True)
-    backup = RELEASES / (BASE_SHA + '.conf')
+    backup = RELEASES / (baseline_sha + '.conf')
     artifact = RELEASES / (request['sha256'] + '.conf')
     for path, content in ((backup, before), (artifact, raw)):
         if path.exists():
@@ -152,19 +192,21 @@ def activate(request):
         run(['nginx', '-t'])
         run(['systemctl', 'reload', 'nginx'])
         proof = smoke(public_sha)
+        if baseline_sha == TLS_BASE_SHA:
+            proof['origin_tls'] = tls_smoke(public_sha)
         if preserved() != keep:
             raise ValueError('preserved application identity changed')
         if target()['nginx_sha256'] != request['sha256']:
             raise ValueError('active configuration changed during smoke')
         return {'status': 'passed', 'head': request['head'], 'target': identity,
                 'artifact_sha256': request['sha256'], 'preserved': keep, 'smoke': proof,
-                'rollback': {'backup': str(backup), 'sha256': BASE_SHA}, 'service_started': False}
+                'rollback': {'backup': str(backup), 'sha256': baseline_sha}, 'service_started': False}
     except Exception:
         if changed:
             atomic(CONFIG, before)
             run(['nginx', '-t'])
             run(['systemctl', 'reload', 'nginx'])
-            if digest(CONFIG.read_bytes()) != BASE_SHA:
+            if digest(CONFIG.read_bytes()) != baseline_sha:
                 raise ValueError('rollback configuration verification failed')
         raise
 

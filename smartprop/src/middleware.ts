@@ -6,6 +6,7 @@ const PUBLIC_API_PATHS = new Set([
   "/api/admin/auth/login",
   "/api/admin/auth/logout",
   "/api/health",
+  "/api/health/live",
   "/api/public/leads",
   "/api/sign/submit",
   "/api/wa/openclaw",

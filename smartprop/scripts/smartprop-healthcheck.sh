@@ -119,13 +119,21 @@ check_docker() {
 }
 
 check_http() {
-  local app_code flaresolverr_code
+  local liveness_code readiness_code flaresolverr_code readiness_failed=0
 
-  app_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$APP_BASE_URL/api/health" 2>/dev/null || echo 000)"
-  if [ "$app_code" != "200" ]; then
-    log WARN "app health returned HTTP $app_code; restarting smartprop"
+  liveness_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$APP_BASE_URL/api/health/live" 2>/dev/null || true)"
+  liveness_code="${liveness_code:-000}"
+  if [ "$liveness_code" != "200" ]; then
+    log WARN "app liveness returned HTTP $liveness_code; restarting smartprop"
     pm2 restart smartprop --update-env >/dev/null 2>&1 || true
     return 1
+  fi
+
+  readiness_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$APP_BASE_URL/api/health" 2>/dev/null || true)"
+  readiness_code="${readiness_code:-000}"
+  if [ "$readiness_code" != "200" ]; then
+    log WARN "app readiness returned HTTP $readiness_code; liveness HTTP $liveness_code; not restarting smartprop"
+    readiness_failed=1
   fi
 
   flaresolverr_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8191/v1 -H "Content-Type: application/json" -d "{\"cmd\":\"sessions.list\"}" 2>/dev/null || echo 000)"
@@ -135,7 +143,7 @@ check_http() {
     return 1
   fi
 
-  return 0
+  return "$readiness_failed"
 }
 
 check_scheduler() {

@@ -20,6 +20,7 @@ import {
   shouldRecordDlqFailure,
 } from './scraper-outcome';
 import { ensureScraperQueues, getBoss, stopBoss } from './scraper-queue';
+import { installScraperWorkerShutdown } from './scraper-worker-lifecycle';
 import { cleanupOrphanedBrowsers, startPeriodicCleanup } from '../utils/browser-cleanup';
 
 // Load environment variables explicitly (needed when running as standalone process)
@@ -333,7 +334,7 @@ export async function startScraperWorker(): Promise<void> {
     try {
       console.log(`[ScraperWorker] Attempting to start worker (attempt ${retries + 1}/${maxRetries})...`);
 
-  const boss: PgBoss = await getBoss();
+  const boss: PgBoss = await getBoss({ registerShutdown: false });
   await ensureScraperQueues(boss);
 
   // Process jobs one at a time
@@ -344,7 +345,7 @@ export async function startScraperWorker(): Promise<void> {
   );
 
   // DLQ tracker
-  await boss.work<ScraperJobPayload>(
+  const dlqWorkId = await boss.work<ScraperJobPayload>(
     SCRAPER_DLQ_NAME,
     async (job) => {
       const failedJob = Array.isArray(job) ? job[0] : job;
@@ -361,23 +362,21 @@ export async function startScraperWorker(): Promise<void> {
 
   let cleanupInterval: NodeJS.Timeout | null = null;
 
-  const shutdown = async () => {
-    try {
-      // Clear cleanup interval if it exists
-      if (cleanupInterval) {
-        clearInterval(cleanupInterval);
-      }
-      await boss.offWork(workId, { wait: true });
-    } catch (error) {
-      console.warn('[ScraperWorker] Error stopping worker', error);
-    } finally {
-      await stopBoss({ graceful: true, timeout: 10000 });
-      process.exit(0);
-    }
-  };
-
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
+  installScraperWorkerShutdown({
+    workers: [
+      { name: SCRAPER_QUEUE_NAME, id: workId },
+      { name: SCRAPER_DLQ_NAME, id: dlqWorkId },
+    ],
+    offWork: (name, options) => boss.offWork(name, options),
+    stopBoss: () => stopBoss({ graceful: true, timeout: 10000 }),
+    onBeforeDrain: () => {
+      if (cleanupInterval) clearInterval(cleanupInterval);
+    },
+    onError: (error) => {
+      console.error('[ScraperWorker] Shutdown drain failed; leaving Boss running', error);
+      process.exitCode = 1;
+    },
+  });
 
       console.log('[ScraperWorker] ✅ Started scraper worker successfully');
 

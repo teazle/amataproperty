@@ -199,14 +199,14 @@ async function createBoss(): Promise<PgBoss> {
   return boss;
 }
 
-export async function getBoss(): Promise<PgBoss> {
+export async function getBoss(options: { registerShutdown?: boolean } = {}): Promise<PgBoss> {
   if (bossInstance) return bossInstance;
   if (bossPromise) return bossPromise;
 
   bossPromise = createBoss()
     .then((boss) => {
       bossInstance = boss;
-      registerShutdown();
+      if (options.registerShutdown !== false) registerShutdown();
       return boss;
     })
     .catch((error) => {

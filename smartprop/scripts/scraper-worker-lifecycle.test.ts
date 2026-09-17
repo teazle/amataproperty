@@ -19,9 +19,11 @@ async function observeOutput(expected: string, getOutput: () => string) {
 }
 
 describe('scraper worker shutdown', () => {
-  test('SIGINT waits for an active job before the owned subprocess exits', async () => {
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    test(`${signal} waits for an active job before the owned subprocess exits`, async () => {
     const child = Bun.spawn(['bun', 'scripts/fixtures/scraper-worker-signal-fixture.ts'], {
       cwd: process.cwd(),
+      stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -43,17 +45,20 @@ describe('scraper worker shutdown', () => {
 
     try {
       await observeOutput('ready', () => output);
-      child.kill('SIGINT');
+      child.kill(signal);
       await observeOutput('offWork:scraper-jobs:main-worker:true', () => output);
       await observeOutput('offWork:scraper-jobs-dlq:dlq-worker:true', () => output);
 
+      await Bun.sleep(250);
       expect(output).not.toContain('stopBoss');
       expect(exited).toBe(false);
 
-      child.kill('SIGINT');
+      child.kill(signal);
       await Bun.sleep(25);
       expect(output.match(/offWork:scraper-jobs:main-worker:true/g)).toHaveLength(1);
 
+      child.stdin.write('release\n');
+      child.stdin.end();
       expect(await child.exited).toBe(0);
       expect(output).toContain('stopBoss');
     } finally {
@@ -61,7 +66,8 @@ describe('scraper worker shutdown', () => {
       reading = false;
       await consume;
     }
-  });
+    });
+  }
 
   test('stops both workers before waiting for active work and stopping Boss', async () => {
     const activeJob = deferred();

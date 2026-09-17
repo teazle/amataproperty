@@ -25,5 +25,8 @@ installScraperWorkerShutdown({
   },
 });
 
-setTimeout(releaseActiveJob, 200);
+process.stdin.on('data', (chunk) => {
+  if (chunk.toString().trim() === 'release') releaseActiveJob();
+});
+
 console.log('ready');

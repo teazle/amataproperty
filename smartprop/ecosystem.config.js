@@ -51,6 +51,7 @@ module.exports = {
       restart_delay: 5000,
       // Allow the 3600-second pg-boss job expiry plus a bounded one-minute drain margin.
       kill_timeout: 3660000,
+      treekill: false,
     },
   ],
 };

@@ -11,6 +11,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import tempfile
 import sys
 import time
 import urllib.error
@@ -20,6 +21,7 @@ import zipfile
 POINTER = Path('/opt/smartprop/app/smartprop')
 RELEASES = Path('/opt/smartprop/releases')
 SERVICES = ['smartprop', 'scraper-worker']
+WORKER_STOP_TIMEOUT = 3720
 SOURCE_ROOTS = {'src', 'public', 'scripts', 'deploy', 'openclaw', 'bun.lock', 'package.json',
                 'ecosystem.config.js', 'next.config.ts', 'postcss.config.mjs', 'tsconfig.json',
                 'next-env.d.ts', 'components.json', 'eslint.config.mjs'}
@@ -31,7 +33,7 @@ def sha(raw):
 
 def run(argv, **kwargs):
     return subprocess.run(argv, check=True, capture_output=True, text=True,
-                          timeout=55, **kwargs).stdout.strip()
+                          timeout=kwargs.pop('timeout', 55), **kwargs).stdout.strip()
 
 
 def inspect_archive(raw, expected, kind):
@@ -64,7 +66,11 @@ def processes():
     rows = json.loads(run(['pm2', 'jlist']))
     result = {row['name']: {'pid': row['pid'], 'status': row['pm2_env']['status'],
                           'cwd': row['pm2_env']['pm_cwd'],
-                          'kill_timeout': row['pm2_env'].get('kill_timeout', 1600)}
+                          'kill_timeout': row['pm2_env'].get('kill_timeout', 1600),
+                          'treekill': row['pm2_env'].get('treekill', True),
+                          'script': row['pm2_env']['pm_exec_path'],
+                          'interpreter': row['pm2_env']['exec_interpreter'],
+                          'args': row['pm2_env'].get('args', [])}
               for row in rows if row['name'] in SERVICES}
     if set(result) != set(SERVICES) or any(x['cwd'] != str(POINTER) for x in result.values()):
         raise ValueError('PM2 topology differs')
@@ -144,25 +150,34 @@ def configured_worker_timeout(stage):
             'if(a.length!==1)throw Error("worker identity differs");'
             'process.stdout.write(JSON.stringify(a[0].kill_timeout??1600));')
     value = json.loads(run(['node', '-e', code, str(stage / 'ecosystem.config.js')]))
-    if type(value) is not int or value <= 0:
+    if type(value) is not int or value <= 0 or value > 3660000:
         raise ValueError('invalid worker shutdown timeout')
     return value
 
 
-def start_services(worker_timeout):
-    for service in SERVICES:
-        command = ['pm2', 'start', service]
-        if service == 'scraper-worker':
-            command += ['--kill-timeout', str(worker_timeout)]
-        run(command)
+def start_services(worker_timeout, treekill=False):
+    worker = processes()['scraper-worker']
+    config = {key: worker[key] for key in ['script', 'cwd', 'interpreter', 'args']}
+    config.update(name='scraper-worker', kill_timeout=worker_timeout, treekill=treekill)
+    run(['pm2', 'start', 'smartprop'])
+    # Explicit JSON preserves true on rollback; CLI defaults silently retain false.
+    with tempfile.TemporaryDirectory(prefix='smartprop-worker-start-') as directory:
+        path = Path(directory) / 'ecosystem.json'
+        path.write_text(json.dumps({'apps': [config]}))
+        path.chmod(0o600)
+        run(['pm2', 'start', str(path), '--only', 'scraper-worker'])
 
 
-def rollback(base, stage, switched, worker_timeout=1600):
+def stop_services():
     for service in reversed(SERVICES):
-        run(['pm2', 'stop', service])
+        run(['pm2', 'stop', service], timeout=WORKER_STOP_TIMEOUT if service == 'scraper-worker' else 55)
+
+
+def rollback(base, stage, switched, worker_timeout=1600, treekill=True):
+    stop_services()
     if switched:
         switch(base, stage)
-    start_services(worker_timeout)
+    start_services(worker_timeout, treekill)
     result = smoke(base)
     run(['pm2', 'save'])
     return result
@@ -294,8 +309,7 @@ def host(request):
     save(receipt, record)
     switched = False
     try:
-        for service in reversed(SERVICES):
-            run(['pm2', 'stop', service])
+        stop_services()
         switch(stage, base)
         switched = True
         start_services(worker_timeout)
@@ -308,6 +322,8 @@ def host(request):
             raise ValueError('application process not online')
         if after['processes']['scraper-worker']['kill_timeout'] != worker_timeout:
             raise ValueError('worker shutdown timeout was not applied')
+        if after['processes']['scraper-worker']['treekill'] is not False:
+            raise ValueError('worker child signal protection was not applied')
         run(['pm2', 'save'])
         record.update(status='passed', live=True, after=after, smoke=proof, build_id=journal['build_id'],
                       preservation_proof={k: after[k] for k in preserved}, rollback=str(base), finished_at=time.time())
@@ -315,8 +331,13 @@ def host(request):
         record['error'] = str(error)[:400]
         try:
             record['rollback_smoke'] = rollback(base, stage, switched,
-                                                before['processes']['scraper-worker']['kill_timeout'])
-            record.update(status='rolled-back', live=False, restored=snapshot())
+                                                before['processes']['scraper-worker']['kill_timeout'],
+                                                before['processes']['scraper-worker']['treekill'])
+            restored = snapshot()
+            for setting in ['kill_timeout', 'treekill']:
+                if restored['processes']['scraper-worker'][setting] != before['processes']['scraper-worker'][setting]:
+                    raise ValueError('worker rollback setting differs: ' + setting)
+            record.update(status='rolled-back', live=False, restored=restored)
         except Exception as rollback_error:
             record.update(status='failed', rollback_error=str(rollback_error)[:400])
     save(receipt, record)

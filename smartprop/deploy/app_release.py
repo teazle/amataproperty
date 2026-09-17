@@ -102,7 +102,7 @@ def execute(action, path, expected):
     code = (ROOT / 'smartprop/deploy/app_release_host.py').read_text()
     process = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'smartprop-vps',
                               'python3 -c ' + shlex.quote(code)], input=json.dumps(request),
-                             capture_output=True, text=True, timeout=1100 if action == 'stage' else 180)
+                             capture_output=True, text=True, timeout=1100 if action == 'stage' else 7620)
     if process.returncode:
         raise ValueError(process.stderr[-700:])
     result = json.loads(process.stdout)

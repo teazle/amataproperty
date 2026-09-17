@@ -46,14 +46,37 @@ class AppReleaseTests(unittest.TestCase):
                     host.switch(old, old)
                 self.assertEqual(pointer.resolve(), new)
 
+    def test_worker_stop_deadline_accommodates_drain(self):
+        with patch.object(host, 'run') as run, patch.object(host, 'start_services'), patch.object(host, 'smoke'):
+            host.rollback(Path('/old'), Path('/new'), False)
+        worker = next(c for c in run.call_args_list if c.args[0] == ['pm2', 'stop', 'scraper-worker'])
+        self.assertGreaterEqual(worker.kwargs.get('timeout', 55), 3720)
+
+    def test_worker_config_preserves_command_and_sets_tree_signaling_explicitly(self):
+        existing = {'script': '/root/.bun/bin/bun', 'cwd': str(host.POINTER),
+                    'args': ['src/lib/queue/scraper-worker.ts'], 'interpreter': 'none'}
+        for tree in [False, True]:
+            configs = []
+            def read_config(args):
+                if args[-2:] == ['--only', 'scraper-worker']:
+                    configs.append(json.loads(Path(args[2]).read_text())['apps'][0])
+            with patch.object(host, 'processes', return_value={'scraper-worker': existing}), patch.object(host, 'run', side_effect=read_config) as run:
+                host.start_services(3660000, tree)
+                args = run.call_args_list[-1].args[0]
+                self.assertEqual(args[0:2], ['pm2', 'start'])
+                # The private temporary config was consumed while the PM2 command ran.
+                self.assertEqual(args[-2:], ['--only', 'scraper-worker'])
+                self.assertEqual(configs, [dict(existing, name='scraper-worker', kill_timeout=3660000, treekill=tree)])
+
     def test_rollback_restores_pointer_and_only_owned_services(self):
         with patch.object(host, 'run') as run, patch.object(host, 'switch') as switch, \
-                patch.object(host, 'smoke', return_value={'status': 'passed'}):
+                patch.object(host, 'smoke', return_value={'status': 'passed'}), patch.object(host, 'start_services') as start:
             host.rollback(Path('/old'), Path('/new'), switched=True)
         switch.assert_called_once_with(Path('/old'), Path('/new'))
+        start.assert_called_once_with(1600, True)
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['pm2', 'stop', 'scraper-worker'], ['pm2', 'stop', 'smartprop'],
-            ['pm2', 'start', 'smartprop'], ['pm2', 'start', 'scraper-worker', '--kill-timeout', '1600'], ['pm2', 'save'],
+            ['pm2', 'save'],
         ])
 
     def lifecycle(self, failure=None):
@@ -64,7 +87,7 @@ class AppReleaseTests(unittest.TestCase):
             stage = root / ('app-' + head[:12]); stage.mkdir()
             pointer = root / 'current'; pointer.symlink_to(base)
             before = {'app': str(base), 'source': 'a' * 40,
-                      'processes': {name: {'status': 'online', 'pid': 123, 'kill_timeout': 1600} for name in host.SERVICES},
+                      'processes': {name: {'status': 'online', 'pid': 123, 'kill_timeout': 1600, 'treekill': True} for name in host.SERVICES},
                       'env': {}, 'storage': '/shared', 'nginx': 'edge', 'public': 'public',
                       'public_index': 'html', 'daily_report': 'report', 'gateway_config': 'config', 'gateway_pid': '456'}
             journal = {'status': 'passed', 'source': head, 'plan_sha256': 'c' * 64, 'before': before,
@@ -73,15 +96,19 @@ class AppReleaseTests(unittest.TestCase):
             after = dict(before, app=str(stage), source=head)
             after['processes'] = {name: dict(value) for name, value in before['processes'].items()}
             after['processes']['scraper-worker']['kill_timeout'] = 3660000
+            after['processes']['scraper-worker']['treekill'] = False
             if failure == 'preserved':
                 after['gateway_config'] = 'unexpected-change'
             if failure == 'timeout':
                 after['processes']['scraper-worker']['kill_timeout'] = 1600
-            snapshots = [before, after, before]
+            if failure == 'treekill':
+                after['processes']['scraper-worker']['treekill'] = True
+            snapshots = [before, before] if failure == 'smoke' else [before, after, before]
             smokes = [ValueError('smoke failed'), {'status': 'passed'}] if failure == 'smoke' else [{'status': 'passed'}, {'status': 'passed'}]
             with patch.multiple(host, POINTER=pointer, RELEASES=root), \
                     patch.object(host, 'snapshot', side_effect=snapshots), patch.object(host, 'run') as run, \
                     patch.object(host, 'configured_worker_timeout', return_value=3660000), \
+                    patch.object(host, 'start_services') as start, \
                     patch.object(host.subprocess, 'run', return_value=SimpleNamespace(returncode=1)), \
                     patch.object(host, 'smoke', side_effect=smokes):
                 result = host.host({'action': 'release', 'head': head, 'base': 'a' * 40, 'plan_sha256': 'c' * 64})
@@ -89,14 +116,14 @@ class AppReleaseTests(unittest.TestCase):
             self.assertEqual(pointer.resolve(), base if failure else stage)
             self.assertTrue((stage / '.app-activation.json').is_file())
             self.assertFalse(any('systemctl' in call.args[0] for call in run.call_args_list))
-            return [call.args[0] for call in run.call_args_list]
+            return [call.args for call in start.call_args_list]
 
     def test_success_cuts_over_only_app_and_scraper(self):
         self.lifecycle()
 
     def test_cutover_applies_the_worker_drain_timeout(self):
         commands = self.lifecycle()
-        self.assertIn(['pm2', 'start', 'scraper-worker', '--kill-timeout', '3660000'], commands)
+        self.assertIn((3660000,), commands)
 
     def test_failed_live_smoke_restores_application(self):
         self.lifecycle('smoke')
@@ -106,7 +133,10 @@ class AppReleaseTests(unittest.TestCase):
 
     def test_timeout_mismatch_rolls_back_with_original_timeout(self):
         commands = self.lifecycle('timeout')
-        self.assertIn(['pm2', 'start', 'scraper-worker', '--kill-timeout', '1600'], commands)
+        self.assertIn((1600, True), commands)
+
+    def test_tree_signal_mismatch_restores_original_settings(self):
+        self.assertIn((1600, True), self.lifecycle('treekill'))
 
     def test_reads_timeout_and_rejects_non_integer_configuration(self):
         for raw in ['3660000', '1600']:

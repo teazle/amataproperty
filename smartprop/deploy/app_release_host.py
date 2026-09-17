@@ -63,7 +63,9 @@ def inspect_archive(raw, expected, kind):
 def processes():
     rows = json.loads(run(['pm2', 'jlist']))
     result = {row['name']: {'pid': row['pid'], 'status': row['pm2_env']['status'],
-                          'cwd': row['pm2_env']['pm_cwd']} for row in rows if row['name'] in SERVICES}
+                          'cwd': row['pm2_env']['pm_cwd'],
+                          'kill_timeout': row['pm2_env'].get('kill_timeout', 1600)}
+              for row in rows if row['name'] in SERVICES}
     if set(result) != set(SERVICES) or any(x['cwd'] != str(POINTER) for x in result.values()):
         raise ValueError('PM2 topology differs')
     return result
@@ -135,13 +137,32 @@ def switch(target, expected):
     os.replace(temporary, POINTER)
 
 
-def rollback(base, stage, switched):
+def configured_worker_timeout(stage):
+    # Read the reviewed, hash-verified ecosystem file; never import live env values.
+    code = ('const c=require(process.argv[1]);'
+            'const a=c.apps.filter(x=>x.name==="scraper-worker");'
+            'if(a.length!==1)throw Error("worker identity differs");'
+            'process.stdout.write(JSON.stringify(a[0].kill_timeout??1600));')
+    value = json.loads(run(['node', '-e', code, str(stage / 'ecosystem.config.js')]))
+    if type(value) is not int or value <= 0:
+        raise ValueError('invalid worker shutdown timeout')
+    return value
+
+
+def start_services(worker_timeout):
+    for service in SERVICES:
+        command = ['pm2', 'start', service]
+        if service == 'scraper-worker':
+            command += ['--kill-timeout', str(worker_timeout)]
+        run(command)
+
+
+def rollback(base, stage, switched, worker_timeout=1600):
     for service in reversed(SERVICES):
         run(['pm2', 'stop', service])
     if switched:
         switch(base, stage)
-    for service in SERVICES:
-        run(['pm2', 'start', service])
+    start_services(worker_timeout)
     result = smoke(base)
     run(['pm2', 'save'])
     return result
@@ -264,6 +285,7 @@ def host(request):
         return {'status': 'passed', 'source': request['head'], 'build_id': journal['build_id'], 'before': before}
     if request['action'] != 'release':
         raise ValueError('unknown action')
+    worker_timeout = configured_worker_timeout(stage)
     record = {'status': 'started', 'source': request['head'], 'plan_sha256': request['plan_sha256'],
               'before': before, 'started_at': time.time()}
     receipt = stage / '.app-activation.json'
@@ -276,8 +298,7 @@ def host(request):
             run(['pm2', 'stop', service])
         switch(stage, base)
         switched = True
-        for service in SERVICES:
-            run(['pm2', 'start', service])
+        start_services(worker_timeout)
         proof = smoke(stage)
         after = snapshot()
         preserved = ['env', 'storage', 'nginx', 'public', 'public_index', 'daily_report', 'gateway_config', 'gateway_pid']
@@ -285,13 +306,16 @@ def host(request):
             raise ValueError('preserved consumer changed')
         if any(x['status'] != 'online' for x in after['processes'].values()):
             raise ValueError('application process not online')
+        if after['processes']['scraper-worker']['kill_timeout'] != worker_timeout:
+            raise ValueError('worker shutdown timeout was not applied')
         run(['pm2', 'save'])
         record.update(status='passed', live=True, after=after, smoke=proof, build_id=journal['build_id'],
                       preservation_proof={k: after[k] for k in preserved}, rollback=str(base), finished_at=time.time())
     except Exception as error:
         record['error'] = str(error)[:400]
         try:
-            record['rollback_smoke'] = rollback(base, stage, switched)
+            record['rollback_smoke'] = rollback(base, stage, switched,
+                                                before['processes']['scraper-worker']['kill_timeout'])
             record.update(status='rolled-back', live=False, restored=snapshot())
         except Exception as rollback_error:
             record.update(status='failed', rollback_error=str(rollback_error)[:400])

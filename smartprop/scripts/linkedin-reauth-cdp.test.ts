@@ -331,6 +331,21 @@ describe('linkedin-reauth authenticated page verification', () => {
     expect(requestedUrls()).toEqual([REAUTH_FEED_URL]);
   });
 
+  test('the observed authenticated For You Feed landing verifies a Feed request', async () => {
+    const observedForYouLanding = 'https://www.linkedin.com/feed/foryou/';
+    const { page, requestedUrls } = createProbePage(
+      [{ kind: 'respond', status: 200, landOn: observedForYouLanding }],
+      () => authenticatedSignals,
+    );
+
+    const result = await verifyAuthenticatedLinkedInPage(page, REAUTH_FEED_URL, { settleMs: 0 });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('authenticated');
+    expect(result.currentUrl).toBe(observedForYouLanding);
+    expect(requestedUrls()).toEqual([REAUTH_FEED_URL]);
+  });
+
   test('bounded retries recover from a transient failure', async () => {
     const { page, requestedUrls } = createProbePage(
       [
@@ -378,12 +393,14 @@ describe('linkedin-reauth location matching and storage persistence', () => {
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed/?trk=guest_home', REAUTH_FEED_URL)).toBe(true);
     // A single trailing slash is insignificant: /feed and /feed/ are one page.
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed', REAUTH_FEED_URL)).toBe(true);
+    expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed/foryou/', REAUTH_FEED_URL)).toBe(true);
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/mynetwork/catch-up/all/', REAUTH_CATCH_UP_URL)).toBe(true);
     // HTTP never satisfies an HTTPS request (controller falsifier).
     expect(matchesExpectedLinkedInLocation('http://www.linkedin.com/feed/', REAUTH_FEED_URL)).toBe(false);
     // Exact pathname only: nested Feed pages are not the Feed itself.
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed/update-urn-123/', REAUTH_FEED_URL)).toBe(false);
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed/', REAUTH_CATCH_UP_URL)).toBe(false);
+    expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/feed/foryou/', REAUTH_CATCH_UP_URL)).toBe(false);
     expect(matchesExpectedLinkedInLocation('https://linkedin.com/feed/', REAUTH_FEED_URL)).toBe(false);
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/login', REAUTH_FEED_URL)).toBe(false);
     expect(matchesExpectedLinkedInLocation('https://www.linkedin.com/checkpoint/lgc/login-submit', REAUTH_FEED_URL)).toBe(false);

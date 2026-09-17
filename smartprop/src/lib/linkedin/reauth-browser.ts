@@ -174,9 +174,12 @@ export function matchesExpectedLinkedInLocation(currentUrl: string, requestedUrl
     return false;
   }
   if (current.protocol !== 'https:' || current.host !== 'www.linkedin.com') return false;
-  // Exact requested path only (a single trailing slash is insignificant): a
-  // nested page such as /feed/update-urn-123/ is not the requested page.
-  return stripTrailingSlash(current.pathname) === stripTrailingSlash(requested.pathname);
+  const currentPath = stripTrailingSlash(current.pathname);
+  const requestedPath = stripTrailingSlash(requested.pathname);
+  // Exact requested path only (a single trailing slash is insignificant),
+  // except for the observed authenticated Feed redirect. Other nested Feed
+  // pages such as /feed/update-urn-123/ remain rejected.
+  return currentPath === requestedPath || (requestedPath === '/feed' && currentPath === '/feed/foryou');
 }
 
 function stripTrailingSlash(pathname: string): string {

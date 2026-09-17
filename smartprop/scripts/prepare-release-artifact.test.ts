@@ -11,6 +11,7 @@ const temporaryDirectories: string[] = [];
 const rollbackSha256 = '2'.repeat(64);
 const requiredInputs = [
   'bun.lock',
+  'docker-compose.prod.yml',
   'ecosystem.config.js',
   'next.config.ts',
   'package.json',
@@ -189,6 +190,23 @@ afterEach(() => {
 });
 
 describe('prepareSourceArchive', () => {
+  test('archives the tracked Compose file with its exact committed bytes', () => {
+    const compose = 'services:\n  waha:\n    image: fixture/waha\n';
+    const { root, commit } = makeRepository({ 'docker-compose.prod.yml': compose });
+    const output = mkdtempSync(join(tmpdir(), 'smartprop-source-only-output-'));
+    temporaryDirectories.push(output);
+    const sourceArchive = join(output, 'smartprop-source.zip');
+
+    sourceArchiveApi()({
+      repository: root,
+      sourceDirectory: '.',
+      sourceCommit: commit,
+      sourceArchive,
+    });
+
+    expect(new AdmZip(sourceArchive).readAsText('docker-compose.prod.yml')).toBe(compose);
+  });
+
   test('creates a private source-only archive from a nested committed tree', () => {
     const { root, commit } = makeNestedSourceRepository();
     const output = mkdtempSync(join(tmpdir(), 'smartprop-source-only-output-'));

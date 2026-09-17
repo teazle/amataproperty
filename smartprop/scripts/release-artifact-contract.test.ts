@@ -18,6 +18,7 @@ const rollbackIdentity = '2'.repeat(64);
 const temporaryDirectories: string[] = [];
 const requiredFixtureInputs = [
   'bun.lock',
+  'docker-compose.prod.yml',
   'ecosystem.config.js',
   'next.config.ts',
   'package.json',
@@ -159,6 +160,15 @@ describe('SmartProp release artifact contract', () => {
 
     expect(() => validManifest(makeArchive(missingBunLock))).toThrow(
       'missing required app input: bun.lock',
+    );
+  });
+
+  test('rejects an archive that omits the tracked Compose input', () => {
+    const missingCompose = validEntries();
+    delete missingCompose['docker-compose.prod.yml'];
+
+    expect(() => validManifest(makeArchive(missingCompose))).toThrow(
+      'missing required app input: docker-compose.prod.yml',
     );
   });
 

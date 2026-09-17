@@ -29,6 +29,7 @@ export const SMARTPROP_RELEASE_TARGET = {
 
 export const SMARTPROP_REQUIRED_APP_INPUTS = [
   'bun.lock',
+  'docker-compose.prod.yml',
   'ecosystem.config.js',
   'next.config.ts',
   'package.json',

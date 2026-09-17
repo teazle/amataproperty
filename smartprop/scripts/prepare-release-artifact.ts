@@ -16,7 +16,7 @@ const SHA256 = /^[0-9a-f]{64}$/;
 // this repository. Only application source/assets belong in a release archive.
 const SOURCE_ROOTS = new Set([
   'src', 'public', 'scripts', 'deploy', 'openclaw',
-  'bun.lock', 'package.json', 'ecosystem.config.js', 'next.config.ts',
+  'bun.lock', 'package.json', 'docker-compose.prod.yml', 'ecosystem.config.js', 'next.config.ts',
   'postcss.config.mjs', 'tsconfig.json', 'next-env.d.ts',
   'components.json', 'eslint.config.mjs',
 ]);

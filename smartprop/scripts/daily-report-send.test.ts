@@ -1,7 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { sendViaOpenClaw } from './smartprop-daily-report';
+import { selectDailyReportSupabaseKey, sendViaOpenClaw } from './smartprop-daily-report';
 
 describe('daily report owned delivery', () => {
+  test('selects the deployed service role before the legacy compatibility key', () => {
+    expect(selectDailyReportSupabaseKey({
+      SUPABASE_SERVICE_ROLE: 'deployed-service-role',
+      SUPABASE_SERVICE_ROLE_KEY: 'legacy-service-role',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
+    })).toBe('deployed-service-role');
+  });
+
+  test('accepts the legacy service-role key but refuses an anon-only report configuration', () => {
+    expect(selectDailyReportSupabaseKey({ SUPABASE_SERVICE_ROLE_KEY: 'legacy-service-role' })).toBe('legacy-service-role');
+    expect(() => selectDailyReportSupabaseKey({ NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key' }))
+      .toThrow('SUPABASE_SERVICE_ROLE or SUPABASE_SERVICE_ROLE_KEY');
+  });
+
   test('sends the exact report via the explicit owner and accepts only its matching gateway receipt', () => {
     const calls: string[][] = [];
     const receipts = sendViaOpenClaw('Daily report: 7 listings', ['+6500002002'], false, (command, args) => {

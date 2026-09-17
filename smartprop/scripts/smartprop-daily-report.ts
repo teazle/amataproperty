@@ -262,14 +262,22 @@ export async function getListingRowsTouched(
   }));
 }
 
+export function selectDailyReportSupabaseKey(environment: NodeJS.ProcessEnv = process.env): string {
+  const serviceRoleKey = environment.SUPABASE_SERVICE_ROLE || environment.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceRoleKey) {
+    throw new Error('Daily report requires SUPABASE_SERVICE_ROLE or SUPABASE_SERVICE_ROLE_KEY; anon credentials are not permitted');
+  }
+  return serviceRoleKey;
+}
+
 async function buildReport(options: CliOptions) {
   const reportDate = options.date || previousSgtDate();
   const range = sgtRange(reportDate);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseKey = selectDailyReportSupabaseKey();
 
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing Supabase credentials in environment');
+  if (!supabaseUrl) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL in environment');
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey, {

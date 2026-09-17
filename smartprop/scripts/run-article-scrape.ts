@@ -12,7 +12,7 @@ const maxArticlesArg = process.env.ARTICLE_SCRAPE_MAX_ARTICLES || process.argv[3
 const maxArticles = maxArticlesArg === 'all' ? undefined : Number.parseInt(maxArticlesArg, 10);
 const staleSessionHours = Number.parseInt(process.env.ARTICLE_STALE_SESSION_HOURS || '2', 10);
 const scrapeMethod = process.env.ARTICLE_SCRAPE_METHOD || 'metadata';
-const contentBackfillLimitArg = process.env.ARTICLE_CONTENT_BACKFILL_LIMIT || process.argv[4] || '20';
+const contentBackfillLimitArg = process.env.ARTICLE_CONTENT_BACKFILL_LIMIT || process.argv[4];
 
 function ensureEnv(name: string): string {
   const value = process.env[name];

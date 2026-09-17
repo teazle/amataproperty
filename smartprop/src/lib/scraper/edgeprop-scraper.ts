@@ -4,6 +4,7 @@
  */
 
 import { type Page as _Page, type Browser, chromium, type Response } from 'playwright';
+import { articleBrowserLaunchOptions } from './article-browser-options';
 
 export interface Article {
   nid: string;
@@ -59,7 +60,7 @@ export async function scrapeEdgeProp(
   }
   
   try {
-    currentBrowser = await chromium.launch({ headless: true });
+    currentBrowser = await chromium.launch(articleBrowserLaunchOptions({ headless: true }));
     const page = await currentBrowser.newPage();
     
     // Intercept API responses

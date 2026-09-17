@@ -6,6 +6,13 @@ import { createClient } from '@supabase/supabase-js';
 config({ path: path.resolve(process.cwd(), '.env'), override: false });
 config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
 
+// Keep the trusted job's files private while isolating untrusted web content.
+if (process.platform === 'linux' && process.getuid?.() === 0) {
+  process.env.SMARTPROP_ARTICLE_BROWSER_EXECUTABLE = path.resolve(
+    process.cwd(), 'scripts', 'chrome-unprivileged.py',
+  );
+}
+
 const lockPath = path.join(process.cwd(), 'storage', 'article-scraper.lock');
 const maxPages = Number.parseInt(process.env.ARTICLE_SCRAPE_PAGES || process.argv[2] || '1', 10);
 const maxArticlesArg = process.env.ARTICLE_SCRAPE_MAX_ARTICLES || process.argv[3] || '5';

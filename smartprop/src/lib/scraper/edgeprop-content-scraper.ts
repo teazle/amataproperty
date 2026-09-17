@@ -7,6 +7,7 @@ import { chromium, type Browser } from 'patchright';
 import { sanitizeHtmlContent } from '../utils/content-parser';
 import { cleanArticleBody } from './article-body-cleanup';
 import { validateArticleContent } from './article-content-validation';
+import { articleBrowserLaunchOptions } from './article-browser-options';
 
 export interface ArticleContent {
   nid: string;
@@ -80,12 +81,12 @@ export async function scrapeArticleContent(
   
   try {
     if (!options?.context) {
-      browser = await chromium.launch({
+      browser = await chromium.launch(articleBrowserLaunchOptions({
         channel: 'chrome',
         headless: true,
         timeout: 15000,
         args: ['--no-sandbox', '--disable-dev-shm-usage'],
-      });
+      }));
     }
     page = options?.context ? await options.context.newPage() : await browser!.newPage();
     page.setDefaultTimeout(15000);

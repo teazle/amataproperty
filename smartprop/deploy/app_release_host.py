@@ -21,10 +21,12 @@ import zipfile
 POINTER = Path('/opt/smartprop/app/smartprop')
 RELEASES = Path('/opt/smartprop/releases')
 SERVICES = ['smartprop', 'scraper-worker']
+HEALTHCHECK = Path('/usr/local/bin/smartprop-healthcheck.sh')
+HEALTHCHECK_TIMER = 'smartprop-healthcheck.timer'
 WORKER_STOP_TIMEOUT = 3720
 SOURCE_ROOTS = {'src', 'public', 'scripts', 'deploy', 'openclaw', 'bun.lock', 'package.json',
                 'ecosystem.config.js', 'next.config.ts', 'postcss.config.mjs', 'tsconfig.json',
-                'next-env.d.ts', 'components.json', 'eslint.config.mjs'}
+                'next-env.d.ts', 'components.json', 'eslint.config.mjs', 'docker-compose.prod.yml'}
 
 
 def sha(raw):
@@ -85,6 +87,7 @@ def snapshot():
     return {'app': str(root), 'source': (root / '.deploy-source-revision').read_text().strip(),
             'processes': processes(), 'env': {name: sha((root / name).read_bytes()) for name in ['.env', '.env.local']},
             'storage': str((root / 'storage').resolve(strict=True)),
+            'healthcheck': sha(HEALTHCHECK.read_bytes()),
             'nginx': sha(Path('/etc/nginx/conf.d/smartprop.conf').read_bytes()),
             'public': str(Path('/opt/luxe-realty-design/current').resolve(strict=True)),
             'public_index': sha(Path('/opt/luxe-realty-design/current/index.html').read_bytes()),
@@ -118,6 +121,8 @@ def smoke(root, port=3000):
         time.sleep(.4)
     else:
         raise ValueError('application readiness failed')
+    if (root / 'src/app/api/health/live/route.ts').is_file():
+        liveness_smoke(port)
     if request(port, '/api/admin/listings?limit=1')[0] != 401:
         raise ValueError('anonymous access boundary failed')
     password = next(x.split('=', 1)[1] for x in (root / '.env.local').read_text().splitlines() if x.startswith('ADMIN_PASSWORD='))
@@ -133,6 +138,12 @@ def smoke(root, port=3000):
             raise ValueError('authenticated data journey failed')
         checks.append({'path': path, 'total': total, 'status': status})
     return {'status': 'passed', 'anonymous_api': 401, 'login': 200, 'data': checks}
+
+
+def liveness_smoke(port=3000):
+    status, _, body = request(port, '/api/health/live')
+    if status != 200 or body != {'status': 'live'}:
+        raise ValueError('new healthcheck liveness route failed')
 
 
 def switch(target, expected):
@@ -173,10 +184,52 @@ def stop_services():
         run(['pm2', 'stop', service], timeout=WORKER_STOP_TIMEOUT if service == 'scraper-worker' else 55)
 
 
-def rollback(base, stage, switched, worker_timeout=1600, treekill=True):
+def resume_healthcheck(was_active):
+    if was_active:
+        run(['systemctl', 'start', HEALTHCHECK_TIMER])
+
+
+def pause_healthcheck():
+    state = run(['systemctl', 'show', HEALTHCHECK_TIMER, '-p', 'ActiveState', '--value'])
+    if state not in ['active', 'inactive']:
+        raise ValueError('healthcheck timer state differs: ' + state)
+    active = state == 'active'
+    try:
+        if active:
+            run(['systemctl', 'stop', HEALTHCHECK_TIMER])
+        # Let an already running check finish; never kill it during recovery work.
+        deadline = time.monotonic() + 120
+        while True:
+            service = run(['systemctl', 'show', 'smartprop-healthcheck.service', '-p', 'ActiveState', '--value'])
+            if service in ['inactive', 'failed']:
+                return active
+            if time.monotonic() >= deadline:
+                raise ValueError('healthcheck service is still running')
+            time.sleep(1)
+    except Exception:
+        resume_healthcheck(active)
+        raise
+
+
+def install_healthcheck(raw):
+    if HEALTHCHECK.is_symlink() or not HEALTHCHECK.is_file():
+        raise ValueError('installed healthcheck is not a regular file')
+    with tempfile.NamedTemporaryFile(dir=HEALTHCHECK.parent, prefix='.smartprop-healthcheck-', delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(raw)
+    try:
+        temporary.chmod(0o755)
+        os.replace(temporary, HEALTHCHECK)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def rollback(base, stage, switched, worker_timeout=1600, treekill=True, monitor_backup=None):
     stop_services()
     if switched:
         switch(base, stage)
+    if monitor_backup is not None:
+        install_healthcheck(monitor_backup)
     start_services(worker_timeout, treekill)
     result = smoke(base)
     run(['pm2', 'save'])
@@ -301,6 +354,13 @@ def host(request):
     if request['action'] != 'release':
         raise ValueError('unknown action')
     worker_timeout = configured_worker_timeout(stage)
+    monitor = (stage / 'scripts/smartprop-healthcheck.sh').read_bytes()
+    monitor_backup = HEALTHCHECK.read_bytes()
+    monitor_changed = sha(monitor) != before['healthcheck']
+    if monitor_changed:
+        if HEALTHCHECK.is_symlink() or sha(monitor_backup) != before['healthcheck'] or monitor_backup != (base / 'scripts/smartprop-healthcheck.sh').read_bytes():
+            raise ValueError('installed healthcheck differs from approved baseline')
+        run(['bash', '-n', str(stage / 'scripts/smartprop-healthcheck.sh')])
     record = {'status': 'started', 'source': request['head'], 'plan_sha256': request['plan_sha256'],
               'before': before, 'started_at': time.time()}
     receipt = stage / '.app-activation.json'
@@ -308,16 +368,33 @@ def host(request):
         raise ValueError('activation already attempted; inspect receipt')
     save(receipt, record)
     switched = False
+    timer_paused = False
+    timer_was_active = False
+    services_touched = False
     try:
+        if monitor_changed:
+            timer_was_active = pause_healthcheck()
+            timer_paused = True
+            if snapshot() != before:
+                raise ValueError('serving baseline changed while healthcheck finished')
+            backup = stage / '.healthcheck-before.sh'
+            backup.write_bytes(monitor_backup)
+            backup.chmod(0o600)
+        services_touched = True
         stop_services()
         switch(stage, base)
         switched = True
         start_services(worker_timeout)
         proof = smoke(stage)
+        if monitor_changed:
+            liveness_smoke()
+            install_healthcheck(monitor)
         after = snapshot()
         preserved = ['env', 'storage', 'nginx', 'public', 'public_index', 'daily_report', 'gateway_config', 'gateway_pid']
         if after['app'] != str(stage) or any(after[k] != before[k] for k in preserved):
             raise ValueError('preserved consumer changed')
+        if after['healthcheck'] != sha(monitor):
+            raise ValueError('installed healthcheck differs from candidate')
         if any(x['status'] != 'online' for x in after['processes'].values()):
             raise ValueError('application process not online')
         if after['processes']['scraper-worker']['kill_timeout'] != worker_timeout:
@@ -330,16 +407,27 @@ def host(request):
     except Exception as error:
         record['error'] = str(error)[:400]
         try:
-            record['rollback_smoke'] = rollback(base, stage, switched,
+            if services_touched:
+                record['rollback_smoke'] = rollback(base, stage, switched,
                                                 before['processes']['scraper-worker']['kill_timeout'],
-                                                before['processes']['scraper-worker']['treekill'])
+                                                before['processes']['scraper-worker']['treekill'],
+                                                monitor_backup if monitor_changed else None)
             restored = snapshot()
+            if restored['healthcheck'] != before['healthcheck']:
+                raise ValueError('healthcheck rollback differs')
             for setting in ['kill_timeout', 'treekill']:
                 if restored['processes']['scraper-worker'][setting] != before['processes']['scraper-worker'][setting]:
                     raise ValueError('worker rollback setting differs: ' + setting)
             record.update(status='rolled-back', live=False, restored=restored)
         except Exception as rollback_error:
             record.update(status='failed', rollback_error=str(rollback_error)[:400])
+    finally:
+        if timer_paused:
+            try:
+                resume_healthcheck(timer_was_active)
+                record['healthcheck_timer_restored'] = True
+            except Exception as timer_error:
+                record.update(status='failed', timer_error=str(timer_error)[:400])
     save(receipt, record)
     return record
 

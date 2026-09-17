@@ -25,4 +25,9 @@ describe('article content backfill helpers', () => {
     expect(parseArticleContentBackfillLimit('all')).toBeUndefined();
     expect(parseArticleContentBackfillLimit('0')).toBe(0);
   });
+
+  test('defaults to four articles while retaining an explicit limit', () => {
+    expect(parseArticleContentBackfillLimit(undefined)).toBe(4);
+    expect(parseArticleContentBackfillLimit('9')).toBe(9);
+  });
 });

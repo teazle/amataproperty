@@ -27,7 +27,7 @@ const defaultArticleTimeoutMs = 120_000;
 
 export function parseArticleContentBackfillLimit(
   value: string | undefined,
-  fallback = 20,
+  fallback = 4,
 ): ArticleContentBackfillLimit {
   if (!value || value.trim() === '') {
     return fallback;

@@ -100,6 +100,14 @@ class ReportHostTests(unittest.TestCase):
             self.assertIn('--setenv=DRY_RUN=1', args)
             self.assertTrue(result['no_send'])
 
+    def test_report_can_truthfully_describe_an_unhealthy_dependency(self):
+        value = {'text': 'SmartProp Daily Run Report - 2026-09-17 SGT\nNeeds attention',
+                 'report': {'reportDate': '2026-09-17', 'verdict': 'Needs attention',
+                            'scrapers': {'totalJobs': 3}, 'scheduledJobs': [],
+                            'currentHealth': {'app': 'The operation was aborted.'}}}
+        with patch.object(host, 'run', return_value=json.dumps(value)):
+            self.assertEqual(host.no_send_smoke(Path('/fixture/report.js'))['verdict'], 'Needs attention')
+
     def test_pointer_atomic_replacement_keeps_previous_artifact(self):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)

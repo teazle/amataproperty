@@ -40,8 +40,16 @@ def canonical(value):
 
 def remote(request):
     code = (DEPLOY / 'daily_report_host.py').read_text()
-    return json.loads(run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                          'smartprop-vps', 'python3 -c ' + shlex.quote(code)], input=json.dumps(request)))
+    result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                             'smartprop-vps', 'python3 -c ' + shlex.quote(code)],
+                            input=json.dumps(request), capture_output=True, text=True, timeout=240)
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise ValueError('host returned no valid release result') from None
+    if result.returncode:
+        raise ValueError(value.get('error', 'host release failed'))
+    return value
 
 
 def verify():

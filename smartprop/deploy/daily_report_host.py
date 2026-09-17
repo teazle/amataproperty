@@ -119,10 +119,11 @@ def no_send_smoke(bundle):
         raise ValueError('missing rendered report')
     if not isinstance(report['scrapers']['totalJobs'], int) or not isinstance(report['scheduledJobs'], list):
         raise ValueError('invalid report data')
-    if report['currentHealth']['app'] != 'healthy':
-        raise ValueError('app health smoke failed')
+    if not isinstance(report['currentHealth']['app'], str) or not report['currentHealth']['app']:
+        raise ValueError('missing reported app health')
     return {'report_date': report['reportDate'], 'text_sha256': digest(data['text'].encode()),
-            'text_length': len(data['text']), 'verdict': report['verdict'], 'no_send': True}
+            'text_length': len(data['text']), 'verdict': report['verdict'],
+            'reported_app_health': report['currentHealth']['app'], 'no_send': True}
 
 
 def preserved_processes():

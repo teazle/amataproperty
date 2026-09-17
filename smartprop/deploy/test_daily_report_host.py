@@ -9,6 +9,39 @@ import daily_report_host as host
 
 
 class ReportHostTests(unittest.TestCase):
+    def test_existing_component_update_rolls_back_pointer_without_service_restart(self):
+        with tempfile.TemporaryDirectory() as root, ExitStack() as stack:
+            base = Path(root).resolve()
+            app = base / 'app'; app.mkdir()
+            component = base / 'component'; previous = component / 'releases' / host.PREVIOUS_COMPONENT
+            previous.mkdir(parents=True); (previous / 'report.js').write_bytes(b'old')
+            (component / 'current').symlink_to(previous)
+            dropin = base / 'unit.d' / '50-report-component.conf'; dropin.parent.mkdir(); dropin.write_text(host.DROPIN_TEXT)
+            fragment = base / 'original.service'; fragment.write_text('original')
+            identity = {'app': str(app), 'previous_report': str(previous), 'previous_sha256': host.digest(b'old')}
+            for name, value in [('APP', app), ('COMPONENT', component), ('DROPIN', dropin)]:
+                stack.enter_context(patch.object(host, name, value))
+            stack.enter_context(patch.object(host, 'preflight', return_value=identity))
+            stack.enter_context(patch.object(host, 'assert_target'))
+            stack.enter_context(patch.object(host, 'preserved_processes', return_value={}))
+            stack.enter_context(patch.object(host, 'no_send_smoke', return_value={'no_send': True}))
+            calls = []
+            def command(argv):
+                calls.append(argv)
+                if 'FragmentPath' in argv: return str(fragment)
+                if 'DropInPaths' in argv: return str(dropin)
+                if 'ActiveState' in argv: return 'failed'
+                if 'ExecStart' in argv: return '{ path=/opt/smartprop/components/daily-report/current/run.sh ; }'
+                raise AssertionError(argv)
+            stack.enter_context(patch.object(host, 'run', side_effect=command))
+            payload = {'head': 'c' * 40, 'bundle': base64.b64encode(b'new').decode(), 'sha256': host.digest(b'new')}
+            self.assertEqual(host.activate(payload)['status'], 'passed')
+            self.assertEqual((component / 'current' / 'report.js').read_bytes(), b'new')
+            self.assertEqual(host.rollback(payload['sha256'])['status'], 'rolled-back')
+            self.assertEqual((component / 'current').resolve(), previous)
+            self.assertEqual(dropin.read_text(), host.DROPIN_TEXT)
+            self.assertFalse(any(any(x in c for x in ['start', 'restart', 'stop', 'daemon-reload']) for c in calls))
+
     def test_activate_and_rollback_restore_original_function_without_start(self):
         with tempfile.TemporaryDirectory() as root, ExitStack() as stack:
             base = Path(root).resolve()

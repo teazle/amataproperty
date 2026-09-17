@@ -17,6 +17,7 @@ COMPONENT = Path('/opt/smartprop/components/daily-report')
 UNIT = 'openclaw-smartprop-daily-report.service'
 DROPIN = Path('/etc/systemd/system') / (UNIT + '.d') / '50-report-component.conf'
 LEGACY_SHA = '09f1f2ed32910c4a7715ba56ddd2b67febf657b7d5282e71120321328cf40997'
+PREVIOUS_COMPONENT = '32940372c203bde31e17f821cd3c287199015d1b'
 RUNNER = '''#!/usr/bin/env bash
 set -euo pipefail
 cd /opt/smartprop/app/smartprop
@@ -75,6 +76,21 @@ def assert_target():
 
 def preflight():
     assert_target()
+    current = COMPONENT / 'current'
+    if current.is_symlink():
+        previous = COMPONENT / 'releases' / PREVIOUS_COMPONENT
+        if current.resolve() != previous or not DROPIN.is_file() or DROPIN.read_text() != DROPIN_TEXT:
+            raise ValueError('existing component or override differs')
+        proof = json.loads((previous / 'provenance.json').read_text())
+        if proof.get('head') != PREVIOUS_COMPONENT or digest((previous / 'report.js').read_bytes()) != proof.get('sha256'):
+            raise ValueError('previous report artifact differs')
+        if (APP.resolve().parent != Path('/opt/smartprop/releases') or
+                not re.fullmatch(r'[0-9a-f]{40}', (APP / '.deploy-source-revision').read_text().strip())):
+            raise ValueError('serving application identity differs')
+        if run(['systemctl', 'show', UNIT, '-p', 'ActiveState', '--value']) not in ('inactive', 'failed'):
+            raise ValueError('report is running; no cutover permitted')
+        return {'host': HOST, 'machine_id': MACHINE, 'app': str(APP.resolve()),
+                'previous_report': str(previous), 'previous_sha256': proof['sha256']}
     if str(APP.resolve()) != '/opt/smartprop/releases/baseline-20260907-pW8Hlz':
         raise ValueError('serving app changed; reconcile before component release')
     if digest((APP / 'scripts/smartprop-daily-report.ts').read_bytes()) != LEGACY_SHA:
@@ -123,12 +139,20 @@ def rollback(expected_sha):
     current = COMPONENT / 'current'
     if not current.is_symlink() or current.resolve().parent != COMPONENT / 'releases':
         raise ValueError('rollback artifact mismatch')
-    if json.loads((current / 'provenance.json').read_text()).get('sha256') != expected_sha:
+    proof = json.loads((current / 'provenance.json').read_text())
+    if proof.get('sha256') != expected_sha:
         raise ValueError('rollback source mismatch')
     if run(['systemctl', 'show', UNIT, '-p', 'ActiveState', '--value']) not in ('inactive', 'failed'):
         raise ValueError('report running; cannot roll back')
     if not DROPIN.is_file() or DROPIN.is_symlink() or DROPIN.read_text() != DROPIN_TEXT:
         raise ValueError('rollback override mismatch')
+    if proof.get('previous_report'):
+        previous = Path(proof['previous_report'])
+        if (previous != COMPONENT / 'releases' / PREVIOUS_COMPONENT or
+                digest((previous / 'report.js').read_bytes()) != proof.get('previous_sha256')):
+            raise ValueError('previous report rollback artifact differs')
+        atomic_link(current, previous)
+        return {'status': 'rolled-back', 'artifact_sha256': expected_sha, 'restored': str(previous)}
     backup = COMPONENT / ('rolled-back-' + expected_sha + '.conf')
     if backup.exists():
         raise ValueError('rollback receipt already exists')
@@ -148,14 +172,18 @@ def activate(payload):
     fragment = Path(run(['systemctl', 'show', UNIT, '-p', 'FragmentPath', '--value']))
     original_unit_sha = digest(fragment.read_bytes())
     previous_dropins = run(['systemctl', 'show', UNIT, '-p', 'DropInPaths', '--value'])
-    if previous_dropins:
+    replacing = bool(identity.get('previous_report'))
+    if previous_dropins != (str(DROPIN) if replacing else ''):
         raise ValueError('unexpected existing unit overrides')
     release = COMPONENT / 'releases' / payload['head']
     release.mkdir(parents=True, exist_ok=False, mode=0o755)
     (release / 'report.js').write_bytes(raw)
     (release / 'run.sh').write_text(RUNNER)
     (release / 'run.sh').chmod(0o755)
-    (release / 'provenance.json').write_text(json.dumps({'head': payload['head'], 'sha256': payload['sha256']}))
+    provenance = {'head': payload['head'], 'sha256': payload['sha256']}
+    if replacing:
+        provenance.update({k: identity[k] for k in ['previous_report', 'previous_sha256']})
+    (release / 'provenance.json').write_text(json.dumps(provenance))
     (release / 'report.js').chmod(0o444)
     (release / 'provenance.json').chmod(0o444)
     (release / 'run.sh').chmod(0o555)
@@ -164,12 +192,14 @@ def activate(payload):
     # The retained original fragment is the one-command rollback target.
     switched = False
     try:
-        preflight()
+        if preflight() != identity:
+            raise ValueError('release baseline changed during smoke')
         atomic_link(COMPONENT / 'current', release)
         switched = True
-        DROPIN.parent.mkdir(exist_ok=True)
-        atomic_bytes(DROPIN, DROPIN_TEXT.encode())
-        run(['systemctl', 'daemon-reload'])
+        if not replacing:
+            DROPIN.parent.mkdir(exist_ok=True)
+            atomic_bytes(DROPIN, DROPIN_TEXT.encode())
+            run(['systemctl', 'daemon-reload'])
         actual = run(['systemctl', 'show', UNIT, '-p', 'ExecStart', '--value'])
         if exec_path(actual) != '/opt/smartprop/components/daily-report/current/run.sh':
             raise ValueError('effective report command mismatch')

@@ -20,6 +20,7 @@ class GatewayLimitsHostTest(unittest.TestCase):
             "machine_id": "bfb5b1b8859546f9aac39a4c5bafa616",
             "source": "8c9a61053e76860b5ed7ca11331ed6e5a4cac57c",
             "config_sha256": "b" * 64,
+            "persisted": {"MemoryHigh": "infinity", "MemoryMax": "infinity"},
             "unit": {
                 "ActiveState": "active",
                 "SubState": "running",
@@ -139,6 +140,14 @@ class GatewayLimitsHostTest(unittest.TestCase):
 
     def test_verify_rollback_accepts_original_unlimited_baseline(self):
         gateway_limits_host.verify_rollback(self.snapshot(), self.snapshot())
+
+    def test_verify_rollback_rejects_stale_or_missing_persistent_limits(self):
+        for persisted in ({"MemoryHigh": str(HIGH), "MemoryMax": str(MAX)}, {}):
+            with self.subTest(persisted=persisted):
+                restored = self.snapshot()
+                restored['persisted'] = persisted
+                with self.assertRaises(ValueError):
+                    gateway_limits_host.verify_rollback(self.snapshot(), restored)
 
     def test_verify_rollback_rejects_identity_process_counter_or_cgroup_drift(self):
         cases = {

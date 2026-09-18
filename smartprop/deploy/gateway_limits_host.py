@@ -128,6 +128,9 @@ def verify_rollback(before, restored):
             raise ValueError('rollback service baseline mismatch')
     if restored.get('cgroup') != before.get('cgroup'):
         raise ValueError('rollback kernel limit mismatch')
+    expected_persisted = {key: before['unit'][key] for key in ('MemoryHigh', 'MemoryMax')}
+    if restored.get('persisted') != expected_persisted:
+        raise ValueError('rollback persistent limit mismatch')
 
 
 def apply(expected):

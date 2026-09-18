@@ -90,7 +90,13 @@ export type ScraperRuntimeStatusPayload =
 const PLATFORMS: ScraperPlatform[] = ['propertyguru', 'edgeprop'];
 
 export async function persistScraperJobProgress(
-  db: DbClient,
+  db: {
+    from(table: string): {
+      update(values: object): {
+        eq(column: string, value: string): PromiseLike<{ error: unknown }>;
+      };
+    };
+  },
   jobId: string,
   progress: ScraperJobProgress
 ): Promise<void> {

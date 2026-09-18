@@ -18,6 +18,7 @@ import { upsertAgentAndListing } from './upsert';
 import { getSupabaseClient } from './supa';
 import { solveCloudflareWithFlaresolverr, applyFlaresolverrToContext, FLARESOLVERR_UA as _FLARESOLVERR_UA, createFlaresolverrSession } from './flaresolverr';
 import { normalizeCompletionStatus, resolveChromiumExecutablePath } from '../lib/scraper/runtime-health';
+import { persistScraperJobProgress } from '../lib/scraper/runtime-state';
 import { cleanEdgePropPropertyTitle } from '../lib/queue/scraper-outcome';
 
 const isDryRun = process.env.SCRAPER_DRY_RUN === '1' || process.env.SCRAPER_DRY_RUN === 'true';
@@ -727,18 +728,12 @@ async function scrapeEdgePropFinal() {
       if (jobId && (totalProcessed % 5 === 0 || statusMessage?.includes('PAGE'))) {
         try {
           const supabase = getSupabaseClient();
-          await supabase
-            .from('scraper_jobs')
-            .update({
-              status: 'running',
-              listings_processed: totalProcessed,
-              progress: {
-                currentPage,
-                totalPages: maxPages,
-                listingsProcessed: totalProcessed
-              }
-            })
-            .eq('id', jobId);
+          await persistScraperJobProgress(supabase, jobId, {
+            currentPage,
+            totalPages: maxPages,
+            listingsProcessed: totalProcessed,
+            stats: jobStatus.stats,
+          });
         } catch (error) {
           console.error('Failed to update database job status:', error);
         }

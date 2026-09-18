@@ -300,28 +300,62 @@ async function handleScraperJob(job: Job<ScraperJobPayload> | null | Job<Scraper
   }
 }
 
-function startHeartbeat(jobId: string) {
-  const intervalMs = Number(process.env.SCRAPER_HEARTBEAT_MS || 30000);
+type HeartbeatClient = {
+  from(table: string): {
+    update(values: Record<string, string>): {
+      eq(column: string, value: string): PromiseLike<{ error: unknown | null }>;
+    };
+  };
+};
+
+type HeartbeatScheduler = {
+  setInterval(callback: () => void | Promise<void>, delay: number): unknown;
+  clearInterval(timer: unknown): void;
+};
+
+type HeartbeatDependencies = {
+  client: HeartbeatClient;
+  scheduler: HeartbeatScheduler;
+  intervalMs: number;
+  now: () => Date;
+  warn: (...args: unknown[]) => void;
+};
+
+const defaultHeartbeatScheduler: HeartbeatScheduler = {
+  setInterval: (callback, delay) => setInterval(callback, delay),
+  clearInterval: (timer) => clearInterval(timer as ReturnType<typeof setInterval>),
+};
+
+export function startHeartbeat(
+  jobId: string,
+  dependencies: Partial<HeartbeatDependencies> = {},
+) {
+  const intervalMs = dependencies.intervalMs ?? Number(process.env.SCRAPER_HEARTBEAT_MS || 30000);
   if (!intervalMs) {
     return { stop: () => {} };
   }
+  const client = dependencies.client ?? (supabase as unknown as HeartbeatClient);
+  const scheduler = dependencies.scheduler ?? defaultHeartbeatScheduler;
+  const now = dependencies.now ?? (() => new Date());
+  const warn = dependencies.warn ?? console.warn;
   let disabled = false;
-  const timer = setInterval(async () => {
+  const timer = scheduler.setInterval(async () => {
     if (disabled) return;
     try {
-      await supabase
+      const { error } = await client
         .from('scraper_jobs')
-        .update({ heartbeat_at: new Date().toISOString() })
+        .update({ last_updated_at: now().toISOString() })
         .eq('id', jobId);
+      if (error) throw error;
     } catch (error) {
-      console.warn('[ScraperWorker] Heartbeat failed', error);
-      // If heartbeat_at column doesn't exist, disable further heartbeats to avoid log spam
+      warn('[ScraperWorker] Heartbeat failed', error);
+      // Disable further heartbeats after a database failure to avoid log spam.
       disabled = true;
     }
   }, intervalMs);
 
   return {
-    stop: () => clearInterval(timer),
+    stop: () => scheduler.clearInterval(timer),
   };
 }
 

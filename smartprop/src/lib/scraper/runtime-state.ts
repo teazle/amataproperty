@@ -60,6 +60,13 @@ export type RuntimeReconcileResult = {
   errors: string[];
 };
 
+export type ScraperJobProgress = {
+  currentPage: number;
+  totalPages: number;
+  listingsProcessed: number;
+  stats: Record<string, unknown>;
+};
+
 export type ScraperRuntimeStatusPayload =
   | { status: 'idle' }
   | {
@@ -81,6 +88,32 @@ export type ScraperRuntimeStatusPayload =
     };
 
 const PLATFORMS: ScraperPlatform[] = ['propertyguru', 'edgeprop'];
+
+export async function persistScraperJobProgress(
+  db: DbClient,
+  jobId: string,
+  progress: ScraperJobProgress
+): Promise<void> {
+  const { error } = await db
+    .from('scraper_jobs')
+    .update({
+      status: 'running',
+      current_page: progress.currentPage,
+      total_pages: progress.totalPages,
+      listings_processed: progress.listingsProcessed,
+      stats: progress.stats,
+    })
+    .eq('id', jobId);
+
+  if (error) {
+    const message = error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
+        ? error.message
+        : String(error);
+    throw new Error(`Failed to persist scraper job progress: ${message}`);
+  }
+}
 
 export function getScraperLockFile(platform: ScraperPlatform, cwd: string = process.cwd()): string {
   return path.join(cwd, 'storage', platform === 'propertyguru' ? 'pg-scraper.lock' : 'ep-scraper.lock');

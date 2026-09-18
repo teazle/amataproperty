@@ -1,0 +1,45 @@
+version = 2
+[project]
+id = "propertydemo"
+root = "../.."
+[contracts]
+verify = ["smartprop/scripts/gateway-limits-verify.py"]
+existing_host = ["smartprop/deploy/gateway_limits_release.py", "release"]
+new_vps_stage = []
+new_vps_activate = []
+[policy]
+consumers = ["messaging_gateway", "main_app", "scraper_worker"]
+rejected_patterns = ["**/.env*", "**/*.pem", "**/credentials/**", "smartprop/migrations/**", "smartprop/openclaw/**"]
+[[executors]]
+version = 1
+mode = "existing-host"
+contracts = ["existing_host"]
+plan_schema_versions = [1]
+plan_fields = ["source_identity", "artifact_bindings", "deployment.affected_consumers", "deployment.artifacts", "deployment.preserved_consumers", "deployment.required_smoke", "deployment.policy_sha256"]
+plan_contract = "existing_host"
+artifact_contract = "existing_host"
+preservation_contract = "existing_host"
+cutover_contract = "existing_host"
+rollback_contract = "existing_host"
+smoke_contract = "existing_host"
+[[rules]]
+id = "gateway_limits"
+patterns = ["smartprop/deploy/gateway_limits_*.py", "smartprop/deploy/test_gateway_limits_*.py", "smartprop/deploy/gateway-limits-release-factory.toml", "smartprop/scripts/gateway-limits-verify.py"]
+component_inputs = ["smartprop/deploy/gateway_limits_*.py", "smartprop/deploy/test_gateway_limits_*.py", "smartprop/deploy/gateway-limits-release-factory.toml", "smartprop/scripts/gateway-limits-verify.py"]
+artifacts = ["gateway_limits"]
+consumers = ["messaging_gateway"]
+smoke = [["smartprop/scripts/gateway-limits-verify.py"]]
+[[rules]]
+id = "main_app"
+patterns = ["smartprop/src/**"]
+component_inputs = ["smartprop/src/**"]
+artifacts = []
+consumers = ["main_app"]
+smoke = []
+[[rules]]
+id = "scraper_worker"
+patterns = ["smartprop/src/lib/queue/**"]
+component_inputs = ["smartprop/src/lib/queue/**"]
+artifacts = []
+consumers = ["scraper_worker"]
+smoke = []

@@ -339,8 +339,10 @@ export function startHeartbeat(
   const now = dependencies.now ?? (() => new Date());
   const warn = dependencies.warn ?? console.warn;
   let disabled = false;
+  let inFlight = false;
   const timer = scheduler.setInterval(async () => {
-    if (disabled) return;
+    if (disabled || inFlight) return;
+    inFlight = true;
     try {
       const { error } = await client
         .from('scraper_jobs')
@@ -351,6 +353,8 @@ export function startHeartbeat(
       warn('[ScraperWorker] Heartbeat failed', error);
       // Disable further heartbeats after a database failure to avoid log spam.
       disabled = true;
+    } finally {
+      inFlight = false;
     }
   }, intervalMs);
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-async function runHeartbeatFixture(mode: 'success' | 'error') {
+async function runHeartbeatFixture(mode: 'success' | 'error' | 'overlap') {
   const fixture = `
     const { startHeartbeat } = await import('./src/lib/queue/scraper-worker.ts?heartbeat-test');
     const callbacks = new Map();
@@ -19,7 +19,11 @@ async function runHeartbeatFixture(mode: 'success' | 'error') {
         callbacks.delete(id);
       },
     };
-    const error = ${mode === 'error' ? "{ code: '42703', message: 'column missing' }" : 'null'};
+    const error = ${mode === 'success' ? 'null' : "{ code: '42703', message: 'column missing' }"};
+    let resolvePending;
+    const pending = ${mode === 'overlap'}
+      ? new Promise((resolve) => { resolvePending = () => resolve({ error }); })
+      : null;
     const client = {
       from(table) {
         return {
@@ -27,7 +31,7 @@ async function runHeartbeatFixture(mode: 'success' | 'error') {
             return {
               eq(_column, id) {
                 writes.push({ table, values, id });
-                return Promise.resolve({ error });
+                return pending ?? Promise.resolve({ error });
               },
             };
           },
@@ -42,13 +46,18 @@ async function runHeartbeatFixture(mode: 'success' | 'error') {
       now: () => new Date('2026-09-18T00:00:00.000Z'),
       warn: (...args) => warnings.push(args),
     });
-    await tick();
+    const firstTick = tick();
+    const secondTick = ${mode === 'overlap'} ? tick() : null;
+    const writesWhilePending = writes.length;
+    if (resolvePending) resolvePending();
+    await firstTick;
+    if (secondTick) await secondTick;
     const writesAfterFirstTick = writes.length;
     await tick();
     const writesAfterSecondTick = writes.length;
     heartbeat.stop();
     await tick();
-    console.log(JSON.stringify({ delays, writes, warnings, writesAfterFirstTick, writesAfterSecondTick }));
+    console.log(JSON.stringify({ delays, writes, warnings, writesWhilePending, writesAfterFirstTick, writesAfterSecondTick }));
   `;
   const child = Bun.spawn(['bun', '--eval', fixture], {
     cwd: process.cwd(),
@@ -71,6 +80,7 @@ async function runHeartbeatFixture(mode: 'success' | 'error') {
     delays: number[];
     writes: Array<{ table: string; values: Record<string, string>; id: string }>;
     warnings: unknown[][];
+    writesWhilePending: number;
     writesAfterFirstTick: number;
     writesAfterSecondTick: number;
   };
@@ -100,6 +110,18 @@ describe('scraper worker heartbeat', () => {
   test('a returned database error warns once and disables future heartbeat writes', async () => {
     const result = await runHeartbeatFixture('error');
 
+    expect(result.writesAfterFirstTick).toBe(1);
+    expect(result.writesAfterSecondTick).toBe(1);
+    expect(result.warnings).toEqual([[
+      '[ScraperWorker] Heartbeat failed',
+      { code: '42703', message: 'column missing' },
+    ]]);
+  });
+
+  test('overlapping ticks keep one pending write and warn once when it fails', async () => {
+    const result = await runHeartbeatFixture('overlap');
+
+    expect(result.writesWhilePending).toBe(1);
     expect(result.writesAfterFirstTick).toBe(1);
     expect(result.writesAfterSecondTick).toBe(1);
     expect(result.warnings).toEqual([[
